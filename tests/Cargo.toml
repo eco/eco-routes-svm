@@ -5,6 +5,24 @@ description = "Created with Anchor"
 edition = "2021"
 
 [dependencies]
-anchor-client = "0.30.1"
+
 eco-routes = { version = "0.1.0", path = "../programs/eco-routes" }
-litesvm = "0.5.0"
+
+
+solana-sdk = "2.2.1"
+solana-compute-budget = "2.2.1"
+
+anyhow = "1.0.98"
+borsh = { version = "1.5.7", features = ["derive"] }
+spl-token = "8.0.0"
+spl-associated-token-account = "6.0.0"
+anchor-lang = "0.31.1"
+solana-keypair = "2.2.1"
+solana-transaction = "2.2.1"
+solana-message = "2.2.1"
+solana-instruction = "2.2.1"
+solana-signer = "2.2.1"
+solana-system-interface = "1.0.0"
+
+[dev-dependencies]
+litesvm = "0.6.1"
