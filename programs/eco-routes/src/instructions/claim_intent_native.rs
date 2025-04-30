@@ -6,14 +6,8 @@ use crate::{
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
-pub enum NativeToClaim {
-    Reward,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ClaimIntentNativeArgs {
     pub intent_hash: [u8; 32],
-    pub native_to_claim: NativeToClaim,
 }
 
 #[derive(Accounts)]
@@ -36,12 +30,12 @@ pub struct ClaimIntentNative<'info> {
 
 pub fn claim_intent_native(
     ctx: Context<ClaimIntentNative>,
-    args: ClaimIntentNativeArgs,
+    _args: ClaimIntentNativeArgs,
 ) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let claimer = &ctx.accounts.claimer;
 
-    if claimer.key() != intent.solver {
+    if claimer.key() != Pubkey::new_from_array(intent.solver) {
         return Err(EcoRoutesError::InvalidClaimer.into());
     }
 
@@ -49,11 +43,7 @@ pub fn claim_intent_native(
         return Err(EcoRoutesError::NotFulfilled.into());
     }
 
-    let native_to_claim = match args.native_to_claim {
-        NativeToClaim::Reward => intent.reward.native_reward,
-    };
-
-    if intent.reward.native_funded != native_to_claim {
+    if !intent.native_funded {
         return Err(EcoRoutesError::NotFunded.into());
     }
 
@@ -65,10 +55,10 @@ pub fn claim_intent_native(
                 to: claimer.to_account_info(),
             },
         ),
-        native_to_claim,
+        intent.reward.native_amount,
     )?;
 
-    intent.reward.native_funded -= native_to_claim;
+    intent.native_funded = false;
 
     if intent.is_empty() {
         intent.status = IntentStatus::Claimed;

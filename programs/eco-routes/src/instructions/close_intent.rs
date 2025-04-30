@@ -7,7 +7,7 @@ use crate::state::{Intent, IntentStatus};
 #[derive(Accounts)]
 pub struct CloseIntent<'info> {
     #[account(
-        seeds = [b"intent", intent.salt.as_ref()],
+        seeds = [b"intent", intent.route.salt.as_ref()],
         bump = intent.bump,
     )]
     pub intent: Account<'info, Intent>,

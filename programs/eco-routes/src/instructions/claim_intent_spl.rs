@@ -7,15 +7,9 @@ use crate::{
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
-pub enum TokenToClaim {
-    Route(u8),
-    Reward(u8),
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ClaimIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_to_claim: TokenToClaim,
+    pub token_to_claim: u8,
 }
 
 #[derive(Accounts)]
@@ -30,10 +24,7 @@ pub struct ClaimIntentSpl<'info> {
     #[account(
         token::mint = mint,
         token::authority = intent,
-        seeds = [match args.token_to_claim {
-            TokenToClaim::Route(_) => b"routed-token",
-            TokenToClaim::Reward(_) => b"reward-token",
-        }, args.intent_hash.as_ref(), mint.key().as_ref()],
+        seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
         bump,
     )]
     pub source_token: InterfaceAccount<'info, TokenAccount>,
@@ -65,7 +56,7 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    if claimer.key() != intent.solver {
+    if claimer.key() != Pubkey::new_from_array(intent.solver) {
         return Err(EcoRoutesError::InvalidClaimer.into());
     }
 
@@ -77,20 +68,13 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
         return Err(EcoRoutesError::IntentNotExpired.into());
     }
 
-    let token_to_claim = match args.token_to_claim {
-        TokenToClaim::Route(index) => intent
-            .route
-            .tokens
-            .get(index as usize)
-            .ok_or(EcoRoutesError::InvalidTokenIndex)?,
-        TokenToClaim::Reward(index) => intent
-            .reward
-            .tokens
-            .get(index as usize)
-            .ok_or(EcoRoutesError::InvalidTokenIndex)?,
-    };
+    let token_to_claim = intent
+        .reward
+        .tokens
+        .get(args.token_to_claim as usize)
+        .ok_or(EcoRoutesError::InvalidTokenIndex)?;
 
-    if mint.key() != token_to_claim.mint {
+    if mint.key() != Pubkey::new_from_array(token_to_claim.token) {
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
@@ -109,7 +93,7 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
             },
             &[&[
                 b"intent",
-                intent.salt.as_ref(),
+                intent.route.salt.as_ref(),
                 mint.key().as_ref(),
                 &[intent.bump],
             ]],
@@ -127,16 +111,13 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
         },
         &[&[
             b"intent",
-            intent.salt.as_ref(),
+            intent.route.salt.as_ref(),
             mint.key().as_ref(),
             &[intent.bump],
         ]],
     ))?;
 
-    match args.token_to_claim {
-        TokenToClaim::Route(_) => intent.route.tokens_funded -= 1,
-        TokenToClaim::Reward(_) => intent.reward.tokens_funded -= 1,
-    }
+    intent.tokens_funded -= 1;
 
     if intent.is_empty() {
         intent.status = IntentStatus::Claimed;

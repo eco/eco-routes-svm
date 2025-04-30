@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 
 use crate::{
+    encoding,
     error::EcoRoutesError,
+    instructions::expected_prover_process_authority,
     state::{
         Call, Intent, IntentStatus, Reward, Route, TokenAmount, ValidateCallList,
         ValidateTokenList, MAX_CALLS, MAX_REWARD_TOKENS, MAX_ROUTE_TOKENS,
@@ -19,8 +21,6 @@ pub struct PublishIntentArgs {
     pub reward_tokens: Vec<TokenAmount>,
     pub native_reward: u64,
     pub deadline: i64,
-    pub calls_root: [u8; 32],
-    pub route_root: [u8; 32],
 }
 
 #[derive(Accounts)]
@@ -54,8 +54,6 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
         reward_tokens,
         native_reward,
         deadline,
-        calls_root,
-        route_root,
     } = args;
 
     let intent = &mut ctx.accounts.intent;
@@ -65,39 +63,37 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
     reward_tokens.validate(MAX_REWARD_TOKENS)?;
     calls.validate(MAX_CALLS)?;
 
-    intent.salt = salt;
     intent.intent_hash = intent_hash;
     intent.status = IntentStatus::Initialized;
-
-    intent.creator = creator.key();
-    intent.prover = crate::hyperlane::MAILBOX_ID;
 
     if deadline < Clock::get()?.unix_timestamp {
         return Err(EcoRoutesError::InvalidDeadline.into());
     }
 
-    intent.deadline = deadline;
-
     intent.route = Route {
+        salt,
         source_domain_id: crate::hyperlane::DOMAIN_ID,
         destination_domain_id,
         inbox,
-        prover: crate::hyperlane::MAILBOX_ID,
         tokens: route_tokens,
-        tokens_funded: 0,
         calls,
-        calls_root,
-        route_root,
     };
 
     intent.reward = Reward {
+        creator: creator.key(),
+        prover: crate::hyperlane::MAILBOX_ID.to_bytes(),
         tokens: reward_tokens,
-        tokens_funded: 0,
-        native_reward,
-        native_funded: 0,
+        native_amount: native_reward,
+        deadline,
     };
 
     intent.bump = ctx.bumps.intent;
+
+    let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
+    require!(
+        intent_hash == expected_intent_hash,
+        EcoRoutesError::InvalidIntentHash
+    );
 
     Ok(())
 }

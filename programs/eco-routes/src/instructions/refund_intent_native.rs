@@ -6,14 +6,8 @@ use crate::{
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
-pub enum NativeToRefund {
-    Reward,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentNativeArgs {
     pub intent_hash: [u8; 32],
-    pub native_to_refund: NativeToRefund,
 }
 
 #[derive(Accounts)]
@@ -36,12 +30,12 @@ pub struct RefundIntentNative<'info> {
 
 pub fn refund_intent_native(
     ctx: Context<RefundIntentNative>,
-    args: RefundIntentNativeArgs,
+    _args: RefundIntentNativeArgs,
 ) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let refundee = &ctx.accounts.refundee;
 
-    if refundee.key() != intent.creator {
+    if refundee.key() != intent.reward.creator {
         return Err(EcoRoutesError::InvalidRefundee.into());
     }
 
@@ -53,11 +47,7 @@ pub fn refund_intent_native(
         return Err(EcoRoutesError::IntentNotExpired.into());
     }
 
-    let native_to_refund = match args.native_to_refund {
-        NativeToRefund::Reward => intent.reward.native_reward,
-    };
-
-    if intent.reward.native_funded != native_to_refund {
+    if !intent.native_funded {
         return Err(EcoRoutesError::NotFunded.into());
     }
 
@@ -69,10 +59,10 @@ pub fn refund_intent_native(
                 to: refundee.to_account_info(),
             },
         ),
-        native_to_refund,
+        intent.reward.native_amount,
     )?;
 
-    intent.reward.native_funded -= native_to_refund;
+    intent.native_funded = false;
 
     if intent.is_empty() {
         intent.status = IntentStatus::Refunded;

@@ -7,15 +7,9 @@ use crate::{
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
-pub enum TokenToRefund {
-    Route(u8),
-    Reward(u8),
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_to_refund: TokenToRefund,
+    pub token_to_refund: u8,
 }
 
 #[derive(Accounts)]
@@ -30,10 +24,7 @@ pub struct RefundIntentSpl<'info> {
     #[account(
         token::mint = mint,
         token::authority = intent,
-        seeds = [match args.token_to_refund {
-            TokenToRefund::Route(_) => b"routed-token",
-            TokenToRefund::Reward(_) => b"reward-token",
-        }, args.intent_hash.as_ref(), mint.key().as_ref()],
+        seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
         bump,
     )]
     pub source_token: InterfaceAccount<'info, TokenAccount>,
@@ -65,7 +56,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    if refundee.key() != intent.creator {
+    if refundee.key() != intent.reward.creator {
         return Err(EcoRoutesError::InvalidRefundee.into());
     }
 
@@ -77,20 +68,13 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         return Err(EcoRoutesError::IntentNotExpired.into());
     }
 
-    let token_to_refund = match args.token_to_refund {
-        TokenToRefund::Route(index) => intent
-            .route
-            .tokens
-            .get(index as usize)
-            .ok_or(EcoRoutesError::InvalidTokenIndex)?,
-        TokenToRefund::Reward(index) => intent
-            .reward
-            .tokens
-            .get(index as usize)
-            .ok_or(EcoRoutesError::InvalidTokenIndex)?,
-    };
+    let token_to_refund = intent
+        .reward
+        .tokens
+        .get(args.token_to_refund as usize)
+        .ok_or(EcoRoutesError::InvalidTokenIndex)?;
 
-    if mint.key() != token_to_refund.mint {
+    if mint.key() != Pubkey::new_from_array(token_to_refund.token) {
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
@@ -109,7 +93,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
             },
             &[&[
                 b"intent",
-                intent.salt.as_ref(),
+                intent.route.salt.as_ref(),
                 mint.key().as_ref(),
                 &[intent.bump],
             ]],
@@ -127,16 +111,13 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         },
         &[&[
             b"intent",
-            intent.salt.as_ref(),
+            intent.route.salt.as_ref(),
             mint.key().as_ref(),
             &[intent.bump],
         ]],
     ))?;
 
-    match args.token_to_refund {
-        TokenToRefund::Route(_) => intent.route.tokens_funded -= 1,
-        TokenToRefund::Reward(_) => intent.reward.tokens_funded -= 1,
-    }
+    intent.tokens_funded -= 1;
 
     if intent.is_empty() {
         intent.status = IntentStatus::Refunded;

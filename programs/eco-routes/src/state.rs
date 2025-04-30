@@ -22,7 +22,7 @@ pub enum IntentStatus {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 pub struct TokenAmount {
-    pub mint: Pubkey,
+    pub token: [u8; 32],
     pub amount: u64,
 }
 
@@ -37,7 +37,7 @@ impl ValidateTokenList for Vec<TokenAmount> {
         }
         let mut hashset = HashSet::new();
         for token in self {
-            if !hashset.insert(token.mint) {
+            if !hashset.insert(token.token) {
                 return Err(EcoRoutesError::DuplicateTokens.into());
             }
         }
@@ -78,40 +78,41 @@ impl ValidateCallList for Vec<Call> {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 pub struct Route {
+    pub salt: [u8; 32],
     pub source_domain_id: u32,
     pub destination_domain_id: u32,
     pub inbox: [u8; 32],
-    pub prover: Pubkey,
-    pub calls_root: [u8; 32],
-    pub route_root: [u8; 32],
     #[max_len(MAX_ROUTE_TOKENS)]
     pub tokens: Vec<TokenAmount>,
-    pub tokens_funded: u8,
     #[max_len(MAX_CALLS)]
     pub calls: Vec<Call>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 pub struct Reward {
+    pub creator: Pubkey,
     #[max_len(MAX_REWARD_TOKENS)]
     pub tokens: Vec<TokenAmount>,
-    pub tokens_funded: u8,
-    pub native_reward: u64,
-    pub native_funded: u64,
+    pub prover: [u8; 32],
+    pub native_amount: u64,
+    pub deadline: i64,
 }
 
 #[account]
 #[derive(PartialEq, Eq, Debug, InitSpace)]
 pub struct Intent {
-    pub salt: [u8; 32],
     pub intent_hash: [u8; 32],
+
     pub status: IntentStatus,
-    pub creator: Pubkey,
-    pub prover: Pubkey,
-    pub deadline: i64,
+
     pub route: Route,
     pub reward: Reward,
-    pub solver: Pubkey,
+
+    pub tokens_funded: u8,
+    pub native_funded: bool,
+
+    pub solver: [u8; 32],
+
     pub bump: u8,
 }
 
@@ -121,79 +122,22 @@ impl Intent {
     }
 
     pub fn is_funded(&self) -> bool {
-        self.route.tokens_funded == self.route.tokens.len() as u8
-            && self.reward.tokens_funded == self.reward.tokens.len() as u8
-            && self.reward.native_funded == self.reward.native_reward
+        self.tokens_funded == self.route.tokens.len() as u8 && self.native_funded
     }
 
     pub fn is_expired(&self) -> Result<bool> {
         let clock = Clock::get()?;
-        Ok(self.deadline < clock.unix_timestamp)
+        Ok(self.reward.deadline < clock.unix_timestamp)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.status == IntentStatus::Funded
-            && self.route.tokens_funded == 0
-            && self.reward.tokens_funded == 0
-            && self.reward.native_funded == 0
+        self.status == IntentStatus::Funded && self.tokens_funded == 0 && !self.native_funded
     }
 }
 
-// assert_eq!(Intent::INIT_SPACE, 1452);
-
 #[account]
 #[derive(PartialEq, Eq, Debug, InitSpace)]
-pub struct IntentMarker {
-    pub bump: u8,
-    pub source_domain_id: u32,
+pub struct IntentFulfillmentMarker {
     pub intent_hash: [u8; 32],
-    pub calls_root: [u8; 32],
-    pub route_root: [u8; 32],
-    pub deadline: i64,
-    pub fulfilled: bool,
-}
-
-impl IntentMarker {
-    pub fn pda(intent_hash: [u8; 32]) -> Pubkey {
-        Pubkey::find_program_address(&[b"intent_marker", intent_hash.as_ref()], &crate::ID).0
-    }
-}
-
-// assert_eq!(IntentMarker::INIT_SPACE, 110);
-
-pub const MAX_SENDERS_PER_DOMAIN: usize = 128;
-
-#[account]
-#[derive(PartialEq, Eq, Debug, InitSpace)]
-pub struct DomainRegistry {
-    pub origin_domain_id: u32,
-    #[max_len(MAX_SENDERS_PER_DOMAIN)]
-    pub trusted_senders: Vec<[u8; 32]>,
     pub bump: u8,
 }
-
-impl DomainRegistry {
-    pub fn pda(origin_domain_id: u32) -> Pubkey {
-        Pubkey::find_program_address(
-            &[b"domain_registry", &origin_domain_id.to_le_bytes()],
-            &crate::ID,
-        )
-        .0
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        if self.trusted_senders.len() > MAX_SENDERS_PER_DOMAIN {
-            return Err(EcoRoutesError::TooManySenders.into());
-        }
-        Ok(())
-    }
-
-    pub fn is_sender_trusted(&self, origin_domain_id: u32, sender: &[u8; 32]) -> bool {
-        if origin_domain_id == self.origin_domain_id {
-            return true;
-        }
-        self.trusted_senders.contains(sender)
-    }
-}
-
-// assert_eq!(DomainRegistry::INIT_SPACE, 4105);

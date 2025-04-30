@@ -6,22 +6,15 @@ use crate::{
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
-pub enum NativeToFund {
-    Reward,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FundIntentNativeArgs {
-    pub salt: [u8; 32],
-    pub amount: u64,
-    pub native_to_fund: NativeToFund,
+    pub intent_hash: [u8; 32],
 }
 
 #[derive(Accounts)]
 #[instruction(args: FundIntentNativeArgs)]
 pub struct FundIntentNative<'info> {
     #[account(
-        seeds = [b"intent", args.salt.as_ref()],
+        seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]
     pub intent: Account<'info, Intent>,
@@ -37,7 +30,7 @@ pub struct FundIntentNative<'info> {
 
 pub fn fund_intent_native(
     ctx: Context<FundIntentNative>,
-    args: FundIntentNativeArgs,
+    _args: FundIntentNativeArgs,
 ) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let funder = &ctx.accounts.funder;
@@ -46,19 +39,9 @@ pub fn fund_intent_native(
         return Err(EcoRoutesError::NotInFundingPhase.into());
     }
 
-    let native_to_fund = match args.native_to_fund {
-        NativeToFund::Reward => intent.reward.native_reward,
-    };
-
-    if intent.reward.native_funded >= native_to_fund {
+    if intent.native_funded {
         return Err(EcoRoutesError::AlreadyFunded.into());
     }
-
-    let (amount, funded) = if intent.reward.native_funded + args.amount >= native_to_fund {
-        (native_to_fund - intent.reward.native_funded, true)
-    } else {
-        (args.amount, false)
-    };
 
     system_program::transfer(
         CpiContext::new(
@@ -68,14 +51,10 @@ pub fn fund_intent_native(
                 to: intent.to_account_info(),
             },
         ),
-        amount,
+        intent.reward.native_amount,
     )?;
 
-    if funded {
-        match args.native_to_fund {
-            NativeToFund::Reward => intent.reward.native_funded += amount,
-        }
-    }
+    intent.native_funded = true;
 
     if intent.is_funded() {
         intent.status = IntentStatus::Funded;

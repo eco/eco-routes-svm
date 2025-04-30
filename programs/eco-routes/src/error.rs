@@ -24,6 +24,7 @@ pub enum EcoRoutesError {
     NotMailbox,
     NotIgp,
     InvalidProcessAuthority,
+    InvalidExecutionAuthority,
     InvalidDispatchAuthority,
     DeadlinePassed,
     InvalidClaimer,
@@ -32,4 +33,9 @@ pub enum EcoRoutesError {
     BadWritableFlag,
     AlreadyFulfilled,
     InvalidFulfillCalls,
+    InvalidIntent,
+    InvalidIntentHash,
+    InvalidRouteMint,
+    InvalidRouteTokenAccount,
+    InvalidProver,
 }

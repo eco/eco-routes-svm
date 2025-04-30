@@ -1,9 +1,9 @@
-use anchor_lang::{prelude::*, solana_program::program::set_return_data, system_program};
+use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::{error::EcoRoutesError, state::{DomainRegistry, IntentMarker}};
+use crate::{encoding, error::EcoRoutesError, state::Intent};
 
-use super::InboxPayload;
+use super::expected_prover_process_authority;
 
 #[derive(Debug, BorshSerialize, BorshDeserialize, Clone)]
 pub struct SerializableAccountMeta {
@@ -22,11 +22,20 @@ impl From<AccountMeta> for SerializableAccountMeta {
     }
 }
 
+impl Into<AccountMeta> for SerializableAccountMeta {
+    fn into(self) -> AccountMeta {
+        AccountMeta {
+            pubkey: self.pubkey,
+            is_signer: self.is_signer,
+            is_writable: self.is_writable,
+        }
+    }
+}
+
 #[derive(Accounts)]
 pub struct HandleAccountMetas<'info> {
     /// CHECK: simulation only
     #[account(
-        mut, 
         seeds = [b"hyperlane_message_recipient", b"-", b"handle", b"-", b"account_metas"], 
         bump
     )]
@@ -35,29 +44,26 @@ pub struct HandleAccountMetas<'info> {
 
 pub fn handle_account_metas(
     _ctx: Context<HandleAccountMetas>,
-    origin: u32,
+    _origin: u32,
     _sender: [u8; 32],
     payload: Vec<u8>,
 ) -> Result<()> {
-    let inbox_payload = InboxPayload::try_from_slice(&payload)
+    let (intent_hashes, _solvers) = encoding::decode_fulfillment_message(&payload)
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
 
-    match inbox_payload {
-        InboxPayload::Blueprint(blueprint_payload) => {
-            let metas = vec![
-                SerializableAccountMeta::from(AccountMeta::new(IntentMarker::pda(blueprint_payload.intent_hash), false)),
-                SerializableAccountMeta::from(AccountMeta::new_readonly(DomainRegistry::pda(origin), false)),
-                SerializableAccountMeta::from(AccountMeta::new(system_program::ID, false))
-            ];
-            set_return_data(&metas.try_to_vec()?);
-        }
-        InboxPayload::FulfilledAck(fulfilled_ack_payload) => {
-            let metas = vec![
-                SerializableAccountMeta::from(AccountMeta::new(IntentMarker::pda(fulfilled_ack_payload.intent_hash), false)),
-            ];
-            set_return_data(&metas.try_to_vec()?);
-        }
+    let mut metas = vec![SerializableAccountMeta::from(AccountMeta::new_readonly(
+        expected_prover_process_authority(crate::hyperlane::MAILBOX_ID.to_bytes()),
+        true,
+    ))];
+
+    for intent_hash in intent_hashes {
+        metas.push(SerializableAccountMeta::from(AccountMeta::new(
+            Intent::pda(intent_hash).0,
+            false,
+        )));
     }
+
+    set_return_data(&metas.try_to_vec()?);
 
     Ok(())
 }
