@@ -14,6 +14,7 @@ pub struct RefundIntentNativeArgs {
 #[instruction(args: RefundIntentNativeArgs)]
 pub struct RefundIntentNative<'info> {
     #[account(
+        mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]

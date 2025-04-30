@@ -14,6 +14,7 @@ pub struct FundIntentNativeArgs {
 #[instruction(args: FundIntentNativeArgs)]
 pub struct FundIntentNative<'info> {
     #[account(
+        mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]

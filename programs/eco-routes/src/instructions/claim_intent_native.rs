@@ -14,6 +14,7 @@ pub struct ClaimIntentNativeArgs {
 #[instruction(args: ClaimIntentNativeArgs)]
 pub struct ClaimIntentNative<'info> {
     #[account(
+        mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]
