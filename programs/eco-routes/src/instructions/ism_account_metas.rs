@@ -6,6 +6,7 @@ use crate::hyperlane;
 
 #[derive(Accounts)]
 pub struct IsmAccountMetas<'info> {
+    /// CHECK: Simulation only
     #[account(
         mut,
         seeds = [

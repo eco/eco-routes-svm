@@ -54,8 +54,8 @@ pub struct FulfillIntentArgs {
     pub reward: Reward,
 }
 
-pub fn execution_authority_key(intent_hash: &[u8; 32]) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[b"execution_authority", intent_hash], &crate::ID)
+pub fn execution_authority_key(salt: &[u8; 32]) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[b"execution_authority", salt], &crate::ID)
 }
 
 pub fn dispatch_authority_key() -> (Pubkey, u8) {
@@ -74,9 +74,9 @@ pub struct FulfillIntent<'info> {
     /// CHECK: Address is enforced
     #[account(
         mut,
-        seeds = [b"execution_authority", args.intent_hash.as_ref()],
+        seeds = [b"execution_authority", args.route.salt.as_ref()],
         bump,
-        address = execution_authority_key(&args.intent_hash).0 @ EcoRoutesError::InvalidExecutionAuthority
+        address = execution_authority_key(&args.route.salt).0 @ EcoRoutesError::InvalidExecutionAuthority
     )]
     pub execution_authority: UncheckedAccount<'info>,
 

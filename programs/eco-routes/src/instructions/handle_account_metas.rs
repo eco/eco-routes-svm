@@ -5,7 +5,7 @@ use crate::{encoding, error::EcoRoutesError, state::Intent};
 
 use super::expected_prover_process_authority;
 
-#[derive(Debug, BorshSerialize, BorshDeserialize, Clone)]
+#[derive(Debug, AnchorDeserialize, AnchorSerialize, Clone)]
 pub struct SerializableAccountMeta {
     pub pubkey: Pubkey,
     pub is_signer: bool,

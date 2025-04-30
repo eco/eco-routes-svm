@@ -141,3 +141,12 @@ pub struct IntentFulfillmentMarker {
     pub intent_hash: [u8; 32],
     pub bump: u8,
 }
+
+impl IntentFulfillmentMarker {
+    pub fn pda(intent_hash: [u8; 32]) -> (Pubkey, u8) {
+        Pubkey::find_program_address(
+            &[b"intent_fulfillment_marker", intent_hash.as_ref()],
+            &crate::ID,
+        )
+    }
+}

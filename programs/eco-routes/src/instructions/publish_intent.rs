@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    encoding,
+    encoding, encoding_two,
     error::EcoRoutesError,
     instructions::expected_prover_process_authority,
     state::{
@@ -29,7 +29,7 @@ pub struct PublishIntent<'info> {
     #[account(
         init,
         payer = payer,
-        space = Intent::INIT_SPACE,
+        space = 8 + Intent::INIT_SPACE,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump,
     )]
@@ -89,7 +89,7 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
 
     intent.bump = ctx.bumps.intent;
 
-    let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
+    let expected_intent_hash = encoding_two::get_intent_hash(&intent.route, &intent.reward);
     require!(
         intent_hash == expected_intent_hash,
         EcoRoutesError::InvalidIntentHash
