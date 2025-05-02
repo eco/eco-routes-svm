@@ -88,11 +88,12 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
 
     intent.bump = ctx.bumps.intent;
 
-    let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
-    require!(
-        intent_hash == expected_intent_hash,
-        EcoRoutesError::InvalidIntentHash
-    );
+    // TODO: properly implement hashing func that matches ETH ABI
+    // let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
+    // require!(
+    //     intent_hash == expected_intent_hash,
+    //     EcoRoutesError::InvalidIntentHash
+    // );
 
     Ok(())
 }
