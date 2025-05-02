@@ -16,12 +16,14 @@ pub struct FundIntentSplArgs {
 #[instruction(args: FundIntentSplArgs)]
 pub struct FundIntentSpl<'info> {
     #[account(
+        mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]
     pub intent: Account<'info, Intent>,
 
     #[account(
+        mut,
         token::mint = mint,
         token::authority = funder,
     )]

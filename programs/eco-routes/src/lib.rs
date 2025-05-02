@@ -3,7 +3,6 @@ use anchor_lang::prelude::*;
 declare_id!("3zbEiMYyf4y1bGsVBAzKrXVzMndRQdTMDgx3aKCs8BHs");
 
 pub mod encoding;
-pub mod encoding_two;
 pub mod error;
 pub mod instructions;
 pub mod state;
@@ -15,8 +14,8 @@ pub mod hyperlane {
 
     pub const DOMAIN_ID: u32 = 1;
 
-    pub const MAILBOX_ID: Pubkey = pubkey!("3zbEiMYyf4y1bGsVBAzKrXVzMndRQdTMDgx3aKCs8BH1");
-    pub const MULTISIG_ISM_ID: Pubkey = pubkey!("3zbEiMYyf4y1bGsVBAzKrXVzMndRQdTMDgx3aKCs8BH2");
+    pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
+    pub const MULTISIG_ISM_ID: Pubkey = pubkey!("TrustedRe1ayer1sm11111111111111111111111111");
 
     pub const HANDLE_DISCRIMINATOR: [u8; 8] = [33, 210, 5, 66, 196, 212, 239, 142];
     pub const HANDLE_ACCOUNT_METAS_DISCRIMINATOR: [u8; 8] = [194, 141, 30, 82, 241, 41, 169, 52];

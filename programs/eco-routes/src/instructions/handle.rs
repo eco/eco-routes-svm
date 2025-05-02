@@ -11,7 +11,7 @@ pub struct Handle<'info> {
     pub prover_process_authority: Signer<'info>,
 }
 
-pub fn expected_prover_process_authority(prover: [u8; 32]) -> Pubkey {
+pub fn expected_process_authority() -> Pubkey {
     Pubkey::find_program_address(
         &[
             b"hyperlane",
@@ -20,7 +20,7 @@ pub fn expected_prover_process_authority(prover: [u8; 32]) -> Pubkey {
             b"-",
             crate::ID.as_ref(),
         ],
-        &Pubkey::new_from_array(prover),
+        &crate::hyperlane::MAILBOX_ID,
     )
     .0
 }
@@ -58,8 +58,7 @@ pub fn handle<'info>(
             return Err(EcoRoutesError::InvalidSender.into());
         }
 
-        if expected_prover_process_authority(intent_state.reward.prover) != prover_process_authority
-        {
+        if expected_process_authority() != prover_process_authority {
             return Err(EcoRoutesError::InvalidProver.into());
         }
 

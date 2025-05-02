@@ -1,6 +1,3 @@
-// programs/eco-routes/src/instructions/fulfill_intent.rs
-#![allow(clippy::too_many_arguments)]
-
 use std::slice::Iter;
 
 use crate::{
@@ -25,7 +22,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 use super::SerializableAccountMeta;
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct SvmCallData {
     pub instruction_data: Vec<u8>,
     pub num_account_metas: u8,
@@ -82,6 +79,7 @@ pub struct FulfillIntent<'info> {
 
     /// CHECK: Address is enforced
     #[account(
+        mut,
         seeds = [b"dispatch_authority"],
         bump,
         address = dispatch_authority_key().0 @ EcoRoutesError::InvalidDispatchAuthority
@@ -106,7 +104,7 @@ pub struct FulfillIntent<'info> {
         init,
         payer = payer,
         space = 8 + IntentFulfillmentMarker::INIT_SPACE,
-        seeds = [b"intent_fulfillment", args.intent_hash.as_ref()],
+        seeds = [b"intent_fulfillment_marker", args.intent_hash.as_ref()],
         bump,
     )]
     pub intent_fulfillment_marker: Account<'info, IntentFulfillmentMarker>,
@@ -146,7 +144,6 @@ pub fn fulfill_intent<'info>(
         &mut remaining_accounts,
         &mut route,
         solver,
-        &intent_hash,
         ctx.bumps.execution_authority,
     )?;
 
@@ -230,7 +227,6 @@ fn execute_route_calls<'info>(
     accounts: &mut Iter<AccountInfo<'info>>,
     route: &mut Route,
     solver: &Signer<'info>,
-    intent_hash: &[u8; 32],
     execution_authority_bump: u8,
 ) -> Result<()> {
     for call in &mut route.calls {
@@ -245,11 +241,15 @@ fn execute_route_calls<'info>(
         for acc in &call_accounts {
             let meta = AccountMeta {
                 pubkey: if acc.key() == solver.key() {
-                    Pubkey::default()
+                    crate::ID
                 } else {
                     acc.key()
                 },
-                is_signer: acc.is_signer,
+                is_signer: if acc.key == &execution_authority_key(&route.salt).0 {
+                    true
+                } else {
+                    acc.is_signer
+                },
                 is_writable: acc.is_writable,
             };
             call_data.account_metas.push(meta.into());
@@ -262,9 +262,18 @@ fn execute_route_calls<'info>(
             data: call_data.instruction_data.clone(),
             accounts: call_data
                 .account_metas
-                .iter()
-                .cloned()
-                .map(Into::into)
+                .into_iter()
+                .map(|m| {
+                    if m.pubkey == crate::ID {
+                        AccountMeta {
+                            pubkey: solver.key(),
+                            is_signer: m.is_signer,
+                            is_writable: m.is_writable,
+                        }
+                    } else {
+                        m.into()
+                    }
+                })
                 .collect(),
         };
 
@@ -273,7 +282,7 @@ fn execute_route_calls<'info>(
             &call_accounts,
             &[&[
                 b"execution_authority",
-                intent_hash,
+                route.salt.as_ref(),
                 &[execution_authority_bump],
             ]],
         )?;
@@ -304,15 +313,60 @@ fn dispatch_acknowledgement<'info>(
     solver: &Signer<'info>,
     ctx: &Context<FulfillIntent<'info>>,
 ) -> Result<()> {
-    #[derive(AnchorSerialize, AnchorDeserialize)]
-    struct OutboxDispatch {
-        sender: Pubkey,
-        destination_domain: u32,
-        recipient: [u8; 32],
-        message_body: Vec<u8>,
+    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+    pub enum MailboxInstruction {
+        /// Initializes the program.
+        Init(Init),
+        /// Processes a message.
+        InboxProcess(InboxProcess),
+        /// Sets the default ISM.
+        InboxSetDefaultIsm(Pubkey),
+        /// Gets the recipient's ISM.
+        InboxGetRecipientIsm(Pubkey),
+        /// Dispatches a message.
+        OutboxDispatch(OutboxDispatch),
+        /// Gets the number of messages that have been dispatched.
+        OutboxGetCount,
+        /// Gets the latest checkpoint.
+        OutboxGetLatestCheckpoint,
+        /// Gets the root of the dispatched message merkle tree.
+        OutboxGetRoot,
+        /// Gets the owner of the Mailbox.
+        GetOwner,
+        /// Transfers ownership of the Mailbox.
+        TransferOwnership(Option<Pubkey>),
+        /// Transfers accumulated protocol fees to the beneficiary.
+        ClaimProtocolFees,
+        /// Sets the protocol fee configuration.
+        SetProtocolFeeConfig,
     }
 
-    let outbox_dispatch = OutboxDispatch {
+    /// Instruction data for the Init instruction.
+    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+    pub struct Init {}
+
+    /// Instruction data for the OutboxDispatch instruction.
+    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+    pub struct OutboxDispatch {
+        /// The sender of the message.
+        /// This is required and not implied because a program uses a dispatch authority PDA
+        /// to sign the CPI on its behalf. Instruction processing logic prevents a program from
+        /// specifying any message sender it wants by requiring the relevant dispatch authority
+        /// to sign the CPI.
+        pub sender: Pubkey,
+        /// The destination domain of the message.
+        pub destination_domain: u32,
+        /// The remote recipient of the message.
+        pub recipient: [u8; 32],
+        /// The message body.
+        pub message_body: Vec<u8>,
+    }
+
+    /// Instruction data for the InboxProcess instruction.
+    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
+    pub struct InboxProcess {}
+
+    let outbox_dispatch = MailboxInstruction::OutboxDispatch(OutboxDispatch {
         sender: ctx.accounts.dispatch_authority.key(),
         destination_domain: route.destination_domain_id,
         recipient: reward.prover,
@@ -320,10 +374,7 @@ fn dispatch_acknowledgement<'info>(
             &[*intent_hash],
             &[solver.key().to_bytes()],
         ),
-    };
-
-    let mut ix_data = vec![4];
-    ix_data.extend(outbox_dispatch.try_to_vec()?);
+    });
 
     let ix = Instruction {
         program_id: ctx.accounts.mailbox_program.key(),
@@ -332,11 +383,11 @@ fn dispatch_acknowledgement<'info>(
             AccountMeta::new_readonly(ctx.accounts.dispatch_authority.key(), true),
             AccountMeta::new_readonly(system_program::ID, false),
             AccountMeta::new_readonly(ctx.accounts.spl_noop_program.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.payer.key(), true),
+            AccountMeta::new(ctx.accounts.payer.key(), true),
             AccountMeta::new_readonly(ctx.accounts.unique_message.key(), true),
             AccountMeta::new(ctx.accounts.dispatched_message_pda.key(), false),
         ],
-        data: ix_data,
+        data: outbox_dispatch.try_to_vec()?,
     };
 
     invoke_signed(
@@ -350,12 +401,7 @@ fn dispatch_acknowledgement<'info>(
             ctx.accounts.unique_message.to_account_info(),
             ctx.accounts.dispatched_message_pda.to_account_info(),
         ],
-        &[&[
-            b"hyperlane",
-            b"-",
-            b"dispatch_authority",
-            &[ctx.bumps.dispatch_authority],
-        ]],
+        &[&[b"dispatch_authority", &[ctx.bumps.dispatch_authority]]],
     )?;
 
     Ok(())

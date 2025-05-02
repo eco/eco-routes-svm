@@ -8,7 +8,6 @@ edition = "2021"
 
 eco-routes = { version = "0.1.0", path = "../programs/eco-routes" }
 
-
 solana-sdk = "2.2.1"
 solana-compute-budget = "2.2.1"
 
@@ -25,6 +24,7 @@ solana-signer = "2.2.1"
 solana-system-interface = "1.0.0"
 rand = "0.9.1"
 tiny-keccak = "2.0.2"
+spl-token-2022 = "8.0.1"
 
 [dev-dependencies]
 litesvm = "0.6.1"

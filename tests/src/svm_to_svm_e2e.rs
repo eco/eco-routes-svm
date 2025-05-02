@@ -1,4 +1,4 @@
-use anchor_lang::{AnchorDeserialize, AnchorSerialize, InstructionData, ToAccountMetas};
+use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
 use anyhow::Result;
 use eco_routes::{
     instructions::{
@@ -12,13 +12,13 @@ use litesvm::LiteSVM;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::Message;
-use solana_sdk::pubkey;
 use solana_sdk::{account::Account, program_pack::Pack, pubkey::Pubkey};
+use solana_sdk::{compute_budget::ComputeBudgetInstruction, pubkey};
 use solana_signer::Signer as _;
 use solana_transaction::Transaction;
 use tiny_keccak::{Hasher, Keccak};
 
-mod spl_noop {
+pub mod spl_noop {
     use anchor_lang::declare_id;
 
     declare_id!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
@@ -26,7 +26,7 @@ mod spl_noop {
 
 use crate::{
     helpers::{self, sol_amount, usdc_amount},
-    utils,
+    multisig_ism_stub, utils,
 };
 
 pub const TX_FEE_AMOUNT: u64 = 5_000;
@@ -123,8 +123,8 @@ fn initialize_context<'a>(
     helpers::write_account_no_data(source_svm, fee_payer.pubkey(), sol_amount(1.0))?;
     helpers::write_account_no_data(destination_svm, fee_payer.pubkey(), sol_amount(1.0))?;
 
-    helpers::write_account_no_data(source_svm, solver.pubkey(), TX_FEE_AMOUNT)?;
-    helpers::write_account_no_data(destination_svm, solver.pubkey(), TX_FEE_AMOUNT)?;
+    helpers::write_account_no_data(source_svm, solver.pubkey(), sol_amount(1.0))?;
+    helpers::write_account_no_data(destination_svm, solver.pubkey(), sol_amount(1.0))?;
 
     helpers::write_account_no_data(
         source_svm,
@@ -143,6 +143,7 @@ fn initialize_context<'a>(
     spl_token::state::Mint::pack(
         spl_token::state::Mint {
             decimals: 6,
+            is_initialized: true,
             ..spl_token::state::Mint::default()
         },
         usdc_mint_data,
@@ -175,6 +176,7 @@ fn initialize_context<'a>(
             amount: usdc_amount(5.0),
             mint: source_usdc_mint.pubkey(),
             owner: source_user.pubkey(),
+            state: spl_token::state::AccountState::Initialized,
             ..spl_token::state::Account::default()
         },
         source_user_usdc_token_data,
@@ -198,6 +200,7 @@ fn initialize_context<'a>(
             amount: usdc_amount(5.0),
             mint: destination_usdc_mint.pubkey(),
             owner: solver.pubkey(),
+            state: spl_token::state::AccountState::Initialized,
             ..spl_token::state::Account::default()
         },
         solver_usdc_token_data,
@@ -218,13 +221,13 @@ fn initialize_context<'a>(
 
     let create_ata_instruction =
         spl_associated_token_account::instruction::create_associated_token_account(
-            &Pubkey::default(), // solver is represent by a default pubkey, because it is unknown at this point
+            &eco_routes::ID, // solver is represent by a default pubkey, because it is unknown at this point
             &destination_user.pubkey(),
             &destination_usdc_mint.pubkey(),
             &spl_token::ID,
         );
 
-    let transfer_instruction = spl_token::instruction::transfer(
+    let mut transfer_instruction = spl_token::instruction::transfer(
         &spl_token::ID,
         &spl_associated_token_account::get_associated_token_address(
             &execution_authority_pubkey,
@@ -238,6 +241,12 @@ fn initialize_context<'a>(
         &[],
         usdc_amount(5.0),
     )?;
+
+    transfer_instruction.accounts.iter_mut().for_each(|a| {
+        if a.pubkey == execution_authority_pubkey {
+            a.is_writable = true;
+        }
+    });
 
     let route = Route {
         salt,
@@ -256,6 +265,7 @@ fn initialize_context<'a>(
                     num_account_metas: create_ata_instruction.accounts.len() as u8,
                     account_metas: create_ata_instruction
                         .accounts
+                        .clone()
                         .into_iter()
                         .map(SerializableAccountMeta::from)
                         .collect(),
@@ -264,14 +274,18 @@ fn initialize_context<'a>(
             },
             Call {
                 destination: spl_token::ID.to_bytes(),
-                calldata: SvmCallData {
-                    instruction_data: transfer_instruction.data,
-                    num_account_metas: transfer_instruction.accounts.len() as u8,
-                    account_metas: transfer_instruction
-                        .accounts
-                        .into_iter()
-                        .map(SerializableAccountMeta::from)
-                        .collect(),
+                calldata: {
+                    let c = SvmCallData {
+                        instruction_data: transfer_instruction.data,
+                        num_account_metas: transfer_instruction.accounts.len() as u8,
+                        account_metas: transfer_instruction
+                            .accounts
+                            .into_iter()
+                            .map(SerializableAccountMeta::from)
+                            .collect(),
+                    };
+                    println!("c: {:?}", c);
+                    c
                 }
                 .to_bytes()?,
             },
@@ -289,7 +303,7 @@ fn initialize_context<'a>(
         deadline: 0,
     };
 
-    let intent_hash = eco_routes::encoding_two::get_intent_hash(&route, &reward);
+    let intent_hash = eco_routes::encoding::get_intent_hash(&route, &reward);
 
     Ok(Context {
         source_svm,
@@ -408,7 +422,11 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                             &context.source_usdc_mint.pubkey(),
                         ),
                         destination_token: Pubkey::find_program_address(
-                            &[b"reward", context.source_usdc_mint.pubkey().as_ref()],
+                            &[
+                                b"reward",
+                                context.intent_hash.as_ref(),
+                                context.source_usdc_mint.pubkey().as_ref(),
+                            ],
                             &eco_routes::ID,
                         )
                         .0,
@@ -487,6 +505,20 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         c.calldata = stub.to_bytes().unwrap();
     });
 
+    let initialize_ata_ixs = context
+        .route
+        .tokens
+        .iter()
+        .map(|t| {
+            spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+                &context.solver.pubkey(),
+                &execution_authority_key(&context.route.salt).0,
+                &Pubkey::new_from_array(t.token),
+                &spl_token::ID,
+            )
+        })
+        .collect::<Vec<_>>();
+
     let fulfill_ix = Instruction {
         program_id: eco_routes::ID,
         accounts: eco_routes::accounts::FulfillIntent {
@@ -501,11 +533,43 @@ fn solve_intent(context: &mut Context) -> Result<()> {
             intent_fulfillment_marker: IntentFulfillmentMarker::pda(context.intent_hash).0,
             dispatched_message_pda,
             spl_token_program: spl_token::ID,
-            spl_token_2022_program: spl_token::ID,
+            spl_token_2022_program: spl_token_2022::ID,
             system_program: solana_system_interface::program::ID,
         }
         .to_account_metas(None)
         .into_iter()
+        .chain({
+            context
+                .route
+                .tokens
+                .iter()
+                .map(|t| {
+                    vec![
+                        AccountMeta {
+                            pubkey: Pubkey::new_from_array(t.token),
+                            is_signer: false,
+                            is_writable: false,
+                        },
+                        AccountMeta {
+                            pubkey: spl_associated_token_account::get_associated_token_address(
+                                &context.solver.pubkey(),
+                                &Pubkey::new_from_array(t.token),
+                            ),
+                            is_signer: false,
+                            is_writable: true,
+                        },
+                        AccountMeta {
+                            pubkey: spl_associated_token_account::get_associated_token_address(
+                                &execution_authority_key(&context.route.salt).0,
+                                &Pubkey::new_from_array(t.token),
+                            ),
+                            is_signer: false,
+                            is_writable: true,
+                        },
+                    ]
+                })
+                .flatten()
+        })
         // add the SVM-call account metas we stripped out earlier - they are needed in metas but not in data
         .chain({
             context.route.calls.iter().flat_map(|c| {
@@ -514,13 +578,21 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                     .account_metas
                     .into_iter()
                     .map(|m: SerializableAccountMeta| AccountMeta {
-                        pubkey: if m.pubkey == Pubkey::default() {
+                        pubkey: if m.pubkey == eco_routes::ID {
                             context.solver.pubkey()
                         } else {
                             m.pubkey
                         },
-                        is_signer: m.is_signer,
-                        is_writable: m.is_writable,
+                        is_signer: if m.pubkey == execution_authority_key(&context.route.salt).0 {
+                            false
+                        } else {
+                            m.is_signer
+                        },
+                        is_writable: if m.pubkey == execution_authority_key(&context.route.salt).0 {
+                            true
+                        } else {
+                            m.is_writable
+                        },
                     })
             })
         })
@@ -535,18 +607,26 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         .data(),
     };
 
+    println!("fulfill_ix: {:#?}", fulfill_ix.accounts);
+
+    let compute_budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+
+    let instructions = initialize_ata_ixs
+        .into_iter()
+        .chain([compute_budget_ix])
+        .chain([fulfill_ix])
+        .collect::<Vec<_>>();
+
     let fulfill_tx = Transaction::new(
-        &[&context.solver, &context.fee_payer, &unique_message],
-        Message::new(&[fulfill_ix], Some(&context.solver.pubkey())),
+        &[&context.solver, &unique_message],
+        Message::new(&instructions, Some(&context.solver.pubkey())),
         context.destination_svm.latest_blockhash(),
     );
-
-    println!("fulfill tx: {:?}", fulfill_tx);
 
     context
         .destination_svm
         .send_transaction(fulfill_tx)
-        .map_err(|e| anyhow::anyhow!("fulfill tx failed: {e:?}"))?;
+        .map_err(|e| anyhow::anyhow!("Failed to send transaction: {:?}", e))?;
 
     let dispatch_account = context
         .destination_svm
@@ -554,8 +634,8 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("dispatched message account missing"))?;
 
     let bytes = dispatch_account.data;
-    let message_length = u32::from_le_bytes(bytes[44..48].try_into().unwrap()) as usize;
-    let message_bytes = bytes[48..48 + message_length].to_vec();
+
+    let message_bytes = bytes[53..].to_vec();
 
     let mut hasher = Keccak::v256();
     hasher.update(&message_bytes);
@@ -581,6 +661,8 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         &eco_routes::hyperlane::MAILBOX_ID,
     );
 
+    println!("process_authority_pda: {}", process_authority_pda);
+
     let mut ix_data = vec![1u8]; // enum tag: InboxProcess
     ix_data.extend_from_slice(&0u32.to_le_bytes()); // empty metadata vec
     ix_data.extend_from_slice(&(message_bytes.len() as u32).to_le_bytes());
@@ -589,15 +671,44 @@ fn solve_intent(context: &mut Context) -> Result<()> {
     let inbox_process_ix = Instruction {
         program_id: eco_routes::hyperlane::MAILBOX_ID,
         accounts: vec![
-            AccountMeta::new(context.hyperlane_relayer_source.pubkey(), true), // 0 payer
-            AccountMeta::new_readonly(solana_system_interface::program::ID, false), // 1 sys
-            AccountMeta::new(inbox_pda, false),                                // 2 inbox
-            AccountMeta::new_readonly(process_authority_pda, false), // 3 process authority
-            AccountMeta::new(processed_message_pda, false),          // 4 processed
-            AccountMeta::new_readonly(spl_noop::id(), false),        // 5 noop
-            AccountMeta::new_readonly(eco_routes::hyperlane::MULTISIG_ISM_ID, false), // 6 ISM
-            AccountMeta::new_readonly(eco_routes::ID, false),        // 7 recipient program
-            AccountMeta::new(Intent::pda(context.intent_hash).0, true), // 8 intent (writable)
+            // 0-4 – core mailbox accounts
+            AccountMeta::new(context.hyperlane_relayer_source.pubkey(), true),
+            AccountMeta::new_readonly(solana_system_interface::program::ID, false),
+            AccountMeta::new(inbox_pda, false),
+            AccountMeta::new_readonly(process_authority_pda, false),
+            AccountMeta::new(processed_message_pda, false),
+            // 5..N – recipient’s ISM-meta account(s)
+            AccountMeta::new(
+                Pubkey::find_program_address(
+                    &[
+                        b"hyperlane_message_recipient",
+                        b"-",
+                        b"interchain_security_module",
+                        b"-",
+                        b"account_metas",
+                    ],
+                    &eco_routes::ID,
+                )
+                .0,
+                false,
+            ),
+            // N+1 – SPL-noop
+            AccountMeta::new_readonly(spl_noop::id(), false),
+            // N+2 – ISM program id
+            AccountMeta::new_readonly(eco_routes::hyperlane::MULTISIG_ISM_ID, false),
+            // N+3..M – ISM::verify accounts (for Multisig ISM it’s just DomainData)
+            AccountMeta::new(
+                multisig_ism_stub::domain_data_pda(
+                    eco_routes::hyperlane::DOMAIN_ID,
+                    &eco_routes::hyperlane::MULTISIG_ISM_ID,
+                )
+                .0,
+                false,
+            ),
+            // M+1 – recipient program id
+            AccountMeta::new_readonly(eco_routes::ID, false),
+            // M+2..K – recipient::handle accounts
+            AccountMeta::new(Intent::pda(context.intent_hash).0, false),
         ],
         data: ix_data,
     };

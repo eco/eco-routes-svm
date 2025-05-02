@@ -16,12 +16,14 @@ pub struct ClaimIntentSplArgs {
 #[instruction(args: ClaimIntentSplArgs)]
 pub struct ClaimIntentSpl<'info> {
     #[account(
+        mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]
     pub intent: Account<'info, Intent>,
 
     #[account(
+        mut,
         token::mint = mint,
         token::authority = intent,
         seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
@@ -30,6 +32,7 @@ pub struct ClaimIntentSpl<'info> {
     pub source_token: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        mut,
         token::mint = mint,
         token::authority = claimer,
     )]

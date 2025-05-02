@@ -1,9 +1,9 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
-use borsh::{BorshDeserialize, BorshSerialize};
+use borsh::BorshSerialize;
 
 use crate::{encoding, error::EcoRoutesError, state::Intent};
 
-use super::expected_prover_process_authority;
+use super::expected_process_authority;
 
 #[derive(Debug, AnchorDeserialize, AnchorSerialize, Clone)]
 pub struct SerializableAccountMeta {
@@ -52,7 +52,7 @@ pub fn handle_account_metas(
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
 
     let mut metas = vec![SerializableAccountMeta::from(AccountMeta::new_readonly(
-        expected_prover_process_authority(crate::hyperlane::MAILBOX_ID.to_bytes()),
+        expected_process_authority(),
         true,
     ))];
 

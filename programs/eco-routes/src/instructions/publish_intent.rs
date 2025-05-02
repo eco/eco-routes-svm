@@ -1,9 +1,8 @@
 use anchor_lang::prelude::*;
 
 use crate::{
-    encoding, encoding_two,
+    encoding,
     error::EcoRoutesError,
-    instructions::expected_prover_process_authority,
     state::{
         Call, Intent, IntentStatus, Reward, Route, TokenAmount, ValidateCallList,
         ValidateTokenList, MAX_CALLS, MAX_REWARD_TOKENS, MAX_ROUTE_TOKENS,
@@ -81,7 +80,7 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
 
     intent.reward = Reward {
         creator: creator.key(),
-        prover: crate::hyperlane::MAILBOX_ID.to_bytes(),
+        prover: crate::ID.to_bytes(),
         tokens: reward_tokens,
         native_amount: native_reward,
         deadline,
@@ -89,7 +88,7 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
 
     intent.bump = ctx.bumps.intent;
 
-    let expected_intent_hash = encoding_two::get_intent_hash(&intent.route, &intent.reward);
+    let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
     require!(
         intent_hash == expected_intent_hash,
         EcoRoutesError::InvalidIntentHash

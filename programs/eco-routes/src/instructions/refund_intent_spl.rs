@@ -16,12 +16,14 @@ pub struct RefundIntentSplArgs {
 #[instruction(args: RefundIntentSplArgs)]
 pub struct RefundIntentSpl<'info> {
     #[account(
+        mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
     )]
     pub intent: Account<'info, Intent>,
 
     #[account(
+        mut,
         token::mint = mint,
         token::authority = intent,
         seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
