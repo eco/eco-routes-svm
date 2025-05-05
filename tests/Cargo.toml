@@ -25,6 +25,9 @@ solana-system-interface = "1.0.0"
 rand = "0.9.1"
 tiny-keccak = "2.0.2"
 spl-token-2022 = "8.0.1"
-
-[dev-dependencies]
 litesvm = "0.6.1"
+console = "0.15.11"
+indicatif = "0.17.11"
+tracing = { version = "0.1.41", features = ["attributes"] }
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter", "ansi", "chrono"] }
+tracing-appender = "0.2.3"

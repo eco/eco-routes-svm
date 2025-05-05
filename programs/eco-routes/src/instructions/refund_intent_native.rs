@@ -1,4 +1,4 @@
-use anchor_lang::{prelude::*, system_program};
+use anchor_lang::prelude::*;
 
 use crate::{
     error::EcoRoutesError,
@@ -52,16 +52,8 @@ pub fn refund_intent_native(
         return Err(EcoRoutesError::NotFunded.into());
     }
 
-    system_program::transfer(
-        CpiContext::new(
-            ctx.accounts.system_program.to_account_info(),
-            system_program::Transfer {
-                from: intent.to_account_info(),
-                to: refundee.to_account_info(),
-            },
-        ),
-        intent.reward.native_amount,
-    )?;
+    **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
+    **refundee.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;
 
     intent.native_funded = false;
 

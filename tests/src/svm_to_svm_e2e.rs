@@ -1,5 +1,6 @@
 use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
 use anyhow::Result;
+use console::{style, Emoji};
 use eco_routes::{
     hyperlane::MAILBOX_ID,
     instructions::{
@@ -13,8 +14,9 @@ use litesvm::LiteSVM;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::Message;
-use solana_sdk::{account::Account, program_pack::Pack, pubkey::Pubkey};
-use solana_sdk::{compute_budget::ComputeBudgetInstruction, pubkey};
+use solana_sdk::{
+    account::Account, compute_budget::ComputeBudgetInstruction, program_pack::Pack, pubkey::Pubkey,
+};
 use solana_signer::Signer as _;
 use solana_transaction::Transaction;
 use tiny_keccak::{Hasher, Keccak};
@@ -27,18 +29,17 @@ pub mod spl_noop {
 
 use crate::{
     helpers::{self, sol_amount, usdc_amount},
-    multisig_ism_stub, utils,
+    utils,
 };
 
 pub const TX_FEE_AMOUNT: u64 = 5_000;
 
-#[test]
 /**
  * E2E test from SVM to SVM
  *
  * - The intent of the user we are testing on is a bridge of 5 USDC on SVM1 to 5 USDC on SVM2.
- * - The user is sponsoring all the fees on the source chain for the user.
- * - The user is offering 0.03 SOL on SVM1 as a reward for the solver.
+ * - The payer is sponsoring all the fees on the source chain for the user.
+ * - The user is offering 0.03 SOL and 5 USDC on SVM1 as a reward for the solver.
  *
  * 1. Create intent
  * 2. Fund intent
@@ -48,42 +49,121 @@ pub const TX_FEE_AMOUNT: u64 = 5_000;
  * 6. Close intent
  *
 */
-fn svm_to_svm_e2e() -> Result<()> {
+pub fn svm_to_svm_e2e() -> Result<()> {
     let mut source_svm = utils::init_svm();
-    let mut target_svm = utils::init_svm();
-    let mut context = initialize_context(&mut source_svm, &mut target_svm)?;
+    let mut destination_svm = utils::init_svm();
+    let mut context = initialize_context(&mut source_svm, &mut destination_svm)?;
 
-    // std::thread::sleep(std::time::Duration::from_secs(5));
+    println!(
+        "{} {}",
+        Emoji::new("🔍", ""),
+        style("This is an end-to-end test of the SVM implementation of `eco-routes`.")
+            .cyan()
+            .bold()
+    );
+    println!(
+        "{}",
+        style("The test will (1) create an intent, (2) fund it, (3) solve it, (4) claim it, and (5) close it.").white().bold()
+    );
+    println!(
+        "{}",
+        style("The test will be run on two simulated SVMs, `source_svm` and `destination_svm`, with the following actors:").white().bold()
+    );
+    println!(
+        "{}{}",
+        style("- Fee payer: ").bold().green(),
+        style("will sponsor fees for all of the user's transactions.").bold()
+    );
+    println!(
+        "{}{}",
+        style("- Source user: ").bold().green(),
+        style("will create the intent and fund it.").bold(),
+    );
+    println!(
+        "{}{}",
+        style("- Destination user: ").bold().green(),
+        style("will be the recipient of the intent.").bold()
+    );
+    println!(
+        "{}{}",
+        style("- Solver: ").bold().green(),
+        style("will fulfill the intent.").bold()
+    );
 
-    println!("creating intent");
+    context.snapshot_and_log()?;
+    println!("{}", style("Press Enter to begin...").cyan().bold());
+    let _ = std::io::stdin().read_line(&mut String::new());
 
     create_intent(&mut context)?;
+    println!(
+        "{} {}",
+        Emoji::new("✨", ""),
+        style("Intent created").cyan().bold()
+    );
 
-    // std::thread::sleep(std::time::Duration::from_secs(5));
-
-    println!("funding intent");
+    context.snapshot_and_log()?;
+    println!("{}", style("Press Enter to continue...").cyan().bold());
+    let _ = std::io::stdin().read_line(&mut String::new());
 
     fund_intent(&mut context)?;
+    println!(
+        "{} {}",
+        Emoji::new("✨", ""),
+        style("Intent funded").cyan().bold()
+    );
 
-    // std::thread::sleep(std::time::Duration::from_secs(5));
-
-    println!("solving intent");
-
+    context.snapshot_and_log()?;
+    println!("{}", style("Press Enter to continue...").cyan().bold());
+    let _ = std::io::stdin().read_line(&mut String::new());
     solve_intent(&mut context)?;
+    println!(
+        "{} {}",
+        Emoji::new("✨", ""),
+        style("Intent solved").cyan().bold()
+    );
 
-    std::thread::sleep(std::time::Duration::from_secs(5));
-
-    println!("claiming intent");
-
+    context.snapshot_and_log()?;
+    println!("{}", style("Press Enter to continue...").cyan().bold());
+    let _ = std::io::stdin().read_line(&mut String::new());
     claim_intent(&mut context)?;
+    println!(
+        "{} {}",
+        Emoji::new("✨", ""),
+        style("Intent claimed").cyan().bold()
+    );
 
-    std::thread::sleep(std::time::Duration::from_secs(5));
-
-    println!("closing intent");
-
+    context.snapshot_and_log()?;
+    println!("{}", style("Press Enter to continue...").cyan().bold());
+    let _ = std::io::stdin().read_line(&mut String::new());
     close_intent(&mut context)?;
+    println!(
+        "{} {}",
+        Emoji::new("✨", ""),
+        style("Intent closed").cyan().bold()
+    );
+
+    context.snapshot_and_log()?;
+    println!("{}", style("Press Enter to exit...").cyan().bold());
+    let _ = std::io::stdin().read_line(&mut String::new());
+
+    println!("{}", style("Test completed.").cyan().bold());
 
     Ok(())
+}
+
+struct BalancesSnapshot {
+    pub source_user_lamports: u64,
+    pub source_user_usdc: u64,
+    pub destination_user_lamports: u64,
+    pub destination_user_usdc: u64,
+    pub source_solver_lamports: u64,
+    pub source_solver_usdc: u64,
+    pub destination_solver_lamports: u64,
+    pub destination_solver_usdc: u64,
+    pub source_fee_payer_lamports: u64,
+    pub destination_fee_payer_lamports: u64,
+    pub intent_lamports: u64,
+    pub intent_usdc: u64,
 }
 
 struct Context<'a> {
@@ -105,6 +185,366 @@ struct Context<'a> {
     pub intent_hash: [u8; 32],
     pub route: Route,
     pub reward: Reward,
+
+    pub balances_snapshot: Option<BalancesSnapshot>,
+}
+
+impl<'a> Context<'a> {
+    // logs the intent state, each actors lamports and usdc, and deltas
+
+    pub fn snapshot_and_log(&mut self) -> Result<()> {
+        fn format_balance(
+            balance: u64,
+            pre_balance: Option<u64>,
+            currency: &str,
+            decimals: u8,
+        ) -> String {
+            let formatted_balance =
+                format!("{:.2}", balance as f64 / 10.0_f64.powi(decimals as i32));
+
+            let formatted_delta = if let Some(pre_balance) = pre_balance {
+                let delta: i64 = (balance as i64).saturating_sub(pre_balance as i64);
+                let formatted_delta_text =
+                    format!("{:.2}", delta.abs() as f64 / 10.0_f64.powi(decimals as i32));
+                if delta > 0 {
+                    style(format!("(+{})", formatted_delta_text)).green().bold()
+                } else if delta < 0 {
+                    style(format!("(-{})", formatted_delta_text)).red().bold()
+                } else {
+                    style(format!("(no change)")).dim().bold()
+                }
+            } else {
+                style(format!("(no previous balance)")).dim().bold()
+            };
+
+            style(format!(
+                "{} {} {}",
+                formatted_balance, currency, formatted_delta
+            ))
+            .bold()
+            .to_string()
+        }
+
+        fn get_token_balance(svm: &LiteSVM, token_address: Pubkey) -> u64 {
+            svm.get_account(&token_address)
+                .map(|a| {
+                    spl_token::state::Account::unpack(&a.data)
+                        .ok()
+                        .map(|a| a.amount)
+                })
+                .flatten()
+                .unwrap_or(0)
+        }
+
+        let source_user_lamports =
+            helpers::read_account_lamports(self.source_svm, &self.source_user.pubkey())
+                .unwrap_or(0);
+        let destination_user_lamports =
+            helpers::read_account_lamports(self.destination_svm, &self.destination_user.pubkey())
+                .unwrap_or(0);
+        let source_solver_lamports =
+            helpers::read_account_lamports(self.source_svm, &self.solver.pubkey()).unwrap_or(0);
+        let destination_solver_lamports =
+            helpers::read_account_lamports(self.destination_svm, &self.solver.pubkey())
+                .unwrap_or(0);
+        let source_fee_payer_lamports =
+            helpers::read_account_lamports(self.source_svm, &self.fee_payer.pubkey()).unwrap_or(0);
+        let destination_fee_payer_lamports =
+            helpers::read_account_lamports(self.destination_svm, &self.fee_payer.pubkey())
+                .unwrap_or(0);
+
+        let source_user_usdc = get_token_balance(
+            self.source_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.source_user.pubkey(),
+                &self.source_usdc_mint.pubkey(),
+            ),
+        );
+        let destination_user_usdc = get_token_balance(
+            self.destination_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.destination_user.pubkey(),
+                &self.destination_usdc_mint.pubkey(),
+            ),
+        );
+        let source_solver_usdc = get_token_balance(
+            self.source_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.solver.pubkey(),
+                &self.source_usdc_mint.pubkey(),
+            ),
+        );
+        let destination_solver_usdc = get_token_balance(
+            self.destination_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.solver.pubkey(),
+                &self.destination_usdc_mint.pubkey(),
+            ),
+        );
+
+        let intent_lamports =
+            helpers::read_account_lamports_re(self.source_svm, &Intent::pda(self.intent_hash).0)
+                .unwrap_or(0);
+        let intent_usdc = get_token_balance(
+            self.source_svm,
+            Pubkey::find_program_address(
+                &[
+                    b"reward",
+                    self.intent_hash.as_ref(),
+                    self.source_usdc_mint.pubkey().as_ref(),
+                ],
+                &eco_routes::ID,
+            )
+            .0,
+        );
+
+        println!("{}", style("Source SVM actors: ").bold().magenta());
+
+        println!("{}", style("User: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                source_user_lamports,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.source_user_lamports),
+                "SOL",
+                9
+            )
+        );
+        println!(
+            "{} {}",
+            style("  USDC: ").bold().green(),
+            format_balance(
+                source_user_usdc,
+                self.balances_snapshot.as_ref().map(|s| s.source_user_usdc),
+                "USDC",
+                6
+            )
+        );
+
+        println!("{}", style("Intent: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                intent_lamports,
+                self.balances_snapshot.as_ref().map(|s| s.intent_lamports),
+                "SOL",
+                9
+            )
+        );
+        println!(
+            "{} {}",
+            style("  USDC: ").bold().green(),
+            format_balance(
+                intent_usdc,
+                self.balances_snapshot.as_ref().map(|s| s.intent_usdc),
+                "USDC",
+                6
+            )
+        );
+
+        println!("{}", style("Fee payer: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                source_fee_payer_lamports,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.source_fee_payer_lamports),
+                "SOL",
+                9
+            )
+        );
+
+        println!("{}", style("Solver: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                source_solver_lamports,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.source_solver_lamports),
+                "SOL",
+                9
+            )
+        );
+        println!(
+            "{} {}",
+            style("  USDC: ").bold().green(),
+            format_balance(
+                source_solver_usdc,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.source_solver_usdc),
+                "USDC",
+                6
+            )
+        );
+
+        println!("{}", style("Destination SVM actors: ").bold().magenta());
+
+        println!("{}", style("Destination user: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                destination_user_lamports,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.destination_user_lamports),
+                "SOL",
+                9
+            )
+        );
+        println!(
+            "{} {}",
+            style("  USDC: ").bold().green(),
+            format_balance(
+                destination_user_usdc,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.destination_user_usdc),
+                "USDC",
+                6
+            )
+        );
+
+        println!("{}", style("Fee payer: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                destination_fee_payer_lamports,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.destination_fee_payer_lamports),
+                "SOL",
+                9
+            )
+        );
+
+        println!("{}", style("Solver: ").bold().green());
+        println!(
+            "{} {}",
+            style("  Lamports: ").bold().green(),
+            format_balance(
+                destination_solver_lamports,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.destination_solver_lamports),
+                "SOL",
+                9
+            )
+        );
+        println!(
+            "{} {}",
+            style("  USDC: ").bold().green(),
+            format_balance(
+                destination_solver_usdc,
+                self.balances_snapshot
+                    .as_ref()
+                    .map(|s| s.destination_solver_usdc),
+                "USDC",
+                6
+            )
+        );
+
+        self.snapshot();
+
+        Ok(())
+    }
+
+    pub fn snapshot(&mut self) {
+        fn get_token_balance(svm: &LiteSVM, token_address: Pubkey) -> u64 {
+            svm.get_account(&token_address)
+                .map(|a| spl_token::state::Account::unpack(&a.data).unwrap().amount)
+                .unwrap_or(0)
+        }
+
+        let source_user_lamports =
+            helpers::read_account_lamports(self.source_svm, &self.source_user.pubkey())
+                .unwrap_or(0);
+        let destination_user_lamports =
+            helpers::read_account_lamports(self.destination_svm, &self.destination_user.pubkey())
+                .unwrap_or(0);
+        let source_solver_lamports =
+            helpers::read_account_lamports(self.source_svm, &self.solver.pubkey()).unwrap_or(0);
+        let destination_solver_lamports =
+            helpers::read_account_lamports(self.destination_svm, &self.solver.pubkey())
+                .unwrap_or(0);
+        let source_fee_payer_lamports =
+            helpers::read_account_lamports(self.source_svm, &self.fee_payer.pubkey()).unwrap_or(0);
+        let destination_fee_payer_lamports =
+            helpers::read_account_lamports(self.destination_svm, &self.fee_payer.pubkey())
+                .unwrap_or(0);
+
+        let source_user_usdc = get_token_balance(
+            self.source_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.source_user.pubkey(),
+                &self.source_usdc_mint.pubkey(),
+            ),
+        );
+        let destination_user_usdc = get_token_balance(
+            self.destination_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.destination_user.pubkey(),
+                &self.destination_usdc_mint.pubkey(),
+            ),
+        );
+        let source_solver_usdc = get_token_balance(
+            self.source_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.solver.pubkey(),
+                &self.source_usdc_mint.pubkey(),
+            ),
+        );
+        let destination_solver_usdc = get_token_balance(
+            self.destination_svm,
+            spl_associated_token_account::get_associated_token_address(
+                &self.solver.pubkey(),
+                &self.destination_usdc_mint.pubkey(),
+            ),
+        );
+
+        let intent_lamports =
+            helpers::read_account_lamports_re(self.source_svm, &Intent::pda(self.intent_hash).0)
+                .unwrap_or(0);
+        let intent_usdc = get_token_balance(
+            self.source_svm,
+            Pubkey::find_program_address(
+                &[
+                    b"reward",
+                    self.intent_hash.as_ref(),
+                    self.source_usdc_mint.pubkey().as_ref(),
+                ],
+                &eco_routes::ID,
+            )
+            .0,
+        );
+
+        let balances_snapshot = BalancesSnapshot {
+            source_user_lamports,
+            source_user_usdc,
+            destination_user_lamports,
+            destination_user_usdc,
+            source_solver_lamports,
+            source_solver_usdc,
+            destination_solver_lamports,
+            destination_solver_usdc,
+            source_fee_payer_lamports,
+            destination_fee_payer_lamports,
+            intent_lamports,
+            intent_usdc,
+        };
+
+        self.balances_snapshot = Some(balances_snapshot);
+    }
 }
 
 fn initialize_context<'a>(
@@ -190,12 +630,38 @@ fn initialize_context<'a>(
         source_user_usdc_token_data.to_vec(),
     )?;
 
-    let solver_user_usdc_token_pubkey = spl_associated_token_account::get_associated_token_address(
-        &solver.pubkey(),
-        &destination_usdc_mint.pubkey(),
-    );
+    let solver_source_usdc_token_pubkey =
+        spl_associated_token_account::get_associated_token_address(
+            &solver.pubkey(),
+            &source_usdc_mint.pubkey(),
+        );
 
-    let solver_usdc_token_data = &mut [0u8; spl_token::state::Account::LEN];
+    let solver_source_usdc_token_data = &mut [0u8; spl_token::state::Account::LEN];
+    spl_token::state::Account::pack(
+        spl_token::state::Account {
+            amount: usdc_amount(0.0),
+            mint: source_usdc_mint.pubkey(),
+            owner: solver.pubkey(),
+            state: spl_token::state::AccountState::Initialized,
+            ..spl_token::state::Account::default()
+        },
+        solver_source_usdc_token_data,
+    )?;
+
+    helpers::write_account_re(
+        source_svm,
+        solver_source_usdc_token_pubkey,
+        spl_token::ID,
+        solver_source_usdc_token_data.to_vec(),
+    )?;
+
+    let solver_destination_usdc_token_pubkey =
+        spl_associated_token_account::get_associated_token_address(
+            &solver.pubkey(),
+            &destination_usdc_mint.pubkey(),
+        );
+
+    let solver_destination_usdc_token_data = &mut [0u8; spl_token::state::Account::LEN];
     spl_token::state::Account::pack(
         spl_token::state::Account {
             amount: usdc_amount(5.0),
@@ -204,14 +670,14 @@ fn initialize_context<'a>(
             state: spl_token::state::AccountState::Initialized,
             ..spl_token::state::Account::default()
         },
-        solver_usdc_token_data,
+        solver_destination_usdc_token_data,
     )?;
 
     helpers::write_account_re(
         destination_svm,
-        solver_user_usdc_token_pubkey,
+        solver_destination_usdc_token_pubkey,
         spl_token::ID,
-        solver_usdc_token_data.to_vec(),
+        solver_destination_usdc_token_data.to_vec(),
     )?;
 
     // Intent parameters
@@ -277,18 +743,14 @@ fn initialize_context<'a>(
             },
             Call {
                 destination: spl_token::ID.to_bytes(),
-                calldata: {
-                    let c = SvmCallData {
-                        instruction_data: transfer_instruction.data,
-                        num_account_metas: transfer_instruction.accounts.len() as u8,
-                        account_metas: transfer_instruction
-                            .accounts
-                            .into_iter()
-                            .map(SerializableAccountMeta::from)
-                            .collect(),
-                    };
-                    println!("c: {:?}", c);
-                    c
+                calldata: SvmCallData {
+                    instruction_data: transfer_instruction.data,
+                    num_account_metas: transfer_instruction.accounts.len() as u8,
+                    account_metas: transfer_instruction
+                        .accounts
+                        .into_iter()
+                        .map(SerializableAccountMeta::from)
+                        .collect(),
                 }
                 .to_bytes()?,
             },
@@ -321,6 +783,7 @@ fn initialize_context<'a>(
         route,
         reward,
         hyperlane_relayer_source,
+        balances_snapshot: None,
     })
 }
 
@@ -452,18 +915,10 @@ fn fund_intent(context: &mut Context) -> Result<()> {
         context.source_svm.latest_blockhash(),
     );
 
-    let result = context.source_svm.send_transaction(transaction);
-
-    match &result {
-        Ok(_) => println!("funding intent success"),
-        Err(e) => {
-            for log in e.meta.logs.iter() {
-                println!("{:?}", log);
-            }
-        }
-    };
-
-    result.map_err(|e| anyhow::anyhow!("Failed to send transaction: {:?}", e))?;
+    context
+        .source_svm
+        .send_transaction(transaction)
+        .map_err(|e| anyhow::anyhow!("Failed to send transaction: {:?}", e))?;
 
     let intent = helpers::read_account_anchor::<Intent>(
         context.source_svm,
@@ -617,8 +1072,6 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         .data(),
     };
 
-    println!("fulfill_ix: {:#?}", fulfill_ix.accounts);
-
     let compute_budget_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
 
     let instructions = initialize_ata_ixs
@@ -637,6 +1090,25 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         .destination_svm
         .send_transaction(fulfill_tx)
         .map_err(|e| anyhow::anyhow!("Failed to send transaction: {:?}", e))?;
+
+    let destination_usdc_token = spl_associated_token_account::get_associated_token_address(
+        &context.destination_user.pubkey(),
+        &context.destination_usdc_mint.pubkey(),
+    );
+
+    let destination_usdc_token_data = context
+        .destination_svm
+        .get_account(&destination_usdc_token)
+        .ok_or_else(|| anyhow::anyhow!("destination usdc token account missing"))?;
+
+    let destination_usdc_token_amount =
+        spl_token::state::Account::unpack(&destination_usdc_token_data.data)?;
+
+    assert_eq!(
+        destination_usdc_token_amount.amount,
+        usdc_amount(5.0),
+        "destination usdc token amount should be 5"
+    );
 
     let dispatch_account = context
         .destination_svm
@@ -670,8 +1142,6 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         ],
         &eco_routes::hyperlane::MAILBOX_ID,
     );
-
-    println!("process_authority_pda: {}", process_authority_pda);
 
     fn build_multisig_metadata() -> Vec<u8> {
         const SIG_LEN: usize = 65;
@@ -732,8 +1202,8 @@ fn solve_intent(context: &mut Context) -> Result<()> {
             AccountMeta::new_readonly(eco_routes::hyperlane::MULTISIG_ISM_ID, false),
             // N+3..M – ISM::verify accounts (for Multisig ISM it’s just DomainData)
             AccountMeta::new(
-                multisig_ism_stub::domain_data_pda(
-                    eco_routes::hyperlane::DOMAIN_ID,
+                Pubkey::find_program_address(
+                    &[b"test_ism", b"-", b"storage"],
                     &eco_routes::hyperlane::MULTISIG_ISM_ID,
                 )
                 .0,
@@ -811,15 +1281,20 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                         claimer: context.solver.pubkey(),
                         payer: context.solver.pubkey(),
                         system_program: solana_system_interface::program::ID,
-                        source_token: spl_associated_token_account::get_associated_token_address(
-                            &context.solver.pubkey(),
-                            &context.source_usdc_mint.pubkey(),
-                        ),
-                        destination_token: Pubkey::find_program_address(
-                            &[b"reward", context.source_usdc_mint.pubkey().as_ref()],
+                        source_token: Pubkey::find_program_address(
+                            &[
+                                b"reward",
+                                context.intent_hash.as_ref(),
+                                context.source_usdc_mint.pubkey().as_ref(),
+                            ],
                             &eco_routes::ID,
                         )
                         .0,
+                        destination_token:
+                            spl_associated_token_account::get_associated_token_address(
+                                &context.solver.pubkey(),
+                                &context.source_usdc_mint.pubkey(),
+                            ),
                         mint: context.source_usdc_mint.pubkey(),
                         token_program: spl_token::ID,
                     }

@@ -131,7 +131,7 @@ impl Intent {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.status == IntentStatus::Funded && self.tokens_funded == 0 && !self.native_funded
+        self.tokens_funded == 0 && !self.native_funded
     }
 }
 

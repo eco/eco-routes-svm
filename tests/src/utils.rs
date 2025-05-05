@@ -8,7 +8,7 @@ use solana_sdk::{
 };
 use solana_transaction::Transaction;
 
-use crate::{helpers, multisig_ism_stub, svm_to_svm_e2e::spl_noop};
+use crate::{helpers, svm_to_svm_e2e::spl_noop};
 
 const MAILBOX_BIN: &[u8] = include_bytes!("../../bins/mailbox.so");
 const MULTISIG_ISM_BIN: &[u8] = include_bytes!("../../bins/multisig_ism.so");

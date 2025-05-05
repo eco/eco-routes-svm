@@ -170,28 +170,32 @@ fn transfer_route_tokens<'info>(
 ) -> Result<()> {
     for token in &route.tokens {
         let mint_key = Pubkey::new_from_array(token.token);
-        let expected_dest = spl_associated_token_account::get_associated_token_address(
+        let expected_destination = spl_associated_token_account::get_associated_token_address(
             &execution_authority.key(),
             &mint_key,
         );
 
-        let mint_acc = accounts.next().ok_or(EcoRoutesError::InvalidRouteMint)?;
-        let src_acc = accounts
+        let mint_account = accounts.next().ok_or(EcoRoutesError::InvalidRouteMint)?;
+        let source_account = accounts
             .next()
             .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
-        let dest_acc = accounts
+        let destination_account = accounts
             .next()
             .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
 
-        require_keys_eq!(mint_acc.key(), mint_key, EcoRoutesError::InvalidRouteMint);
         require_keys_eq!(
-            dest_acc.key(),
-            expected_dest,
+            mint_account.key(),
+            mint_key,
+            EcoRoutesError::InvalidRouteMint
+        );
+        require_keys_eq!(
+            destination_account.key(),
+            expected_destination,
             EcoRoutesError::InvalidRouteTokenAccount
         );
 
-        let mint = Mint::try_deserialize(&mut &mint_acc.data.borrow()[..])?;
-        let src_token = TokenAccount::try_deserialize(&mut &src_acc.data.borrow()[..])?;
+        let mint = Mint::try_deserialize(&mut &mint_account.data.borrow()[..])?;
+        let src_token = TokenAccount::try_deserialize(&mut &source_account.data.borrow()[..])?;
 
         require_keys_eq!(src_token.mint, mint_key, EcoRoutesError::InvalidRouteMint);
         require_keys_eq!(
@@ -200,7 +204,7 @@ fn transfer_route_tokens<'info>(
             EcoRoutesError::InvalidRouteTokenAccount
         );
 
-        let token_program = if mint_acc.owner == &spl_token_program.key() {
+        let token_program = if mint_account.owner == &spl_token_program.key() {
             spl_token_program.clone()
         } else {
             spl_token_2022_program.clone()
@@ -210,9 +214,9 @@ fn transfer_route_tokens<'info>(
             CpiContext::new(
                 token_program,
                 TransferChecked {
-                    from: src_acc.to_account_info(),
-                    mint: mint_acc.to_account_info(),
-                    to: dest_acc.to_account_info(),
+                    from: source_account.to_account_info(),
+                    mint: mint_account.to_account_info(),
+                    to: destination_account.to_account_info(),
                     authority: solver.to_account_info(),
                 },
             ),
@@ -291,9 +295,8 @@ fn execute_route_calls<'info>(
 }
 
 fn validate_intent_hash(route: &Route, reward: &Reward, expected: &[u8; 32]) -> Result<()> {
-    // TODO: properly implement hashing func that matches ETH ABI
-    // let hash = encoding::get_intent_hash(route, reward);
-    // require!(hash == *expected, EcoRoutesError::InvalidIntent);
+    let hash = encoding::get_intent_hash(route, reward);
+    require!(hash == *expected, EcoRoutesError::InvalidIntent);
     Ok(())
 }
 

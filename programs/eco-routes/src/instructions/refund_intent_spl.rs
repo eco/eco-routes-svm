@@ -80,7 +80,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
-    if destination_token.amount != token_to_refund.amount {
+    if source_token.amount != token_to_refund.amount {
         return Err(EcoRoutesError::NotFunded.into());
     }
 
@@ -88,17 +88,12 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         CpiContext::new_with_signer(
             token_program.to_account_info(),
             anchor_spl::token_interface::TransferChecked {
-                from: destination_token.to_account_info(),
+                from: source_token.to_account_info(),
                 mint: mint.to_account_info(),
-                to: source_token.to_account_info(),
+                to: destination_token.to_account_info(),
                 authority: intent.to_account_info(),
             },
-            &[&[
-                b"intent",
-                intent.route.salt.as_ref(),
-                mint.key().as_ref(),
-                &[intent.bump],
-            ]],
+            &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
         ),
         token_to_refund.amount,
         mint.decimals,
@@ -107,16 +102,11 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
     anchor_spl::token_interface::close_account(CpiContext::new_with_signer(
         token_program.to_account_info(),
         anchor_spl::token_interface::CloseAccount {
-            account: destination_token.to_account_info(),
+            account: source_token.to_account_info(),
             destination: payer.to_account_info(),
             authority: intent.to_account_info(),
         },
-        &[&[
-            b"intent",
-            intent.route.salt.as_ref(),
-            mint.key().as_ref(),
-            &[intent.bump],
-        ]],
+        &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
     ))?;
 
     intent.tokens_funded -= 1;

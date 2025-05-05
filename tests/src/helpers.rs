@@ -76,7 +76,9 @@ pub fn read_account_lamports_re(svm: &LiteSVM, pubkey: &Pubkey) -> Result<u64> {
     let account = svm
         .get_account(pubkey)
         .ok_or(anyhow::anyhow!("Account not found"))?;
-    Ok(account.lamports - svm.minimum_balance_for_rent_exemption(account.data.len()))
+    Ok(account
+        .lamports
+        .saturating_sub(svm.minimum_balance_for_rent_exemption(account.data.len())))
 }
 
 pub fn read_account_anchor<T: AnchorDeserialize + Discriminator>(
