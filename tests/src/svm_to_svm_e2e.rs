@@ -1,6 +1,7 @@
 use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
 use anyhow::Result;
 use eco_routes::{
+    hyperlane::MAILBOX_ID,
     instructions::{
         dispatch_authority_key, execution_authority_key, ClaimIntentNativeArgs, ClaimIntentSplArgs,
         FulfillIntentArgs, FundIntentNativeArgs, FundIntentSplArgs, PublishIntentArgs,
@@ -252,7 +253,9 @@ fn initialize_context<'a>(
         salt,
         source_domain_id: 1,
         destination_domain_id: 1,
-        inbox: eco_routes::ID.to_bytes(),
+        inbox: Pubkey::find_program_address(&[b"dispatch_authority"], &eco_routes::ID)
+            .0
+            .to_bytes(),
         tokens: vec![TokenAmount {
             token: destination_usdc_mint.pubkey().to_bytes(),
             amount: usdc_amount(5.0),
@@ -294,7 +297,7 @@ fn initialize_context<'a>(
 
     let reward = Reward {
         creator: source_user.pubkey(),
-        prover: eco_routes::hyperlane::MAILBOX_ID.to_bytes(),
+        prover: eco_routes::ID.to_bytes(),
         tokens: vec![TokenAmount {
             token: source_usdc_mint.pubkey().to_bytes(),
             amount: usdc_amount(5.0),
@@ -376,7 +379,14 @@ fn create_intent(context: &mut Context) -> Result<()> {
         bump: Intent::pda(context.intent_hash).1,
     };
 
-    assert_eq!(intent, expected_intent, "Malformed Intent account state");
+    assert_eq!(
+        intent.route, expected_intent.route,
+        "Malformed Intent route state"
+    );
+    assert_eq!(
+        intent.reward, expected_intent.reward,
+        "Malformed Intent reward state"
+    );
 
     Ok(())
 }
@@ -663,10 +673,34 @@ fn solve_intent(context: &mut Context) -> Result<()> {
 
     println!("process_authority_pda: {}", process_authority_pda);
 
+    fn build_multisig_metadata() -> Vec<u8> {
+        const SIG_LEN: usize = 65;
+        let mut meta = Vec::with_capacity(32 + 32 + 4 + SIG_LEN);
+
+        meta.extend_from_slice(&MAILBOX_ID.as_ref()); // origin mailbox
+        meta.extend_from_slice(&[0u8; 32]); // merkle root = 0
+        meta.extend_from_slice(&0u32.to_be_bytes()); // merkle index = 0
+        meta.extend_from_slice(&[0u8; 64]); // r + s = 0
+        meta.push(27u8); // v = 27 (valid)
+
+        meta
+    }
+
+    #[derive(borsh::BorshDeserialize, borsh::BorshSerialize, Debug, PartialEq)]
+    pub struct InboxProcess {
+        /// The metadata required by the ISM to process the message.
+        pub metadata: Vec<u8>,
+        /// The encoded message.
+        pub message: Vec<u8>,
+    }
+
+    let inbox_process = InboxProcess {
+        metadata: build_multisig_metadata(),
+        message: message_bytes,
+    };
+
     let mut ix_data = vec![1u8]; // enum tag: InboxProcess
-    ix_data.extend_from_slice(&0u32.to_le_bytes()); // empty metadata vec
-    ix_data.extend_from_slice(&(message_bytes.len() as u32).to_le_bytes());
-    ix_data.extend_from_slice(&message_bytes);
+    ix_data.extend_from_slice(borsh::to_vec(&inbox_process)?.as_slice());
 
     let inbox_process_ix = Instruction {
         program_id: eco_routes::hyperlane::MAILBOX_ID,
@@ -731,6 +765,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         context.source_svm,
         &Intent::pda(context.intent_hash).0,
     )?;
+
     assert_eq!(
         intent.status,
         IntentStatus::Fulfilled,

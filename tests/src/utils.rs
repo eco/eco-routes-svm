@@ -41,6 +41,14 @@ pub struct ProtocolFee {
     pub beneficiary: Pubkey,
 }
 
+#[derive(BorshSerialize, BorshDeserialize, PartialEq, Debug)]
+pub enum TestIsmInstruction {
+    /// Initializes the program.
+    Init,
+    /// Sets whether messages should be accepted / verified.
+    SetAccept(bool),
+}
+
 pub fn init_svm() -> LiteSVM {
     let mut svm = LiteSVM::new();
 
@@ -51,19 +59,33 @@ pub fn init_svm() -> LiteSVM {
     svm.add_program(eco_routes::hyperlane::MULTISIG_ISM_ID, &MULTISIG_ISM_BIN);
     svm.add_program(spl_noop::ID, &SPL_NOOP_BIN);
 
-    multisig_ism_stub::write_domain_data(
-        &mut svm,
-        eco_routes::hyperlane::MULTISIG_ISM_ID,
-        eco_routes::hyperlane::DOMAIN_ID,
-        multisig_ism_stub::ValidatorsAndThreshold {
-            validators: vec![],
-            threshold: 0,
-        },
-    )
-    .unwrap();
-
     let inititializer = Keypair::new();
     helpers::write_account_no_data(&mut svm, inititializer.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+    svm.send_transaction(Transaction::new(
+        &[&inititializer],
+        Message::new(
+            &[Instruction::new_with_borsh(
+                eco_routes::hyperlane::MULTISIG_ISM_ID,
+                &TestIsmInstruction::Init,
+                vec![
+                    AccountMeta::new_readonly(solana_system_interface::program::ID, false),
+                    AccountMeta::new(inititializer.pubkey(), true),
+                    AccountMeta::new(
+                        Pubkey::find_program_address(
+                            &[b"test_ism", b"-", b"storage"],
+                            &eco_routes::hyperlane::MULTISIG_ISM_ID,
+                        )
+                        .0,
+                        false,
+                    ),
+                ],
+            )],
+            Some(&inititializer.pubkey()),
+        ),
+        svm.latest_blockhash(),
+    ))
+    .unwrap();
 
     svm.send_transaction(Transaction::new(
         &[&inititializer],

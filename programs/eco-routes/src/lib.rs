@@ -60,8 +60,8 @@ pub mod eco_routes {
     }
 
     #[instruction(discriminator = &hyperlane::HANDLE_DISCRIMINATOR)]
-    pub fn handle<'info>(
-        ctx: Context<'_, '_, '_, 'info, Handle<'info>>,
+    pub fn handle<'a, 'b, 'c: 'info, 'info>(
+        ctx: Context<'a, 'b, 'c, 'info, Handle<'info>>,
         origin: u32,
         sender: [u8; 32],
         payload: Vec<u8>,

@@ -6,6 +6,6 @@ use crate::hyperlane;
 pub struct Ism {}
 
 pub fn ism(_ctx: Context<Ism>) -> Result<()> {
-    set_return_data(&hyperlane::MULTISIG_ISM_ID.to_bytes());
+    set_return_data(Some(hyperlane::MULTISIG_ISM_ID).try_to_vec()?.as_slice());
     Ok(())
 }
