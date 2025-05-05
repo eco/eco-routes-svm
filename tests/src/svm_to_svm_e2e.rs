@@ -462,7 +462,11 @@ impl<'a> Context<'a> {
     pub fn snapshot(&mut self) {
         fn get_token_balance(svm: &LiteSVM, token_address: Pubkey) -> u64 {
             svm.get_account(&token_address)
-                .map(|a| spl_token::state::Account::unpack(&a.data).unwrap().amount)
+                .map(|a| {
+                    spl_token::state::Account::unpack(&a.data)
+                        .map(|a| a.amount)
+                        .unwrap_or(0)
+                })
                 .unwrap_or(0)
         }
 
