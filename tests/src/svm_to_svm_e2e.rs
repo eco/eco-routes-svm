@@ -892,11 +892,11 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                         funder: context.source_user.pubkey(),
                         payer: context.fee_payer.pubkey(),
                         system_program: solana_system_interface::program::ID,
-                        source_token: spl_associated_token_account::get_associated_token_address(
+                        funder_token: spl_associated_token_account::get_associated_token_address(
                             &context.source_user.pubkey(),
                             &context.source_usdc_mint.pubkey(),
                         ),
-                        destination_token: Pubkey::find_program_address(
+                        vault: Pubkey::find_program_address(
                             &[
                                 b"reward",
                                 context.intent_hash.as_ref(),
@@ -1274,7 +1274,7 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                         claimer: context.solver.pubkey(),
                         payer: context.solver.pubkey(),
                         system_program: solana_system_interface::program::ID,
-                        source_token: Pubkey::find_program_address(
+                        vault: Pubkey::find_program_address(
                             &[
                                 b"reward",
                                 context.intent_hash.as_ref(),
@@ -1283,11 +1283,10 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                             &eco_routes::ID,
                         )
                         .0,
-                        destination_token:
-                            spl_associated_token_account::get_associated_token_address(
-                                &context.solver.pubkey(),
-                                &context.source_usdc_mint.pubkey(),
-                            ),
+                        claimer_token: spl_associated_token_account::get_associated_token_address(
+                            &context.solver.pubkey(),
+                            &context.source_usdc_mint.pubkey(),
+                        ),
                         mint: context.source_usdc_mint.pubkey(),
                         token_program: spl_token::ID,
                     }

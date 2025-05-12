@@ -31,13 +31,13 @@ pub struct RefundIntentSpl<'info> {
         seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
         bump,
     )]
-    pub source_token: InterfaceAccount<'info, TokenAccount>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         token::mint = mint,
         token::authority = refundee,
     )]
-    pub destination_token: InterfaceAccount<'info, TokenAccount>,
+    pub refundee_token: InterfaceAccount<'info, TokenAccount>,
 
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -56,8 +56,8 @@ pub struct RefundIntentSpl<'info> {
 
 pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
-    let source_token = &mut ctx.accounts.source_token;
-    let destination_token = &mut ctx.accounts.destination_token;
+    let vault = &mut ctx.accounts.vault;
+    let refundee_token = &mut ctx.accounts.refundee_token;
     let mint = &ctx.accounts.mint;
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
@@ -76,21 +76,21 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         CpiContext::new_with_signer(
             token_program.to_account_info(),
             anchor_spl::token_interface::TransferChecked {
-                from: source_token.to_account_info(),
+                from: vault.to_account_info(),
                 mint: mint.to_account_info(),
-                to: destination_token.to_account_info(),
+                to: refundee_token.to_account_info(),
                 authority: intent.to_account_info(),
             },
             &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
         ),
-        token_to_refund.amount - source_token.amount,
+        token_to_refund.amount - vault.amount,
         mint.decimals,
     )?;
 
     anchor_spl::token_interface::close_account(CpiContext::new_with_signer(
         token_program.to_account_info(),
         anchor_spl::token_interface::CloseAccount {
-            account: source_token.to_account_info(),
+            account: vault.to_account_info(),
             destination: payer.to_account_info(),
             authority: intent.to_account_info(),
         },

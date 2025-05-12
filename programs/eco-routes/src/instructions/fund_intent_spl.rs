@@ -28,7 +28,7 @@ pub struct FundIntentSpl<'info> {
         token::mint = mint,
         token::authority = funder,
     )]
-    pub source_token: InterfaceAccount<'info, TokenAccount>,
+    pub funder_token: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         init,
@@ -38,7 +38,7 @@ pub struct FundIntentSpl<'info> {
         seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
         bump,
     )]
-    pub destination_token: InterfaceAccount<'info, TokenAccount>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
 
     pub mint: InterfaceAccount<'info, Mint>,
 
@@ -54,8 +54,8 @@ pub struct FundIntentSpl<'info> {
 
 pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
-    let source_token = &mut ctx.accounts.source_token;
-    let destination_token = &mut ctx.accounts.destination_token;
+    let funder_token = &mut ctx.accounts.funder_token;
+    let vault = &mut ctx.accounts.vault;
     let mint = &ctx.accounts.mint;
     let funder = &ctx.accounts.funder;
     let token_program = &ctx.accounts.token_program;
@@ -74,9 +74,9 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
         CpiContext::new(
             token_program.to_account_info(),
             anchor_spl::token_interface::TransferChecked {
-                from: source_token.to_account_info(),
+                from: funder_token.to_account_info(),
                 mint: mint.to_account_info(),
-                to: destination_token.to_account_info(),
+                to: vault.to_account_info(),
                 authority: funder.to_account_info(),
             },
         ),
