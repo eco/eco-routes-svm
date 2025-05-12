@@ -842,7 +842,7 @@ fn create_intent(context: &mut Context) -> Result<()> {
         reward: context.reward.clone(),
         tokens_funded: 0,
         native_funded: false,
-        solver: Pubkey::default().to_bytes(),
+        solver: None,
         bump: Intent::pda(context.intent_hash).1,
     };
 

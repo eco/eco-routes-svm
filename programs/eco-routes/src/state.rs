@@ -111,7 +111,7 @@ pub struct Intent {
     pub tokens_funded: u8,
     pub native_funded: bool,
 
-    pub solver: [u8; 32],
+    pub solver: Option<[u8; 32]>,
 
     pub bump: u8,
 }

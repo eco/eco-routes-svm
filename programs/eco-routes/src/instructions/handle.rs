@@ -61,7 +61,7 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
         );
 
         intent.status = IntentStatus::Fulfilled;
-        intent.solver = *solver;
+        intent.solver = Some(*solver);
 
         intent.exit(ctx.program_id)?;
     }

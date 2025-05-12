@@ -43,7 +43,7 @@ pub struct ClaimIntentSpl<'info> {
 
     #[account(
         mut,
-        constraint = claimer.key() == Pubkey::new_from_array(intent.solver) @ EcoRoutesError::InvalidClaimer
+        constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer
     )]
     pub claimer: Signer<'info>,
 
