@@ -1,5 +1,3 @@
-use std::slice::Iter;
-
 use crate::{
     encoding,
     error::EcoRoutesError,
@@ -11,7 +9,6 @@ use anchor_lang::{
     solana_program::{
         instruction::{AccountMeta, Instruction},
         program::invoke_signed,
-        system_program,
     },
 };
 use anchor_spl::{
@@ -26,22 +23,12 @@ use super::SerializableAccountMeta;
 pub struct SvmCallData {
     pub instruction_data: Vec<u8>,
     pub num_account_metas: u8,
-    pub account_metas: Vec<SerializableAccountMeta>,
 }
 
-impl SvmCallData {
-    pub fn from_calldata_without_account_metas(calldata: &[u8]) -> Result<Self> {
-        let mut svm_call_data = Self::try_from_slice(calldata)?;
-        if svm_call_data.num_account_metas == 0 {
-            return Err(EcoRoutesError::InvalidFulfillCalls.into());
-        }
-        svm_call_data.account_metas = Vec::new();
-        Ok(svm_call_data)
-    }
-
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        Ok(self.try_to_vec()?)
-    }
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct SvmCallDataWithAccountMetas {
+    pub svm_call_data: SvmCallData,
+    pub account_metas: Vec<SerializableAccountMeta>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -73,7 +60,6 @@ pub struct FulfillIntent<'info> {
         mut,
         seeds = [b"execution_authority", args.route.salt.as_ref()],
         bump,
-        address = execution_authority_key(&args.route.salt).0 @ EcoRoutesError::InvalidExecutionAuthority
     )]
     pub execution_authority: UncheckedAccount<'info>,
 
@@ -82,7 +68,6 @@ pub struct FulfillIntent<'info> {
         mut,
         seeds = [b"dispatch_authority"],
         bump,
-        address = dispatch_authority_key().0 @ EcoRoutesError::InvalidDispatchAuthority
     )]
     pub dispatch_authority: UncheckedAccount<'info>,
 
@@ -119,6 +104,9 @@ pub struct FulfillIntent<'info> {
     pub system_program: Program<'info, System>,
 }
 
+pub const SOLVER_PLACEHOLDER_PUBKEY: Pubkey =
+    pubkey!("So1ver1111111111111111111111111111111111111");
+
 pub fn fulfill_intent<'info>(
     ctx: Context<'_, '_, '_, 'info, FulfillIntent<'info>>,
     args: FulfillIntentArgs,
@@ -131,8 +119,13 @@ pub fn fulfill_intent<'info>(
 
     let mut remaining_accounts = ctx.remaining_accounts.iter();
 
+    let route_token_accounts: Vec<_> = remaining_accounts
+        .by_ref()
+        .take(route.tokens.len() * 3)
+        .collect();
+
     transfer_route_tokens(
-        &mut remaining_accounts,
+        route_token_accounts,
         &route,
         solver,
         execution_authority,
@@ -140,8 +133,10 @@ pub fn fulfill_intent<'info>(
         ctx.accounts.spl_token_2022_program.to_account_info(),
     )?;
 
+    let route_calls_accounts: Vec<_> = remaining_accounts.collect();
+
     execute_route_calls(
-        &mut remaining_accounts,
+        route_calls_accounts,
         &mut route,
         solver,
         ctx.bumps.execution_authority,
@@ -155,19 +150,35 @@ pub fn fulfill_intent<'info>(
         ctx.bumps.intent_fulfillment_marker,
     )?;
 
-    dispatch_acknowledgement(&route, &reward, &intent_hash, solver, &ctx)?;
+    hyperlane::dispatch_fulfillment_message(
+        &route,
+        &reward,
+        &intent_hash,
+        solver,
+        &ctx.accounts.mailbox_program,
+        &ctx.accounts.outbox_pda,
+        &ctx.accounts.dispatch_authority,
+        &ctx.accounts.spl_noop_program,
+        &ctx.accounts.payer,
+        &ctx.accounts.unique_message,
+        &ctx.accounts.system_program,
+        &ctx.accounts.dispatched_message_pda,
+        ctx.bumps.dispatch_authority,
+    )?;
 
     Ok(())
 }
 
 fn transfer_route_tokens<'info>(
-    accounts: &mut Iter<AccountInfo<'info>>,
+    accounts: Vec<&AccountInfo<'info>>,
     route: &Route,
     solver: &Signer<'info>,
     execution_authority: &AccountInfo<'info>,
     spl_token_program: AccountInfo<'info>,
     spl_token_2022_program: AccountInfo<'info>,
 ) -> Result<()> {
+    let mut route_token_accounts = accounts.into_iter();
+
     for token in &route.tokens {
         let mint_key = Pubkey::new_from_array(token.token);
         let expected_destination = spl_associated_token_account::get_associated_token_address(
@@ -175,11 +186,13 @@ fn transfer_route_tokens<'info>(
             &mint_key,
         );
 
-        let mint_account = accounts.next().ok_or(EcoRoutesError::InvalidRouteMint)?;
-        let source_account = accounts
+        let mint_account = route_token_accounts
+            .next()
+            .ok_or(EcoRoutesError::InvalidRouteMint)?;
+        let source_account = route_token_accounts
             .next()
             .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
-        let destination_account = accounts
+        let destination_account = route_token_accounts
             .next()
             .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
 
@@ -228,24 +241,29 @@ fn transfer_route_tokens<'info>(
 }
 
 fn execute_route_calls<'info>(
-    accounts: &mut Iter<AccountInfo<'info>>,
+    route_calls_accounts: Vec<&AccountInfo<'info>>,
     route: &mut Route,
     solver: &Signer<'info>,
     execution_authority_bump: u8,
 ) -> Result<()> {
-    for call in &mut route.calls {
-        let mut call_data = SvmCallData::from_calldata_without_account_metas(&call.calldata)?;
+    let mut route_calls_accounts = route_calls_accounts.into_iter();
 
-        let call_accounts: Vec<_> = accounts
+    for call in &mut route.calls {
+        let mut call_data_with_account_metas = SvmCallDataWithAccountMetas {
+            svm_call_data: SvmCallData::try_from_slice(&call.calldata)?,
+            account_metas: Vec::new(),
+        };
+
+        let call_accounts: Vec<_> = route_calls_accounts
             .by_ref()
-            .take(call_data.num_account_metas as usize)
+            .take(call_data_with_account_metas.svm_call_data.num_account_metas as usize)
             .map(|a| a.to_account_info())
             .collect();
 
         for acc in &call_accounts {
             let meta = AccountMeta {
                 pubkey: if acc.key() == solver.key() {
-                    crate::ID
+                    SOLVER_PLACEHOLDER_PUBKEY
                 } else {
                     acc.key()
                 },
@@ -256,19 +274,22 @@ fn execute_route_calls<'info>(
                 },
                 is_writable: acc.is_writable,
             };
-            call_data.account_metas.push(meta.into());
+            call_data_with_account_metas.account_metas.push(meta.into());
         }
 
-        call.calldata = call_data.to_bytes()?;
+        call.calldata = call_data_with_account_metas.try_to_vec()?;
 
         let ix = Instruction {
             program_id: Pubkey::new_from_array(call.destination),
-            data: call_data.instruction_data.clone(),
-            accounts: call_data
+            data: call_data_with_account_metas
+                .svm_call_data
+                .instruction_data
+                .clone(),
+            accounts: call_data_with_account_metas
                 .account_metas
                 .into_iter()
                 .map(|m| {
-                    if m.pubkey == crate::ID {
+                    if m.pubkey == SOLVER_PLACEHOLDER_PUBKEY {
                         AccountMeta {
                             pubkey: solver.key(),
                             is_signer: m.is_signer,
@@ -307,106 +328,5 @@ fn mark_fulfillment<'info>(
 ) -> Result<()> {
     marker.intent_hash = hash;
     marker.bump = intent_fulfillment_marker_bump;
-    Ok(())
-}
-
-fn dispatch_acknowledgement<'info>(
-    route: &Route,
-    reward: &Reward,
-    intent_hash: &[u8; 32],
-    solver: &Signer<'info>,
-    ctx: &Context<FulfillIntent<'info>>,
-) -> Result<()> {
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub enum MailboxInstruction {
-        /// Initializes the program.
-        Init(Init),
-        /// Processes a message.
-        InboxProcess(InboxProcess),
-        /// Sets the default ISM.
-        InboxSetDefaultIsm(Pubkey),
-        /// Gets the recipient's ISM.
-        InboxGetRecipientIsm(Pubkey),
-        /// Dispatches a message.
-        OutboxDispatch(OutboxDispatch),
-        /// Gets the number of messages that have been dispatched.
-        OutboxGetCount,
-        /// Gets the latest checkpoint.
-        OutboxGetLatestCheckpoint,
-        /// Gets the root of the dispatched message merkle tree.
-        OutboxGetRoot,
-        /// Gets the owner of the Mailbox.
-        GetOwner,
-        /// Transfers ownership of the Mailbox.
-        TransferOwnership(Option<Pubkey>),
-        /// Transfers accumulated protocol fees to the beneficiary.
-        ClaimProtocolFees,
-        /// Sets the protocol fee configuration.
-        SetProtocolFeeConfig,
-    }
-
-    /// Instruction data for the Init instruction.
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub struct Init {}
-
-    /// Instruction data for the OutboxDispatch instruction.
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub struct OutboxDispatch {
-        /// The sender of the message.
-        /// This is required and not implied because a program uses a dispatch authority PDA
-        /// to sign the CPI on its behalf. Instruction processing logic prevents a program from
-        /// specifying any message sender it wants by requiring the relevant dispatch authority
-        /// to sign the CPI.
-        pub sender: Pubkey,
-        /// The destination domain of the message.
-        pub destination_domain: u32,
-        /// The remote recipient of the message.
-        pub recipient: [u8; 32],
-        /// The message body.
-        pub message_body: Vec<u8>,
-    }
-
-    /// Instruction data for the InboxProcess instruction.
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub struct InboxProcess {}
-
-    let outbox_dispatch = MailboxInstruction::OutboxDispatch(OutboxDispatch {
-        sender: ctx.accounts.dispatch_authority.key(),
-        destination_domain: route.destination_domain_id,
-        recipient: reward.prover,
-        message_body: encoding::encode_fulfillment_message(
-            &[*intent_hash],
-            &[solver.key().to_bytes()],
-        ),
-    });
-
-    let ix = Instruction {
-        program_id: ctx.accounts.mailbox_program.key(),
-        accounts: vec![
-            AccountMeta::new(ctx.accounts.outbox_pda.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.dispatch_authority.key(), true),
-            AccountMeta::new_readonly(system_program::ID, false),
-            AccountMeta::new_readonly(ctx.accounts.spl_noop_program.key(), false),
-            AccountMeta::new(ctx.accounts.payer.key(), true),
-            AccountMeta::new_readonly(ctx.accounts.unique_message.key(), true),
-            AccountMeta::new(ctx.accounts.dispatched_message_pda.key(), false),
-        ],
-        data: outbox_dispatch.try_to_vec()?,
-    };
-
-    invoke_signed(
-        &ix,
-        &[
-            ctx.accounts.outbox_pda.to_account_info(),
-            ctx.accounts.dispatch_authority.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-            ctx.accounts.spl_noop_program.to_account_info(),
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.unique_message.to_account_info(),
-            ctx.accounts.dispatched_message_pda.to_account_info(),
-        ],
-        &[&[b"dispatch_authority", &[ctx.bumps.dispatch_authority]]],
-    )?;
-
     Ok(())
 }

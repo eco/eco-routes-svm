@@ -17,13 +17,13 @@ pub struct FundIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = matches!(intent.status, IntentStatus::Funding(false, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
     #[account(mut)]
     pub funder: Signer<'info>,
 
-    #[account(mut)]
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -36,30 +36,22 @@ pub fn fund_intent_native(
     let intent = &mut ctx.accounts.intent;
     let funder = &ctx.accounts.funder;
 
-    if intent.status != IntentStatus::Initialized {
-        return Err(EcoRoutesError::NotInFundingPhase.into());
+    let native_funded_lamports = intent.rent_exempt_lamports(&intent.to_account_info())?;
+
+    if native_funded_lamports < intent.reward.native_amount {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: funder.to_account_info(),
+                    to: intent.to_account_info(),
+                },
+            ),
+            intent.reward.native_amount - native_funded_lamports,
+        )?;
     }
 
-    if intent.native_funded {
-        return Err(EcoRoutesError::AlreadyFunded.into());
-    }
-
-    system_program::transfer(
-        CpiContext::new(
-            ctx.accounts.system_program.to_account_info(),
-            system_program::Transfer {
-                from: funder.to_account_info(),
-                to: intent.to_account_info(),
-            },
-        ),
-        intent.reward.native_amount,
-    )?;
-
-    intent.native_funded = true;
-
-    if intent.is_funded() {
-        intent.status = IntentStatus::Funded;
-    }
+    intent.fund_native()?;
 
     Ok(())
 }

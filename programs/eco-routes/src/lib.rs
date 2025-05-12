@@ -4,26 +4,11 @@ declare_id!("3zbEiMYyf4y1bGsVBAzKrXVzMndRQdTMDgx3aKCs8BHs");
 
 pub mod encoding;
 pub mod error;
+pub mod hyperlane;
 pub mod instructions;
 pub mod state;
 
 use instructions::*;
-
-pub mod hyperlane {
-    use super::*;
-
-    pub const DOMAIN_ID: u32 = 1;
-
-    pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
-    pub const MULTISIG_ISM_ID: Pubkey = pubkey!("TrustedRe1ayer1sm11111111111111111111111111");
-
-    pub const HANDLE_DISCRIMINATOR: [u8; 8] = [33, 210, 5, 66, 196, 212, 239, 142];
-    pub const HANDLE_ACCOUNT_METAS_DISCRIMINATOR: [u8; 8] = [194, 141, 30, 82, 241, 41, 169, 52];
-    pub const INTERCHAIN_SECURITY_MODULE_DISCRIMINATOR: [u8; 8] =
-        [45, 18, 245, 87, 234, 46, 246, 15];
-    pub const INTERCHAIN_SECURITY_MODULE_ACCOUNT_METAS_DISCRIMINATOR: [u8; 8] =
-        [190, 214, 218, 129, 67, 97, 4, 76];
-}
 
 #[program]
 pub mod eco_routes {

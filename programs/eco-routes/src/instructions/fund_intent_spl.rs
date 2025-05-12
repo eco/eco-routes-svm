@@ -19,6 +19,7 @@ pub struct FundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = matches!(intent.status, IntentStatus::Funding(_, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -27,21 +28,20 @@ pub struct FundIntentSpl<'info> {
         token::mint = mint,
         token::authority = funder,
     )]
-    pub source_token: InterfaceAccount<'info, TokenAccount>,
+    pub funder_token: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = payer,
         token::mint = mint,
         token::authority = intent,
         seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
         bump,
     )]
-    pub destination_token: InterfaceAccount<'info, TokenAccount>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
     pub funder: Signer<'info>,
 
     #[account(mut)]
@@ -53,15 +53,11 @@ pub struct FundIntentSpl<'info> {
 
 pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
-    let source_token = &mut ctx.accounts.source_token;
-    let destination_token = &mut ctx.accounts.destination_token;
+    let funder_token = &mut ctx.accounts.funder_token;
+    let vault = &mut ctx.accounts.vault;
     let mint = &ctx.accounts.mint;
     let funder = &ctx.accounts.funder;
     let token_program = &ctx.accounts.token_program;
-
-    if intent.status != IntentStatus::Initialized {
-        return Err(EcoRoutesError::NotInFundingPhase.into());
-    }
 
     let token_to_fund = intent
         .reward
@@ -73,17 +69,13 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
-    if destination_token.amount == token_to_fund.amount {
-        return Err(EcoRoutesError::AlreadyFunded.into());
-    }
-
     anchor_spl::token_interface::transfer_checked(
         CpiContext::new(
             token_program.to_account_info(),
             anchor_spl::token_interface::TransferChecked {
-                from: source_token.to_account_info(),
+                from: funder_token.to_account_info(),
                 mint: mint.to_account_info(),
-                to: destination_token.to_account_info(),
+                to: vault.to_account_info(),
                 authority: funder.to_account_info(),
             },
         ),
@@ -91,11 +83,7 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
         mint.decimals,
     )?;
 
-    intent.tokens_funded += 1;
-
-    if intent.is_funded() {
-        intent.status = IntentStatus::Funded;
-    }
+    intent.fund_token()?;
 
     Ok(())
 }

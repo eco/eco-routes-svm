@@ -19,6 +19,7 @@ pub struct ClaimIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = matches!(intent.status, IntentStatus::Fulfilled | IntentStatus::Claimed(_, _)) @ EcoRoutesError::NotFulfilled,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -29,18 +30,18 @@ pub struct ClaimIntentSpl<'info> {
         seeds = [b"reward", args.intent_hash.as_ref(), mint.key().as_ref()],
         bump,
     )]
-    pub source_token: InterfaceAccount<'info, TokenAccount>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
         mut,
         token::mint = mint,
         token::authority = claimer,
     )]
-    pub destination_token: InterfaceAccount<'info, TokenAccount>,
+    pub claimer_token: InterfaceAccount<'info, TokenAccount>,
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
+    #[account(constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer)]
     pub claimer: Signer<'info>,
 
     #[account(mut)]
@@ -52,20 +53,11 @@ pub struct ClaimIntentSpl<'info> {
 
 pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
-    let source_token = &mut ctx.accounts.source_token;
-    let destination_token = &mut ctx.accounts.destination_token;
+    let vault = &mut ctx.accounts.vault;
+    let claimer_token = &mut ctx.accounts.claimer_token;
     let mint = &ctx.accounts.mint;
-    let claimer = &ctx.accounts.claimer;
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
-
-    if claimer.key() != Pubkey::new_from_array(intent.solver) {
-        return Err(EcoRoutesError::InvalidClaimer.into());
-    }
-
-    if intent.status != IntentStatus::Fulfilled {
-        return Err(EcoRoutesError::NotFulfilled.into());
-    }
 
     let token_to_claim = intent
         .reward
@@ -77,40 +69,32 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
-    if source_token.amount != token_to_claim.amount {
-        return Err(EcoRoutesError::NotFunded.into());
-    }
-
     anchor_spl::token_interface::transfer_checked(
         CpiContext::new_with_signer(
             token_program.to_account_info(),
             anchor_spl::token_interface::TransferChecked {
-                from: source_token.to_account_info(),
+                from: vault.to_account_info(),
                 mint: mint.to_account_info(),
-                to: destination_token.to_account_info(),
+                to: claimer_token.to_account_info(),
                 authority: intent.to_account_info(),
             },
             &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
         ),
-        token_to_claim.amount,
+        vault.amount,
         mint.decimals,
     )?;
 
     anchor_spl::token_interface::close_account(CpiContext::new_with_signer(
         token_program.to_account_info(),
         anchor_spl::token_interface::CloseAccount {
-            account: source_token.to_account_info(),
+            account: vault.to_account_info(),
             destination: payer.to_account_info(),
             authority: intent.to_account_info(),
         },
         &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
     ))?;
 
-    intent.tokens_funded -= 1;
-
-    if intent.is_empty() {
-        intent.status = IntentStatus::Claimed;
-    }
+    intent.claim_token()?;
 
     Ok(())
 }

@@ -17,13 +17,16 @@ pub struct ClaimIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = matches!(intent.status, IntentStatus::Fulfilled | IntentStatus::Claimed(false, _)) @ EcoRoutesError::NotFunded,
     )]
     pub intent: Account<'info, Intent>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer
+    )]
     pub claimer: Signer<'info>,
 
-    #[account(mut)]
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
@@ -36,26 +39,10 @@ pub fn claim_intent_native(
     let intent = &mut ctx.accounts.intent;
     let claimer = &ctx.accounts.claimer;
 
-    if claimer.key() != Pubkey::new_from_array(intent.solver) {
-        return Err(EcoRoutesError::InvalidClaimer.into());
-    }
-
-    if intent.status != IntentStatus::Fulfilled {
-        return Err(EcoRoutesError::NotFulfilled.into());
-    }
-
-    if !intent.native_funded {
-        return Err(EcoRoutesError::NotFunded.into());
-    }
-
     **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
     **claimer.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;
 
-    intent.native_funded = false;
-
-    if intent.is_empty() {
-        intent.status = IntentStatus::Claimed;
-    }
+    intent.claim_native()?;
 
     Ok(())
 }

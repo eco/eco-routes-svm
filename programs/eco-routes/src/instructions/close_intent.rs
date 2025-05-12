@@ -10,6 +10,7 @@ pub struct CloseIntent<'info> {
         mut,
         seeds = [b"intent", intent.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = matches!(intent.status, IntentStatus::Funding(false, 0) | IntentStatus::Claimed(true, _)) @ EcoRoutesError::IntentStillFunded
     )]
     pub intent: Account<'info, Intent>,
 
@@ -23,8 +24,11 @@ pub fn close_intent(ctx: Context<CloseIntent>) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let payer = &ctx.accounts.payer;
 
-    if intent.status != IntentStatus::Refunded && intent.status != IntentStatus::Claimed {
-        return Err(EcoRoutesError::IntentStillFunded.into());
+    // the check is against a variable number of reward tokens so we cannot use matches! in our constraint
+    if let IntentStatus::Claimed(false, claimed_token_count) = intent.status {
+        if claimed_token_count != intent.reward.tokens.len() as u8 {
+            return Err(EcoRoutesError::IntentStillFunded.into());
+        }
     }
 
     intent.close(payer.to_account_info())?;

@@ -1,4 +1,4 @@
-use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{AnchorDeserialize, AnchorSerialize, InstructionData, ToAccountMetas};
 use anyhow::Result;
 use console::{style, Emoji};
 use eco_routes::{
@@ -6,7 +6,8 @@ use eco_routes::{
     instructions::{
         dispatch_authority_key, execution_authority_key, ClaimIntentNativeArgs, ClaimIntentSplArgs,
         FulfillIntentArgs, FundIntentNativeArgs, FundIntentSplArgs, PublishIntentArgs,
-        SerializableAccountMeta, SvmCallData,
+        SerializableAccountMeta, SvmCallData, SvmCallDataWithAccountMetas,
+        SOLVER_PLACEHOLDER_PUBKEY,
     },
     state::{Call, Intent, IntentFulfillmentMarker, IntentStatus, Reward, Route, TokenAmount},
 };
@@ -692,7 +693,7 @@ fn initialize_context<'a>(
 
     let create_ata_instruction =
         spl_associated_token_account::instruction::create_associated_token_account(
-            &eco_routes::ID, // solver is represent by a default pubkey, because it is unknown at this point
+            &SOLVER_PLACEHOLDER_PUBKEY,
             &destination_user.pubkey(),
             &destination_usdc_mint.pubkey(),
             &spl_token::ID,
@@ -733,9 +734,11 @@ fn initialize_context<'a>(
         calls: vec![
             Call {
                 destination: spl_associated_token_account::ID.to_bytes(),
-                calldata: SvmCallData {
-                    instruction_data: create_ata_instruction.data,
-                    num_account_metas: create_ata_instruction.accounts.len() as u8,
+                calldata: SvmCallDataWithAccountMetas {
+                    svm_call_data: SvmCallData {
+                        instruction_data: create_ata_instruction.data,
+                        num_account_metas: create_ata_instruction.accounts.len() as u8,
+                    },
                     account_metas: create_ata_instruction
                         .accounts
                         .clone()
@@ -743,20 +746,22 @@ fn initialize_context<'a>(
                         .map(SerializableAccountMeta::from)
                         .collect(),
                 }
-                .to_bytes()?,
+                .try_to_vec()?,
             },
             Call {
                 destination: spl_token::ID.to_bytes(),
-                calldata: SvmCallData {
-                    instruction_data: transfer_instruction.data,
-                    num_account_metas: transfer_instruction.accounts.len() as u8,
+                calldata: SvmCallDataWithAccountMetas {
+                    svm_call_data: SvmCallData {
+                        instruction_data: transfer_instruction.data,
+                        num_account_metas: transfer_instruction.accounts.len() as u8,
+                    },
                     account_metas: transfer_instruction
                         .accounts
                         .into_iter()
                         .map(SerializableAccountMeta::from)
                         .collect(),
                 }
-                .to_bytes()?,
+                .try_to_vec()?,
             },
         ],
     };
@@ -837,12 +842,10 @@ fn create_intent(context: &mut Context) -> Result<()> {
 
     let expected_intent = Intent {
         intent_hash: context.intent_hash,
-        status: IntentStatus::Initialized,
+        status: IntentStatus::Funding(false, 0),
         route: context.route.clone(),
         reward: context.reward.clone(),
-        tokens_funded: 0,
-        native_funded: false,
-        solver: Pubkey::default().to_bytes(),
+        solver: None,
         bump: Intent::pda(context.intent_hash).1,
     };
 
@@ -894,11 +897,11 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                         funder: context.source_user.pubkey(),
                         payer: context.fee_payer.pubkey(),
                         system_program: solana_system_interface::program::ID,
-                        source_token: spl_associated_token_account::get_associated_token_address(
+                        funder_token: spl_associated_token_account::get_associated_token_address(
                             &context.source_user.pubkey(),
                             &context.source_usdc_mint.pubkey(),
                         ),
-                        destination_token: Pubkey::find_program_address(
+                        vault: Pubkey::find_program_address(
                             &[
                                 b"reward",
                                 context.intent_hash.as_ref(),
@@ -934,15 +937,6 @@ fn fund_intent(context: &mut Context) -> Result<()> {
         IntentStatus::Funded,
         "Intent status should be funded"
     );
-    assert_eq!(
-        intent.native_funded, true,
-        "Native funded flag should be true"
-    );
-    assert_eq!(
-        intent.tokens_funded as usize,
-        intent.reward.tokens.len(),
-        "Tokens funded count should be equal to the size of the reward token array"
-    );
 
     Ok(())
 }
@@ -970,8 +964,12 @@ fn solve_intent(context: &mut Context) -> Result<()> {
     // strip account-metas from calldata (optimization for tx size)
     let mut route_without_metas = context.route.clone();
     route_without_metas.calls.iter_mut().for_each(|c| {
-        let stub = SvmCallData::from_calldata_without_account_metas(&c.calldata).unwrap();
-        c.calldata = stub.to_bytes().unwrap();
+        let call_data_with_account_metas =
+            SvmCallDataWithAccountMetas::try_from_slice(&c.calldata).unwrap();
+        c.calldata = call_data_with_account_metas
+            .svm_call_data
+            .try_to_vec()
+            .unwrap();
     });
 
     let initialize_ata_ixs = context
@@ -1042,12 +1040,12 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         // add the SVM-call account metas we stripped out earlier - they are needed in metas but not in data
         .chain({
             context.route.calls.iter().flat_map(|c| {
-                SvmCallData::try_from_slice(&c.calldata)
+                SvmCallDataWithAccountMetas::try_from_slice(&c.calldata)
                     .unwrap()
                     .account_metas
                     .into_iter()
                     .map(|m: SerializableAccountMeta| AccountMeta {
-                        pubkey: if m.pubkey == eco_routes::ID {
+                        pubkey: if m.pubkey == SOLVER_PLACEHOLDER_PUBKEY {
                             context.solver.pubkey()
                         } else {
                             m.pubkey
@@ -1285,7 +1283,7 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                         claimer: context.solver.pubkey(),
                         payer: context.solver.pubkey(),
                         system_program: solana_system_interface::program::ID,
-                        source_token: Pubkey::find_program_address(
+                        vault: Pubkey::find_program_address(
                             &[
                                 b"reward",
                                 context.intent_hash.as_ref(),
@@ -1294,11 +1292,10 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                             &eco_routes::ID,
                         )
                         .0,
-                        destination_token:
-                            spl_associated_token_account::get_associated_token_address(
-                                &context.solver.pubkey(),
-                                &context.source_usdc_mint.pubkey(),
-                            ),
+                        claimer_token: spl_associated_token_account::get_associated_token_address(
+                            &context.solver.pubkey(),
+                            &context.source_usdc_mint.pubkey(),
+                        ),
                         mint: context.source_usdc_mint.pubkey(),
                         token_program: spl_token::ID,
                     }
@@ -1323,16 +1320,8 @@ fn claim_intent(context: &mut Context) -> Result<()> {
 
     assert_eq!(
         intent.status,
-        IntentStatus::Claimed,
+        IntentStatus::Claimed(true, intent.reward.tokens.len() as u8),
         "Intent status should be claimed"
-    );
-    assert_eq!(
-        intent.native_funded, false,
-        "Native funded flag should be false"
-    );
-    assert_eq!(
-        intent.tokens_funded as usize, 0,
-        "Tokens funded count should be 0"
     );
 
     Ok(())

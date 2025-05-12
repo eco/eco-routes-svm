@@ -35,16 +35,26 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
     let (intent_hashes, solvers) = encoding::decode_fulfillment_message(&payload)
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
 
-    let mut remaining_accounts = ctx.remaining_accounts.iter();
+    let remaining_accounts = ctx.remaining_accounts.iter();
+    let remaining_accounts: Vec<_> = remaining_accounts.collect();
 
-    for (intent_hash, solver) in intent_hashes.iter().zip(solvers.iter()) {
-        let intent_account_info = remaining_accounts
-            .next()
-            .ok_or_else(|| error!(EcoRoutesError::InvalidIntent))?;
+    require!(
+        intent_hashes.len() == solvers.len(),
+        EcoRoutesError::InvalidHandlePayload
+    );
+    require!(
+        intent_hashes.len() == remaining_accounts.len(),
+        EcoRoutesError::InvalidHandlePayload
+    );
 
+    for ((intent_hash, solver), intent_account_info) in intent_hashes
+        .into_iter()
+        .zip(solvers)
+        .zip(remaining_accounts)
+    {
         require_keys_eq!(
             intent_account_info.key(),
-            Intent::pda(*intent_hash).0,
+            Intent::pda(intent_hash).0,
             EcoRoutesError::InvalidIntent
         );
         require!(
@@ -61,7 +71,7 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
         );
 
         intent.status = IntentStatus::Fulfilled;
-        intent.solver = *solver;
+        intent.solver = Some(solver);
 
         intent.exit(ctx.program_id)?;
     }
