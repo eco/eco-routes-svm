@@ -11,7 +11,6 @@ use anchor_lang::{
     solana_program::{
         instruction::{AccountMeta, Instruction},
         program::invoke_signed,
-        system_program,
     },
 };
 use anchor_spl::{
@@ -146,7 +145,21 @@ pub fn fulfill_intent<'info>(
         ctx.bumps.intent_fulfillment_marker,
     )?;
 
-    dispatch_acknowledgement(&route, &reward, &intent_hash, solver, &ctx)?;
+    hyperlane::dispatch_fulfillment_message(
+        &route,
+        &reward,
+        &intent_hash,
+        solver,
+        &ctx.accounts.mailbox_program,
+        &ctx.accounts.outbox_pda,
+        &ctx.accounts.dispatch_authority,
+        &ctx.accounts.spl_noop_program,
+        &ctx.accounts.payer,
+        &ctx.accounts.unique_message,
+        &ctx.accounts.system_program,
+        &ctx.accounts.dispatched_message_pda,
+        ctx.bumps.dispatch_authority,
+    )?;
 
     Ok(())
 }
@@ -304,106 +317,5 @@ fn mark_fulfillment<'info>(
 ) -> Result<()> {
     marker.intent_hash = hash;
     marker.bump = intent_fulfillment_marker_bump;
-    Ok(())
-}
-
-fn dispatch_acknowledgement<'info>(
-    route: &Route,
-    reward: &Reward,
-    intent_hash: &[u8; 32],
-    solver: &Signer<'info>,
-    ctx: &Context<FulfillIntent<'info>>,
-) -> Result<()> {
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub enum MailboxInstruction {
-        /// Initializes the program.
-        Init(Init),
-        /// Processes a message.
-        InboxProcess(InboxProcess),
-        /// Sets the default ISM.
-        InboxSetDefaultIsm(Pubkey),
-        /// Gets the recipient's ISM.
-        InboxGetRecipientIsm(Pubkey),
-        /// Dispatches a message.
-        OutboxDispatch(OutboxDispatch),
-        /// Gets the number of messages that have been dispatched.
-        OutboxGetCount,
-        /// Gets the latest checkpoint.
-        OutboxGetLatestCheckpoint,
-        /// Gets the root of the dispatched message merkle tree.
-        OutboxGetRoot,
-        /// Gets the owner of the Mailbox.
-        GetOwner,
-        /// Transfers ownership of the Mailbox.
-        TransferOwnership(Option<Pubkey>),
-        /// Transfers accumulated protocol fees to the beneficiary.
-        ClaimProtocolFees,
-        /// Sets the protocol fee configuration.
-        SetProtocolFeeConfig,
-    }
-
-    /// Instruction data for the Init instruction.
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub struct Init {}
-
-    /// Instruction data for the OutboxDispatch instruction.
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub struct OutboxDispatch {
-        /// The sender of the message.
-        /// This is required and not implied because a program uses a dispatch authority PDA
-        /// to sign the CPI on its behalf. Instruction processing logic prevents a program from
-        /// specifying any message sender it wants by requiring the relevant dispatch authority
-        /// to sign the CPI.
-        pub sender: Pubkey,
-        /// The destination domain of the message.
-        pub destination_domain: u32,
-        /// The remote recipient of the message.
-        pub recipient: [u8; 32],
-        /// The message body.
-        pub message_body: Vec<u8>,
-    }
-
-    /// Instruction data for the InboxProcess instruction.
-    #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
-    pub struct InboxProcess {}
-
-    let outbox_dispatch = MailboxInstruction::OutboxDispatch(OutboxDispatch {
-        sender: ctx.accounts.dispatch_authority.key(),
-        destination_domain: route.destination_domain_id,
-        recipient: reward.prover,
-        message_body: encoding::encode_fulfillment_message(
-            &[*intent_hash],
-            &[solver.key().to_bytes()],
-        ),
-    });
-
-    let ix = Instruction {
-        program_id: ctx.accounts.mailbox_program.key(),
-        accounts: vec![
-            AccountMeta::new(ctx.accounts.outbox_pda.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.dispatch_authority.key(), true),
-            AccountMeta::new_readonly(system_program::ID, false),
-            AccountMeta::new_readonly(ctx.accounts.spl_noop_program.key(), false),
-            AccountMeta::new(ctx.accounts.payer.key(), true),
-            AccountMeta::new_readonly(ctx.accounts.unique_message.key(), true),
-            AccountMeta::new(ctx.accounts.dispatched_message_pda.key(), false),
-        ],
-        data: outbox_dispatch.try_to_vec()?,
-    };
-
-    invoke_signed(
-        &ix,
-        &[
-            ctx.accounts.outbox_pda.to_account_info(),
-            ctx.accounts.dispatch_authority.to_account_info(),
-            ctx.accounts.system_program.to_account_info(),
-            ctx.accounts.spl_noop_program.to_account_info(),
-            ctx.accounts.payer.to_account_info(),
-            ctx.accounts.unique_message.to_account_info(),
-            ctx.accounts.dispatched_message_pda.to_account_info(),
-        ],
-        &[&[b"dispatch_authority", &[ctx.bumps.dispatch_authority]]],
-    )?;
-
     Ok(())
 }
