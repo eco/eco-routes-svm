@@ -1,5 +1,3 @@
-use std::slice::Iter;
-
 use crate::{
     encoding,
     error::EcoRoutesError,
@@ -121,8 +119,13 @@ pub fn fulfill_intent<'info>(
 
     let mut remaining_accounts = ctx.remaining_accounts.iter();
 
+    let route_token_accounts: Vec<_> = remaining_accounts
+        .by_ref()
+        .take(route.tokens.len() * 3)
+        .collect();
+
     transfer_route_tokens(
-        &mut remaining_accounts,
+        route_token_accounts,
         &route,
         solver,
         execution_authority,
@@ -130,8 +133,10 @@ pub fn fulfill_intent<'info>(
         ctx.accounts.spl_token_2022_program.to_account_info(),
     )?;
 
+    let route_calls_accounts: Vec<_> = remaining_accounts.collect();
+
     execute_route_calls(
-        &mut remaining_accounts,
+        route_calls_accounts,
         &mut route,
         solver,
         ctx.bumps.execution_authority,
@@ -165,13 +170,15 @@ pub fn fulfill_intent<'info>(
 }
 
 fn transfer_route_tokens<'info>(
-    accounts: &mut Iter<AccountInfo<'info>>,
+    accounts: Vec<&AccountInfo<'info>>,
     route: &Route,
     solver: &Signer<'info>,
     execution_authority: &AccountInfo<'info>,
     spl_token_program: AccountInfo<'info>,
     spl_token_2022_program: AccountInfo<'info>,
 ) -> Result<()> {
+    let mut route_token_accounts = accounts.into_iter();
+
     for token in &route.tokens {
         let mint_key = Pubkey::new_from_array(token.token);
         let expected_destination = spl_associated_token_account::get_associated_token_address(
@@ -179,11 +186,13 @@ fn transfer_route_tokens<'info>(
             &mint_key,
         );
 
-        let mint_account = accounts.next().ok_or(EcoRoutesError::InvalidRouteMint)?;
-        let source_account = accounts
+        let mint_account = route_token_accounts
+            .next()
+            .ok_or(EcoRoutesError::InvalidRouteMint)?;
+        let source_account = route_token_accounts
             .next()
             .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
-        let destination_account = accounts
+        let destination_account = route_token_accounts
             .next()
             .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
 
@@ -232,18 +241,20 @@ fn transfer_route_tokens<'info>(
 }
 
 fn execute_route_calls<'info>(
-    accounts: &mut Iter<AccountInfo<'info>>,
+    route_calls_accounts: Vec<&AccountInfo<'info>>,
     route: &mut Route,
     solver: &Signer<'info>,
     execution_authority_bump: u8,
 ) -> Result<()> {
+    let mut route_calls_accounts = route_calls_accounts.into_iter();
+
     for call in &mut route.calls {
         let mut call_data_with_account_metas = SvmCallDataWithAccountMetas {
             svm_call_data: SvmCallData::try_from_slice(&call.calldata)?,
             account_metas: Vec::new(),
         };
 
-        let call_accounts: Vec<_> = accounts
+        let call_accounts: Vec<_> = route_calls_accounts
             .by_ref()
             .take(call_data_with_account_metas.svm_call_data.num_account_metas as usize)
             .map(|a| a.to_account_info())
