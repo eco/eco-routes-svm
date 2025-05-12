@@ -17,10 +17,16 @@ pub struct RefundIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = intent.status == IntentStatus::Funded @ EcoRoutesError::NotFunded,
+        constraint = intent.is_expired().unwrap_or(false) @ EcoRoutesError::IntentNotExpired,
+        constraint = intent.native_funded @ EcoRoutesError::NotFunded,
     )]
     pub intent: Account<'info, Intent>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = refundee.key() == intent.reward.creator @ EcoRoutesError::InvalidRefundee
+    )]
     pub refundee: Signer<'info>,
 
     #[account(mut)]
@@ -35,22 +41,6 @@ pub fn refund_intent_native(
 ) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let refundee = &ctx.accounts.refundee;
-
-    if refundee.key() != intent.reward.creator {
-        return Err(EcoRoutesError::InvalidRefundee.into());
-    }
-
-    if intent.status != IntentStatus::Funded {
-        return Err(EcoRoutesError::NotFunded.into());
-    }
-
-    if !intent.is_expired()? {
-        return Err(EcoRoutesError::IntentNotExpired.into());
-    }
-
-    if !intent.native_funded {
-        return Err(EcoRoutesError::NotFunded.into());
-    }
 
     **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
     **refundee.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;

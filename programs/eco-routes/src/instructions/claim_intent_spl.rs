@@ -19,6 +19,7 @@ pub struct ClaimIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = intent.status == IntentStatus::Fulfilled @ EcoRoutesError::NotFulfilled,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -40,7 +41,10 @@ pub struct ClaimIntentSpl<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = claimer.key() == Pubkey::new_from_array(intent.solver) @ EcoRoutesError::InvalidClaimer
+    )]
     pub claimer: Signer<'info>,
 
     #[account(mut)]
@@ -55,17 +59,8 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
     let source_token = &mut ctx.accounts.source_token;
     let destination_token = &mut ctx.accounts.destination_token;
     let mint = &ctx.accounts.mint;
-    let claimer = &ctx.accounts.claimer;
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
-
-    if claimer.key() != Pubkey::new_from_array(intent.solver) {
-        return Err(EcoRoutesError::InvalidClaimer.into());
-    }
-
-    if intent.status != IntentStatus::Fulfilled {
-        return Err(EcoRoutesError::NotFulfilled.into());
-    }
 
     let token_to_claim = intent
         .reward

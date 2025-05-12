@@ -19,6 +19,8 @@ pub struct RefundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = intent.status == IntentStatus::Funded @ EcoRoutesError::NotFunded,
+        constraint = intent.is_expired().unwrap_or(false) @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -39,7 +41,10 @@ pub struct RefundIntentSpl<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        address = intent.reward.creator @ EcoRoutesError::InvalidRefundee
+    )]
     pub refundee: Signer<'info>,
 
     #[account(mut)]
@@ -54,21 +59,8 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
     let source_token = &mut ctx.accounts.source_token;
     let destination_token = &mut ctx.accounts.destination_token;
     let mint = &ctx.accounts.mint;
-    let refundee = &ctx.accounts.refundee;
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
-
-    if refundee.key() != intent.reward.creator {
-        return Err(EcoRoutesError::InvalidRefundee.into());
-    }
-
-    if intent.status != IntentStatus::Funded {
-        return Err(EcoRoutesError::NotFunded.into());
-    }
-
-    if !intent.is_expired()? {
-        return Err(EcoRoutesError::IntentNotExpired.into());
-    }
 
     let token_to_refund = intent
         .reward

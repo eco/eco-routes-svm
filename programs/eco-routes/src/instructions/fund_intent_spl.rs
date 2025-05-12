@@ -19,6 +19,7 @@ pub struct FundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = intent.status == IntentStatus::Initialized @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -58,10 +59,6 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
     let mint = &ctx.accounts.mint;
     let funder = &ctx.accounts.funder;
     let token_program = &ctx.accounts.token_program;
-
-    if intent.status != IntentStatus::Initialized {
-        return Err(EcoRoutesError::NotInFundingPhase.into());
-    }
 
     let token_to_fund = intent
         .reward

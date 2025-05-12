@@ -17,6 +17,8 @@ pub struct FundIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
+        constraint = intent.status == IntentStatus::Initialized @ EcoRoutesError::NotInFundingPhase,
+        constraint = !intent.native_funded @ EcoRoutesError::AlreadyFunded,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -35,14 +37,6 @@ pub fn fund_intent_native(
 ) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let funder = &ctx.accounts.funder;
-
-    if intent.status != IntentStatus::Initialized {
-        return Err(EcoRoutesError::NotInFundingPhase.into());
-    }
-
-    if intent.native_funded {
-        return Err(EcoRoutesError::AlreadyFunded.into());
-    }
 
     system_program::transfer(
         CpiContext::new(
