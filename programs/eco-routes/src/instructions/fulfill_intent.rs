@@ -73,7 +73,6 @@ pub struct FulfillIntent<'info> {
         mut,
         seeds = [b"execution_authority", args.route.salt.as_ref()],
         bump,
-        address = execution_authority_key(&args.route.salt).0 @ EcoRoutesError::InvalidExecutionAuthority
     )]
     pub execution_authority: UncheckedAccount<'info>,
 
@@ -82,7 +81,6 @@ pub struct FulfillIntent<'info> {
         mut,
         seeds = [b"dispatch_authority"],
         bump,
-        address = dispatch_authority_key().0 @ EcoRoutesError::InvalidDispatchAuthority
     )]
     pub dispatch_authority: UncheckedAccount<'info>,
 
