@@ -122,7 +122,7 @@ impl Intent {
     }
 
     pub fn is_funded(&self) -> bool {
-        self.tokens_funded == self.route.tokens.len() as u8 && self.native_funded
+        self.tokens_funded == self.reward.tokens.len() as u8 && self.native_funded
     }
 
     pub fn is_expired(&self) -> Result<bool> {
