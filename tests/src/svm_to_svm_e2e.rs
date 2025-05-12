@@ -7,6 +7,7 @@ use eco_routes::{
         dispatch_authority_key, execution_authority_key, ClaimIntentNativeArgs, ClaimIntentSplArgs,
         FulfillIntentArgs, FundIntentNativeArgs, FundIntentSplArgs, PublishIntentArgs,
         SerializableAccountMeta, SvmCallData, SvmCallDataWithAccountMetas,
+        SOLVER_PLACEHOLDER_PUBKEY,
     },
     state::{Call, Intent, IntentFulfillmentMarker, IntentStatus, Reward, Route, TokenAmount},
 };
@@ -692,7 +693,7 @@ fn initialize_context<'a>(
 
     let create_ata_instruction =
         spl_associated_token_account::instruction::create_associated_token_account(
-            &eco_routes::ID, // solver is represent by a default pubkey, because it is unknown at this point
+            &SOLVER_PLACEHOLDER_PUBKEY,
             &destination_user.pubkey(),
             &destination_usdc_mint.pubkey(),
             &spl_token::ID,
@@ -1044,7 +1045,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                     .account_metas
                     .into_iter()
                     .map(|m: SerializableAccountMeta| AccountMeta {
-                        pubkey: if m.pubkey == eco_routes::ID {
+                        pubkey: if m.pubkey == SOLVER_PLACEHOLDER_PUBKEY {
                             context.solver.pubkey()
                         } else {
                             m.pubkey

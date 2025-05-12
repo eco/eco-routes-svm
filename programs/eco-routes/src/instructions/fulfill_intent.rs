@@ -107,6 +107,9 @@ pub struct FulfillIntent<'info> {
     pub system_program: Program<'info, System>,
 }
 
+pub const SOLVER_PLACEHOLDER_PUBKEY: Pubkey =
+    pubkey!("So1ver1111111111111111111111111111111111111");
+
 pub fn fulfill_intent<'info>(
     ctx: Context<'_, '_, '_, 'info, FulfillIntent<'info>>,
     args: FulfillIntentArgs,
@@ -236,7 +239,7 @@ fn execute_route_calls<'info>(
         for acc in &call_accounts {
             let meta = AccountMeta {
                 pubkey: if acc.key() == solver.key() {
-                    crate::ID
+                    SOLVER_PLACEHOLDER_PUBKEY
                 } else {
                     acc.key()
                 },
@@ -262,7 +265,7 @@ fn execute_route_calls<'info>(
                 .account_metas
                 .into_iter()
                 .map(|m| {
-                    if m.pubkey == crate::ID {
+                    if m.pubkey == SOLVER_PLACEHOLDER_PUBKEY {
                         AccountMeta {
                             pubkey: solver.key(),
                             is_signer: m.is_signer,
