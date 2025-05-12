@@ -3,10 +3,7 @@ use anchor_lang::prelude::*;
 use crate::{
     encoding,
     error::EcoRoutesError,
-    state::{
-        Call, Intent, IntentStatus, Reward, Route, TokenAmount, ValidateCallList,
-        ValidateTokenList, MAX_CALLS, MAX_REWARD_TOKENS, MAX_ROUTE_TOKENS,
-    },
+    state::{Call, Intent, IntentStatus, Reward, Route, TokenAmount},
 };
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
@@ -58,17 +55,9 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
     let intent = &mut ctx.accounts.intent;
     let creator = &ctx.accounts.creator;
 
-    route_tokens.validate(MAX_ROUTE_TOKENS)?;
-    reward_tokens.validate(MAX_REWARD_TOKENS)?;
-    calls.validate(MAX_CALLS)?;
-
     intent.intent_hash = intent_hash;
     intent.status = IntentStatus::Funding(false, 0);
     intent.solver = None;
-
-    if deadline < Clock::get()?.unix_timestamp {
-        return Err(EcoRoutesError::InvalidDeadline.into());
-    }
 
     intent.route = Route {
         salt,
@@ -88,6 +77,8 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
     };
 
     intent.bump = ctx.bumps.intent;
+
+    intent.validate()?;
 
     let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
     require!(

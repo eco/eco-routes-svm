@@ -39,4 +39,6 @@ pub enum EcoRoutesError {
     InvalidRouteMint,
     InvalidRouteTokenAccount,
     InvalidProver,
+    EmptyTokens,
+    EmptyCalls,
 }

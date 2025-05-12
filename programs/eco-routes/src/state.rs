@@ -24,24 +24,30 @@ pub struct TokenAmount {
     pub amount: u64,
 }
 
-pub trait ValidateTokenList {
-    fn validate(&self, max_tokens: usize) -> Result<()>;
+fn validate_token_amounts(tokens: &Vec<TokenAmount>, max_len: usize) -> Result<()> {
+    require!(tokens.len() <= max_len, EcoRoutesError::TooManyTokens);
+    require!(!tokens.is_empty(), EcoRoutesError::EmptyTokens);
+    require!(
+        tokens
+            .iter()
+            .map(|token_amount| token_amount.token)
+            .collect::<HashSet<_>>()
+            .len()
+            == tokens.len(),
+        EcoRoutesError::DuplicateTokens
+    );
+    Ok(())
 }
 
-impl ValidateTokenList for Vec<TokenAmount> {
-    fn validate(&self, max_tokens: usize) -> Result<()> {
-        if self.len() > max_tokens {
-            return Err(EcoRoutesError::TooManyTokens.into());
-        }
-        let mut hashset = HashSet::new();
-        for token in self {
-            if !hashset.insert(token.token) {
-                return Err(EcoRoutesError::DuplicateTokens.into());
-            }
-        }
-        Ok(())
+fn validate_calls(calls: &Vec<Call>, max_len: usize) -> Result<()> {
+    require!(calls.len() <= max_len, EcoRoutesError::TooManyCalls);
+    require!(!calls.is_empty(), EcoRoutesError::EmptyCalls);
+    for call in calls {
+        call.validate()?;
     }
+    Ok(())
 }
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 pub struct Call {
     pub destination: [u8; 32],
@@ -53,22 +59,6 @@ impl Call {
     pub fn validate(&self) -> Result<()> {
         if self.calldata.len() > MAX_CALLDATA_SIZE {
             return Err(EcoRoutesError::CallDataTooLarge.into());
-        }
-        Ok(())
-    }
-}
-
-pub trait ValidateCallList {
-    fn validate(&self, max_calls: usize) -> Result<()>;
-}
-
-impl ValidateCallList for Vec<Call> {
-    fn validate(&self, max_calls: usize) -> Result<()> {
-        if self.len() > max_calls {
-            return Err(EcoRoutesError::TooManyCalls.into());
-        }
-        for call in self {
-            call.validate()?;
         }
         Ok(())
     }
@@ -86,6 +76,14 @@ pub struct Route {
     pub calls: Vec<Call>,
 }
 
+impl Route {
+    pub fn validate(&self) -> Result<()> {
+        validate_token_amounts(&self.tokens, MAX_ROUTE_TOKENS)?;
+        validate_calls(&self.calls, MAX_CALLS)?;
+        Ok(())
+    }
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 pub struct Reward {
     pub creator: Pubkey,
@@ -94,6 +92,13 @@ pub struct Reward {
     pub prover: [u8; 32],
     pub native_amount: u64,
     pub deadline: i64,
+}
+
+impl Reward {
+    pub fn validate(&self) -> Result<()> {
+        validate_token_amounts(&self.tokens, MAX_REWARD_TOKENS)?;
+        Ok(())
+    }
 }
 
 #[account]
@@ -110,10 +115,19 @@ pub struct Intent {
 
     pub bump: u8,
 }
-
 impl Intent {
     pub fn pda(intent_hash: [u8; 32]) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"intent", intent_hash.as_ref()], &crate::ID)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        require!(
+            self.reward.deadline > Clock::get()?.unix_timestamp,
+            EcoRoutesError::InvalidDeadline
+        );
+        self.route.validate()?;
+        self.reward.validate()?;
+        Ok(())
     }
 
     pub fn rent_exempt_lamports(&self, account_info: &AccountInfo) -> Result<u64> {
