@@ -24,7 +24,6 @@ pub struct FundIntentNative<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
 
-    #[account(mut)]
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,

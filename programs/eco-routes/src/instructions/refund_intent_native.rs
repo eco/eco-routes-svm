@@ -28,7 +28,6 @@ pub struct RefundIntentNative<'info> {
     )]
     pub refundee: Signer<'info>,
 
-    #[account(mut)]
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,

@@ -1,10 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::{
-    encoding,
-    error::EcoRoutesError,
-    state::{Call, Intent, IntentStatus, Reward, Route, TokenAmount},
-};
+use crate::state::{Call, Intent, IntentStatus, Reward, Route, TokenAmount};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct PublishIntentArgs {
@@ -58,17 +54,11 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
     intent.intent_hash = intent_hash;
     intent.status = IntentStatus::Funding(false, 0);
     intent.route = Route::new(salt, destination_domain_id, inbox, route_tokens, calls);
-    intent.reward = Reward::new(reward_tokens, creator.key(), native_reward, deadline);
+    intent.reward = Reward::new(reward_tokens, creator.key(), native_reward, deadline)?;
     intent.solver = None;
     intent.bump = ctx.bumps.intent;
 
-    intent.validate()?;
-
-    let expected_intent_hash = encoding::get_intent_hash(&intent.route, &intent.reward);
-    require!(
-        intent_hash == expected_intent_hash,
-        EcoRoutesError::InvalidIntentHash
-    );
+    intent.validate(intent_hash)?;
 
     Ok(())
 }

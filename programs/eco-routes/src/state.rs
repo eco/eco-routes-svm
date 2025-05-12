@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anchor_lang::prelude::*;
 
-use crate::error::EcoRoutesError;
+use crate::{encoding, error::EcoRoutesError};
 
 pub const MAX_ROUTE_TOKENS: usize = 3;
 pub const MAX_REWARD_TOKENS: usize = 3;
@@ -117,22 +117,21 @@ impl Reward {
         creator: Pubkey,
         native_amount: u64,
         deadline: i64,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        if deadline < Clock::get()?.unix_timestamp {
+            return Err(EcoRoutesError::InvalidDeadline.into());
+        }
+        Ok(Self {
             tokens,
             native_amount,
             deadline,
             creator,
             prover: crate::ID.to_bytes(),
-        }
+        })
     }
 
     pub fn validate(&self) -> Result<()> {
         validate_token_amounts(&self.tokens, MAX_REWARD_TOKENS)?;
-        require!(
-            self.deadline > Clock::get()?.unix_timestamp,
-            EcoRoutesError::InvalidDeadline
-        );
         Ok(())
     }
 }
@@ -157,9 +156,14 @@ impl Intent {
         Pubkey::find_program_address(&[b"intent", intent_hash.as_ref()], &crate::ID)
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self, intent_hash: [u8; 32]) -> Result<()> {
         self.route.validate()?;
         self.reward.validate()?;
+        let expected_intent_hash = encoding::get_intent_hash(&self.route, &self.reward);
+        require!(
+            intent_hash == expected_intent_hash,
+            EcoRoutesError::InvalidIntentHash
+        );
         Ok(())
     }
 
