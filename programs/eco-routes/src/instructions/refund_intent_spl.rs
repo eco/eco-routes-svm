@@ -80,7 +80,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
             },
             &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
         ),
-        token_to_refund.amount - vault.amount,
+        vault.amount,
         mint.decimals,
     )?;
 

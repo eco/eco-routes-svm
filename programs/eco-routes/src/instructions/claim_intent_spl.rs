@@ -80,7 +80,7 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
             },
             &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
         ),
-        token_to_claim.amount - vault.amount,
+        vault.amount,
         mint.decimals,
     )?;
 
