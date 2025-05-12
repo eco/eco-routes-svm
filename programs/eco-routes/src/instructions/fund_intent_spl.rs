@@ -42,7 +42,6 @@ pub struct FundIntentSpl<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(mut)]
     pub funder: Signer<'info>,
 
     #[account(mut)]

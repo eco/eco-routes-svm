@@ -41,10 +41,7 @@ pub struct ClaimIntentSpl<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(
-        mut,
-        constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer
-    )]
+    #[account(constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer)]
     pub claimer: Signer<'info>,
 
     #[account(mut)]

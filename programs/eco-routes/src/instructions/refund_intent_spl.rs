@@ -41,10 +41,7 @@ pub struct RefundIntentSpl<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(
-        mut,
-        address = intent.reward.creator @ EcoRoutesError::InvalidRefundee
-    )]
+    #[account(address = intent.reward.creator @ EcoRoutesError::InvalidRefundee)]
     pub refundee: Signer<'info>,
 
     #[account(mut)]
