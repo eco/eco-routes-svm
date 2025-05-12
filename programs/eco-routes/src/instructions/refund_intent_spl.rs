@@ -72,10 +72,6 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
-    if source_token.amount != token_to_refund.amount {
-        return Err(EcoRoutesError::NotFunded.into());
-    }
-
     anchor_spl::token_interface::transfer_checked(
         CpiContext::new_with_signer(
             token_program.to_account_info(),
@@ -87,7 +83,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
             },
             &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
         ),
-        token_to_refund.amount,
+        token_to_refund.amount - source_token.amount,
         mint.decimals,
     )?;
 

@@ -116,6 +116,12 @@ impl Intent {
         Pubkey::find_program_address(&[b"intent", intent_hash.as_ref()], &crate::ID)
     }
 
+    pub fn rent_exempt_lamports(&self, account_info: &AccountInfo) -> Result<u64> {
+        let rent = Rent::get()?;
+        let rent_exemption = rent.minimum_balance(8 + Intent::INIT_SPACE);
+        Ok(account_info.lamports() - rent_exemption)
+    }
+
     pub fn is_expired(&self) -> Result<bool> {
         let clock = Clock::get()?;
         Ok(self.reward.deadline < clock.unix_timestamp)

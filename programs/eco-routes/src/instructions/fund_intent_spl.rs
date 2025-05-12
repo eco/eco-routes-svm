@@ -31,7 +31,7 @@ pub struct FundIntentSpl<'info> {
     pub source_token: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
-        init_if_needed,
+        init,
         payer = payer,
         token::mint = mint,
         token::authority = intent,
@@ -68,10 +68,6 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
 
     if mint.key() != Pubkey::new_from_array(token_to_fund.token) {
         return Err(EcoRoutesError::InvalidMint.into());
-    }
-
-    if destination_token.amount == token_to_fund.amount {
-        return Err(EcoRoutesError::AlreadyFunded.into());
     }
 
     anchor_spl::token_interface::transfer_checked(

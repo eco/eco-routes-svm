@@ -37,16 +37,20 @@ pub fn fund_intent_native(
     let intent = &mut ctx.accounts.intent;
     let funder = &ctx.accounts.funder;
 
-    system_program::transfer(
-        CpiContext::new(
-            ctx.accounts.system_program.to_account_info(),
-            system_program::Transfer {
-                from: funder.to_account_info(),
-                to: intent.to_account_info(),
-            },
-        ),
-        intent.reward.native_amount,
-    )?;
+    let native_funded_lamports = intent.rent_exempt_lamports(&intent.to_account_info())?;
+
+    if native_funded_lamports < intent.reward.native_amount {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: funder.to_account_info(),
+                    to: intent.to_account_info(),
+                },
+            ),
+            intent.reward.native_amount - native_funded_lamports,
+        )?;
+    }
 
     intent.fund_native()?;
 
