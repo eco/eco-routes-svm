@@ -77,6 +77,23 @@ pub struct Route {
 }
 
 impl Route {
+    pub fn new(
+        salt: [u8; 32],
+        destination_domain_id: u32,
+        inbox: [u8; 32],
+        tokens: Vec<TokenAmount>,
+        calls: Vec<Call>,
+    ) -> Self {
+        Self {
+            salt,
+            source_domain_id: crate::hyperlane::DOMAIN_ID,
+            destination_domain_id,
+            tokens,
+            calls,
+            inbox,
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         validate_token_amounts(&self.tokens, MAX_ROUTE_TOKENS)?;
         validate_calls(&self.calls, MAX_CALLS)?;
@@ -95,8 +112,27 @@ pub struct Reward {
 }
 
 impl Reward {
+    pub fn new(
+        tokens: Vec<TokenAmount>,
+        creator: Pubkey,
+        native_amount: u64,
+        deadline: i64,
+    ) -> Self {
+        Self {
+            tokens,
+            native_amount,
+            deadline,
+            creator,
+            prover: crate::ID.to_bytes(),
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         validate_token_amounts(&self.tokens, MAX_REWARD_TOKENS)?;
+        require!(
+            self.deadline > Clock::get()?.unix_timestamp,
+            EcoRoutesError::InvalidDeadline
+        );
         Ok(())
     }
 }
@@ -115,16 +151,13 @@ pub struct Intent {
 
     pub bump: u8,
 }
+
 impl Intent {
     pub fn pda(intent_hash: [u8; 32]) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[b"intent", intent_hash.as_ref()], &crate::ID)
     }
 
     pub fn validate(&self) -> Result<()> {
-        require!(
-            self.reward.deadline > Clock::get()?.unix_timestamp,
-            EcoRoutesError::InvalidDeadline
-        );
         self.route.validate()?;
         self.reward.validate()?;
         Ok(())

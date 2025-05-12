@@ -57,25 +57,9 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
 
     intent.intent_hash = intent_hash;
     intent.status = IntentStatus::Funding(false, 0);
+    intent.route = Route::new(salt, destination_domain_id, inbox, route_tokens, calls);
+    intent.reward = Reward::new(reward_tokens, creator.key(), native_reward, deadline);
     intent.solver = None;
-
-    intent.route = Route {
-        salt,
-        source_domain_id: crate::hyperlane::DOMAIN_ID,
-        destination_domain_id,
-        inbox,
-        tokens: route_tokens,
-        calls,
-    };
-
-    intent.reward = Reward {
-        creator: creator.key(),
-        prover: crate::ID.to_bytes(),
-        tokens: reward_tokens,
-        native_amount: native_reward,
-        deadline,
-    };
-
     intent.bump = ctx.bumps.intent;
 
     intent.validate()?;
