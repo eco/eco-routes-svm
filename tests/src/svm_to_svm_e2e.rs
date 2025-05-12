@@ -1,4 +1,4 @@
-use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{AnchorDeserialize, AnchorSerialize, InstructionData, ToAccountMetas};
 use anyhow::Result;
 use console::{style, Emoji};
 use eco_routes::{
@@ -6,7 +6,7 @@ use eco_routes::{
     instructions::{
         dispatch_authority_key, execution_authority_key, ClaimIntentNativeArgs, ClaimIntentSplArgs,
         FulfillIntentArgs, FundIntentNativeArgs, FundIntentSplArgs, PublishIntentArgs,
-        SerializableAccountMeta, SvmCallData,
+        SerializableAccountMeta, SvmCallData, SvmCallDataWithAccountMetas,
     },
     state::{Call, Intent, IntentFulfillmentMarker, IntentStatus, Reward, Route, TokenAmount},
 };
@@ -733,9 +733,11 @@ fn initialize_context<'a>(
         calls: vec![
             Call {
                 destination: spl_associated_token_account::ID.to_bytes(),
-                calldata: SvmCallData {
-                    instruction_data: create_ata_instruction.data,
-                    num_account_metas: create_ata_instruction.accounts.len() as u8,
+                calldata: SvmCallDataWithAccountMetas {
+                    svm_call_data: SvmCallData {
+                        instruction_data: create_ata_instruction.data,
+                        num_account_metas: create_ata_instruction.accounts.len() as u8,
+                    },
                     account_metas: create_ata_instruction
                         .accounts
                         .clone()
@@ -743,20 +745,22 @@ fn initialize_context<'a>(
                         .map(SerializableAccountMeta::from)
                         .collect(),
                 }
-                .to_bytes()?,
+                .try_to_vec()?,
             },
             Call {
                 destination: spl_token::ID.to_bytes(),
-                calldata: SvmCallData {
-                    instruction_data: transfer_instruction.data,
-                    num_account_metas: transfer_instruction.accounts.len() as u8,
+                calldata: SvmCallDataWithAccountMetas {
+                    svm_call_data: SvmCallData {
+                        instruction_data: transfer_instruction.data,
+                        num_account_metas: transfer_instruction.accounts.len() as u8,
+                    },
                     account_metas: transfer_instruction
                         .accounts
                         .into_iter()
                         .map(SerializableAccountMeta::from)
                         .collect(),
                 }
-                .to_bytes()?,
+                .try_to_vec()?,
             },
         ],
     };
@@ -959,8 +963,12 @@ fn solve_intent(context: &mut Context) -> Result<()> {
     // strip account-metas from calldata (optimization for tx size)
     let mut route_without_metas = context.route.clone();
     route_without_metas.calls.iter_mut().for_each(|c| {
-        let stub = SvmCallData::from_calldata_without_account_metas(&c.calldata).unwrap();
-        c.calldata = stub.to_bytes().unwrap();
+        let call_data_with_account_metas =
+            SvmCallDataWithAccountMetas::try_from_slice(&c.calldata).unwrap();
+        c.calldata = call_data_with_account_metas
+            .svm_call_data
+            .try_to_vec()
+            .unwrap();
     });
 
     let initialize_ata_ixs = context
@@ -1031,7 +1039,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         // add the SVM-call account metas we stripped out earlier - they are needed in metas but not in data
         .chain({
             context.route.calls.iter().flat_map(|c| {
-                SvmCallData::try_from_slice(&c.calldata)
+                SvmCallDataWithAccountMetas::try_from_slice(&c.calldata)
                     .unwrap()
                     .account_metas
                     .into_iter()

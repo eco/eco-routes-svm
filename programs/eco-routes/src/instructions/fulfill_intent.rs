@@ -26,22 +26,12 @@ use super::SerializableAccountMeta;
 pub struct SvmCallData {
     pub instruction_data: Vec<u8>,
     pub num_account_metas: u8,
-    pub account_metas: Vec<SerializableAccountMeta>,
 }
 
-impl SvmCallData {
-    pub fn from_calldata_without_account_metas(calldata: &[u8]) -> Result<Self> {
-        let mut svm_call_data = Self::try_from_slice(calldata)?;
-        if svm_call_data.num_account_metas == 0 {
-            return Err(EcoRoutesError::InvalidFulfillCalls.into());
-        }
-        svm_call_data.account_metas = Vec::new();
-        Ok(svm_call_data)
-    }
-
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        Ok(self.try_to_vec()?)
-    }
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct SvmCallDataWithAccountMetas {
+    pub svm_call_data: SvmCallData,
+    pub account_metas: Vec<SerializableAccountMeta>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -232,11 +222,14 @@ fn execute_route_calls<'info>(
     execution_authority_bump: u8,
 ) -> Result<()> {
     for call in &mut route.calls {
-        let mut call_data = SvmCallData::from_calldata_without_account_metas(&call.calldata)?;
+        let mut call_data_with_account_metas = SvmCallDataWithAccountMetas {
+            svm_call_data: SvmCallData::try_from_slice(&call.calldata)?,
+            account_metas: Vec::new(),
+        };
 
         let call_accounts: Vec<_> = accounts
             .by_ref()
-            .take(call_data.num_account_metas as usize)
+            .take(call_data_with_account_metas.svm_call_data.num_account_metas as usize)
             .map(|a| a.to_account_info())
             .collect();
 
@@ -254,15 +247,18 @@ fn execute_route_calls<'info>(
                 },
                 is_writable: acc.is_writable,
             };
-            call_data.account_metas.push(meta.into());
+            call_data_with_account_metas.account_metas.push(meta.into());
         }
 
-        call.calldata = call_data.to_bytes()?;
+        call.calldata = call_data_with_account_metas.try_to_vec()?;
 
         let ix = Instruction {
             program_id: Pubkey::new_from_array(call.destination),
-            data: call_data.instruction_data.clone(),
-            accounts: call_data
+            data: call_data_with_account_metas
+                .svm_call_data
+                .instruction_data
+                .clone(),
+            accounts: call_data_with_account_metas
                 .account_metas
                 .into_iter()
                 .map(|m| {
