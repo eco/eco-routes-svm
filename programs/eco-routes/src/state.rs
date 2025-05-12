@@ -12,12 +12,10 @@ pub const MAX_CALLDATA_SIZE: usize = 256;
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 #[repr(u8)]
 pub enum IntentStatus {
-    Initialized,
+    Funding(bool, u8),
     Funded,
-    Dispatched,
     Fulfilled,
-    Refunded,
-    Claimed,
+    Claimed(bool, u8),
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
@@ -108,9 +106,6 @@ pub struct Intent {
     pub route: Route,
     pub reward: Reward,
 
-    pub tokens_funded: u8,
-    pub native_funded: bool,
-
     pub solver: Option<[u8; 32]>,
 
     pub bump: u8,
@@ -121,17 +116,97 @@ impl Intent {
         Pubkey::find_program_address(&[b"intent", intent_hash.as_ref()], &crate::ID)
     }
 
-    pub fn is_funded(&self) -> bool {
-        self.tokens_funded == self.reward.tokens.len() as u8 && self.native_funded
-    }
-
     pub fn is_expired(&self) -> Result<bool> {
         let clock = Clock::get()?;
         Ok(self.reward.deadline < clock.unix_timestamp)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.tokens_funded == 0 && !self.native_funded
+    pub fn fund_native(&mut self) -> Result<()> {
+        let num_reward_tokens = self.reward.tokens.len() as u8;
+        match self.status {
+            IntentStatus::Funding(_, funded_token_count) => {
+                if funded_token_count == num_reward_tokens {
+                    self.status = IntentStatus::Funded;
+                } else {
+                    self.status = IntentStatus::Funding(true, funded_token_count);
+                }
+                Ok(())
+            }
+            _ => Err(EcoRoutesError::NotInFundingPhase.into()),
+        }
+    }
+
+    pub fn fund_token(&mut self) -> Result<()> {
+        let num_reward_tokens = self.reward.tokens.len() as u8;
+        match self.status {
+            IntentStatus::Funding(native_funded, funded_token_count) => {
+                if funded_token_count + 1 == num_reward_tokens && native_funded {
+                    self.status = IntentStatus::Funded;
+                } else {
+                    self.status = IntentStatus::Funding(native_funded, funded_token_count + 1);
+                }
+                Ok(())
+            }
+            _ => Err(EcoRoutesError::NotInFundingPhase.into()),
+        }
+    }
+
+    pub fn refund_native(&mut self) -> Result<()> {
+        let num_reward_tokens = self.reward.tokens.len() as u8;
+        match self.status {
+            IntentStatus::Funding(_, funded_token_count) => {
+                self.status = IntentStatus::Funding(false, funded_token_count);
+                Ok(())
+            }
+            IntentStatus::Funded => {
+                self.status = IntentStatus::Funding(false, num_reward_tokens);
+                Ok(())
+            }
+            _ => Err(EcoRoutesError::NotInRefundingPhase.into()),
+        }
+    }
+
+    pub fn refund_token(&mut self) -> Result<()> {
+        let num_reward_tokens = self.reward.tokens.len() as u8;
+        match self.status {
+            IntentStatus::Funding(native_funded, funded_token_count) => {
+                self.status = IntentStatus::Funding(native_funded, funded_token_count - 1);
+                Ok(())
+            }
+            IntentStatus::Funded => {
+                self.status = IntentStatus::Funding(true, num_reward_tokens - 1);
+                Ok(())
+            }
+            _ => Err(EcoRoutesError::NotInRefundingPhase.into()),
+        }
+    }
+
+    pub fn claim_native(&mut self) -> Result<()> {
+        match self.status {
+            IntentStatus::Claimed(_, claimed_token_count) => {
+                self.status = IntentStatus::Claimed(true, claimed_token_count);
+                Ok(())
+            }
+            IntentStatus::Fulfilled => {
+                self.status = IntentStatus::Claimed(true, 0);
+                Ok(())
+            }
+            _ => Err(EcoRoutesError::NotFulfilled.into()),
+        }
+    }
+
+    pub fn claim_token(&mut self) -> Result<()> {
+        match self.status {
+            IntentStatus::Claimed(native_claimed, claimed_token_count) => {
+                self.status = IntentStatus::Claimed(native_claimed, claimed_token_count + 1);
+                Ok(())
+            }
+            IntentStatus::Fulfilled => {
+                self.status = IntentStatus::Claimed(false, 1);
+                Ok(())
+            }
+            _ => Err(EcoRoutesError::NotFulfilled.into()),
+        }
     }
 }
 

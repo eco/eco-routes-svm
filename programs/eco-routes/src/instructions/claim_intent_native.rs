@@ -17,8 +17,7 @@ pub struct ClaimIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = intent.status == IntentStatus::Fulfilled @ EcoRoutesError::NotFulfilled,
-        constraint = intent.native_funded @ EcoRoutesError::NotFunded,
+        constraint = matches!(intent.status, IntentStatus::Fulfilled | IntentStatus::Claimed(false, _)) @ EcoRoutesError::NotFunded,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -44,11 +43,7 @@ pub fn claim_intent_native(
     **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
     **claimer.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;
 
-    intent.native_funded = false;
-
-    if intent.is_empty() {
-        intent.status = IntentStatus::Claimed;
-    }
+    intent.claim_native()?;
 
     Ok(())
 }

@@ -17,8 +17,7 @@ pub struct FundIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = intent.status == IntentStatus::Initialized @ EcoRoutesError::NotInFundingPhase,
-        constraint = !intent.native_funded @ EcoRoutesError::AlreadyFunded,
+        constraint = matches!(intent.status, IntentStatus::Funding(false, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -49,11 +48,7 @@ pub fn fund_intent_native(
         intent.reward.native_amount,
     )?;
 
-    intent.native_funded = true;
-
-    if intent.is_funded() {
-        intent.status = IntentStatus::Funded;
-    }
+    intent.fund_native()?;
 
     Ok(())
 }

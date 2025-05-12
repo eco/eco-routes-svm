@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 #[error_code]
 pub enum EcoRoutesError {
     NotInFundingPhase,
+    NotInRefundingPhase,
     TooManyTokens,
     DuplicateTokens,
     TooManyCalls,

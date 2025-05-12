@@ -837,11 +837,9 @@ fn create_intent(context: &mut Context) -> Result<()> {
 
     let expected_intent = Intent {
         intent_hash: context.intent_hash,
-        status: IntentStatus::Initialized,
+        status: IntentStatus::Funding(false, 0),
         route: context.route.clone(),
         reward: context.reward.clone(),
-        tokens_funded: 0,
-        native_funded: false,
         solver: None,
         bump: Intent::pda(context.intent_hash).1,
     };
@@ -933,15 +931,6 @@ fn fund_intent(context: &mut Context) -> Result<()> {
         intent.status,
         IntentStatus::Funded,
         "Intent status should be funded"
-    );
-    assert_eq!(
-        intent.native_funded, true,
-        "Native funded flag should be true"
-    );
-    assert_eq!(
-        intent.tokens_funded as usize,
-        intent.reward.tokens.len(),
-        "Tokens funded count should be equal to the size of the reward token array"
     );
 
     Ok(())
@@ -1323,16 +1312,8 @@ fn claim_intent(context: &mut Context) -> Result<()> {
 
     assert_eq!(
         intent.status,
-        IntentStatus::Claimed,
+        IntentStatus::Claimed(true, intent.reward.tokens.len() as u8),
         "Intent status should be claimed"
-    );
-    assert_eq!(
-        intent.native_funded, false,
-        "Native funded flag should be false"
-    );
-    assert_eq!(
-        intent.tokens_funded as usize, 0,
-        "Tokens funded count should be 0"
     );
 
     Ok(())

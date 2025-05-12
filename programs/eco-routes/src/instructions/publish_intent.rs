@@ -63,7 +63,7 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
     calls.validate(MAX_CALLS)?;
 
     intent.intent_hash = intent_hash;
-    intent.status = IntentStatus::Initialized;
+    intent.status = IntentStatus::Funding(false, 0);
     intent.solver = None;
 
     if deadline < Clock::get()?.unix_timestamp {

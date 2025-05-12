@@ -19,7 +19,7 @@ pub struct FundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = intent.status == IntentStatus::Initialized @ EcoRoutesError::NotInFundingPhase,
+        constraint = matches!(intent.status, IntentStatus::Funding(_, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -88,11 +88,7 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
         mint.decimals,
     )?;
 
-    intent.tokens_funded += 1;
-
-    if intent.is_funded() {
-        intent.status = IntentStatus::Funded;
-    }
+    intent.fund_token()?;
 
     Ok(())
 }

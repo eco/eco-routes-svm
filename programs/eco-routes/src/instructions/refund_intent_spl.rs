@@ -19,7 +19,7 @@ pub struct RefundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = intent.status == IntentStatus::Funded @ EcoRoutesError::NotFunded,
+        constraint = matches!(intent.status, IntentStatus::Funding(_, _) | IntentStatus::Funded) @ EcoRoutesError::NotFunded,
         constraint = intent.is_expired().unwrap_or(false) @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
@@ -101,11 +101,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
     ))?;
 
-    intent.tokens_funded -= 1;
-
-    if intent.is_empty() {
-        intent.status = IntentStatus::Refunded;
-    }
+    intent.refund_token()?;
 
     Ok(())
 }
