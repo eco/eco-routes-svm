@@ -6,7 +6,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-eco_routes = "3zbEiMYyf4y1bGsVBAzKrXVzMndRQdTMDgx3aKCs8BHs"
+eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
+
+[programs.devnet]
+eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
 
 [registry]
 url = "https://api.apr.dev"

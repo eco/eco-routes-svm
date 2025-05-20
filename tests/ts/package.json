@@ -1,0 +1,30 @@
+{
+  "name": "eco-tests",
+  "version": "0.1.0",
+  "description": "TypeScript E2E tests",
+  "private": true,
+  "license": "ISC",
+  "scripts": {
+    "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "test": "mocha -r ts-node/register --timeout 60000 \"*.e2e.ts\""
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.31.1",
+    "@solana/web3.js": "^1.98.2",
+    "@solana/spl-token": "^0.4.13",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/bn.js": "5.1.0",
+    "@types/node": "22.15.19",
+    "@types/chai": "5.2.2",
+    "@types/mocha": "10.0.10",
+    "chai": "^4.3.4",
+    "mocha": "^11.4.0",
+    "prettier": "^2.6.2",
+    "ts-node": "^10.9.1",
+    "ts-mocha": "^11.1.0",
+    "typescript": "^4.3.5"
+  }
+}
