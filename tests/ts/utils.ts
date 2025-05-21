@@ -5,8 +5,7 @@ import path from "path";
 import { readFileSync } from "fs";
 import { Keypair } from "@solana/web3.js";
 import { homedir } from "os";
-
-export const USDC_DECIMALS = 6;
+import { USDC_DECIMALS } from "./constants";
 
 // Concatenate buffers and hash with Keccak-256
 export function generateIntentHash(route: Route, reward: Reward): Uint8Array {
@@ -40,7 +39,7 @@ function toU8(bn: BN): Uint8Array {
 
 export const usdcAmount = (usdcUi: number) => usdcUi * 10 ** USDC_DECIMALS;
 
-export async function loadKeypairFromFile(filePath: string): Promise<Keypair> {
+export function loadKeypairFromFile(filePath: string): Keypair {
   const resolvedPath = path.resolve(
     filePath.startsWith("~") ? filePath.replace("~", homedir()) : filePath
   );
