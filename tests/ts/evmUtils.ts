@@ -72,3 +72,9 @@ export function hashIntent(routeEnc: string, rewardEnc: string): string {
 
 export const evmUsdcAmount = (ui: string | number): bigint =>
   ethers.parseUnits(ui.toString(), USDC_DECIMALS);
+
+export const addressToBytes32 = (addr: string): Uint8Array => {
+  return Uint8Array.from(
+    Buffer.concat([Buffer.alloc(12), Buffer.from(addr.slice(2), "hex")])
+  );
+};

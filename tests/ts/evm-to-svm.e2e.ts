@@ -21,9 +21,16 @@ import {
   utils as anchorUtils,
 } from "@coral-xyz/anchor";
 import * as anchor from "@coral-xyz/anchor";
-import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  createAssociatedTokenAccount,
+  createMint,
+  getAssociatedTokenAddressSync,
+  mintTo,
+  TOKEN_2022_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import { expect } from "chai";
-import { ethers, Signer } from "ethers";
+import { ethers, JsonRpcProvider, Signer } from "ethers";
 import { ethers as hardhatEthers } from "hardhat";
 import {
   TestERC20__factory,
@@ -40,6 +47,11 @@ import {
   SPL_NOOP_ID,
   SOLANA_DOMAIN_ID,
   EVM_DOMAIN_ID,
+  TEST_USDC_ADDRESS_TESTNET,
+  INTENT_SOURCE_ADDRESS_TESTNET,
+  USDC_DECIMALS,
+  STORAGE_PROVER_ADDRESS_TESTNET,
+  INBOX_ADDRESS_TESTNET,
 } from "./constants";
 import {
   evmUsdcAmount,
@@ -49,6 +61,7 @@ import {
   Route,
   Reward,
   TokenAmount,
+  addressToBytes32,
 } from "./evmUtils";
 import { loadKeypairFromFile, usdcAmount } from "./utils";
 
@@ -80,51 +93,97 @@ describe("EVM → SVM e2e", () => {
   let usdc: TestERC20;
   let intentSource: IntentSource;
   let testProver: TestProver;
-  let creator!: Signer;
+  let creatorEvm!: Signer;
   let solverEvm!: Signer;
   let intentHashHex!: string;
+  let mockSvmUsdcMint: PublicKey;
+
+  before("creates a testet usdc and mints to solver", async () => {
+    const usdcMint = Keypair.generate();
+    mockSvmUsdcMint = usdcMint.publicKey;
+
+    await createMint(
+      connection,
+      feePayer, // payer
+      feePayer.publicKey, // mint authority
+      null, // freeze authority
+      USDC_DECIMALS, // decimals
+      usdcMint, // mint keypair
+      {
+        commitment: "confirmed",
+      }
+    );
+
+    const ata = await createAssociatedTokenAccount(
+      connection,
+      feePayer,
+      mockSvmUsdcMint,
+      solver.publicKey,
+      {
+        commitment: "confirmed",
+      }
+    );
+
+    await mintTo(
+      connection,
+      feePayer,
+      mockSvmUsdcMint,
+      ata,
+      feePayer,
+      usdcAmount(1000), // amount to mint
+      [],
+      {
+        commitment: "confirmed",
+      }
+    );
+  });
 
   it("publishes & funds on EVM", async () => {
-    [creator, solverEvm] =
-      (await hardhatEthers.getSigners()) as unknown as Signer[];
+    const l2Provider = new JsonRpcProvider(process.env.RPC_OPTIMISM_SEPOLIA);
+    creatorEvm = new ethers.Wallet(process.env.PK_CREATOR!, l2Provider);
+    solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
 
-    // deploy mock USDC
-    usdc = await new TestERC20__factory(creator).deploy("USDC", "USDC", 6);
-    await usdc.waitForDeployment();
+    // mock USDC
+    usdc = TestERC20__factory.connect(TEST_USDC_ADDRESS_TESTNET, creatorEvm);
 
-    // deploy IntentSource
-    intentSource = await new IntentSource__factory(creator).deploy();
-    await intentSource.waitForDeployment();
-
-    // deploy lightweight TestProver and give its addr to reward.prover
-    testProver = await new TestProver__factory(creator).deploy(
-      await intentSource.getAddress()
+    // IntentSource contract
+    intentSource = IntentSource__factory.connect(
+      INTENT_SOURCE_ADDRESS_TESTNET,
+      creatorEvm
     );
-    await testProver.waitForDeployment();
 
-    const creatorAddress = await creator.getAddress();
+    // TestProver and give its address to reward.prover
+    testProver = TestProver__factory.connect(
+      STORAGE_PROVER_ADDRESS_TESTNET,
+      creatorEvm
+    );
+
+    const creatorAddress = await creatorEvm.getAddress();
     const intentSourceAddress = await intentSource.getAddress();
     const usdcAddress = await usdc.getAddress();
     const testProverAddress = await testProver.getAddress();
 
-    await usdc.mint(creatorAddress, evmUsdcAmount(1000));
-
     // build Route + Reward structs
     const saltHex = "0x" + Buffer.from(salt).toString("hex");
 
+    const usdcMintAsEvmAddress =
+      "0x" + mockSvmUsdcMint.toBuffer().slice(12).toString("hex");
     const routeTokens: TokenAmount[] = [
-      { token: usdcAddress, amount: evmUsdcAmount(5) },
+      {
+        token: usdcMintAsEvmAddress,
+        amount: BigInt(usdcAmount(5)),
+      },
     ];
 
     const rewardTokens: TokenAmount[] = [
-      { token: usdcAddress, amount: evmUsdcAmount(1) },
+      { token: usdcAddress, amount: evmUsdcAmount(8) },
     ];
 
     route = {
       salt: saltHex,
       source: EVM_DOMAIN_ID,
       destination: SOLANA_DOMAIN_ID,
-      inbox: ethers.ZeroAddress, // will be validated on Solana side
+      inbox: ethers.ZeroAddress,
       tokens: routeTokens,
       calls: [],
     };
@@ -182,6 +241,29 @@ describe("EVM → SVM e2e", () => {
       MAILBOX_ID_TESTNET
     )[0];
 
+    const evmUsdcAddress = await usdc.getAddress();
+
+    const uniqueMessage = Keypair.generate();
+
+    const executionAuthorityAta = await createAssociatedTokenAccount(
+      connection,
+      feePayer,
+      mockSvmUsdcMint,
+      executionAuthority,
+      { commitment: "confirmed" }
+    );
+
+    const solverAta = getAssociatedTokenAddressSync(
+      mockSvmUsdcMint,
+      solver.publicKey
+    );
+
+    const remainingAccounts = [
+      { pubkey: mockSvmUsdcMint, isWritable: false, isSigner: false },
+      { pubkey: solverAta, isWritable: true, isSigner: false },
+      { pubkey: executionAuthorityAta, isWritable: true, isSigner: false },
+    ];
+
     const fulfillIx = await program.methods
       .fulfillIntent({
         intentHash: Array.from(intentHashBytes),
@@ -189,10 +271,10 @@ describe("EVM → SVM e2e", () => {
           salt: Array.from(salt),
           sourceDomainId: EVM_DOMAIN_ID,
           destinationDomainId: SOLANA_DOMAIN_ID,
-          inbox: Array(32).fill(7), // dummy inbox – not used here
+          inbox: Array.from(addressToBytes32(INBOX_ADDRESS_TESTNET)),
           tokens: [
             {
-              token: Array.from(new PublicKey(ethers.ZeroAddress).toBytes()),
+              token: Array.from(mockSvmUsdcMint.toBytes()),
               amount: new BN(usdcAmount(5)),
             },
           ],
@@ -200,11 +282,11 @@ describe("EVM → SVM e2e", () => {
         },
         reward: {
           creator: destinationUser.publicKey,
-          prover: Array.from(new Uint8Array(32).fill(3)),
+          prover: Array.from(addressToBytes32(STORAGE_PROVER_ADDRESS_TESTNET)),
           tokens: [
             {
-              token: Array.from(new PublicKey(ethers.ZeroAddress).toBytes()),
-              amount: new BN(usdcAmount(1)),
+              token: Array.from(addressToBytes32(evmUsdcAddress)),
+              amount: new BN(usdcAmount(8)),
             },
           ],
           nativeAmount: new BN(0),
@@ -219,25 +301,26 @@ describe("EVM → SVM e2e", () => {
         mailboxProgram: MAILBOX_ID_TESTNET,
         outboxPda,
         splNoopProgram: SPL_NOOP_ID,
-        uniqueMessage: Keypair.generate().publicKey,
+        uniqueMessage: uniqueMessage.publicKey,
         intentFulfillmentMarker,
         dispatchedMessagePda,
         splTokenProgram: TOKEN_PROGRAM_ID,
         splToken2022Program: TOKEN_2022_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts(remainingAccounts)
       .instruction();
 
     const blockhash = await connection.getLatestBlockhash();
     const fulfillTx = new VersionedTransaction(
       new TransactionMessage({
-        payerKey: feePayer.publicKey,
+        payerKey: solver.publicKey,
         recentBlockhash: blockhash.blockhash,
         instructions: [fulfillIx],
       }).compileToV0Message()
     );
 
-    fulfillTx.sign([solver]);
+    fulfillTx.sign([solver, uniqueMessage]);
     const fulfillTxSignature = await connection.sendRawTransaction(
       fulfillTx.serialize()
     );
@@ -257,7 +340,7 @@ describe("EVM → SVM e2e", () => {
 
     // simulate prover writing the mapping
     await testProver
-      .connect(creator)
+      .connect(creatorEvm)
       .addProvenIntent(intentHashHex, solverEvmAddress);
 
     // balances before

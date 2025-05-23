@@ -3,7 +3,7 @@ import { BN } from "@coral-xyz/anchor";
 import { Reward, Route } from "./types";
 import path from "path";
 import { readFileSync } from "fs";
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { homedir } from "os";
 import { USDC_DECIMALS } from "./constants";
 
@@ -48,3 +48,7 @@ export function loadKeypairFromFile(filePath: string): Keypair {
   );
   return Keypair.fromSecretKey(loadedKeyBytes);
 }
+
+export const svmAddressToHex = (address: PublicKey): string => {
+  return "0x" + address.toBuffer().toString("hex");
+};

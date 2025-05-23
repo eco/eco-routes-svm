@@ -1,6 +1,8 @@
 import "@nomicfoundation/hardhat-ethers";
 import "@typechain/hardhat";
 import { HardhatUserConfig } from "hardhat/config";
+import { config as dotenvConfig } from "dotenv";
+dotenvConfig();
 
 const config: HardhatUserConfig = {
   solidity: "0.8.26",
@@ -11,6 +13,11 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: { chainId: 11155111 },
+    optimismSepolia: {
+      url: "https://sepolia.optimism.io",
+      accounts: [process.env.PK_CREATOR!, process.env.PK_SOLVER!],
+      chainId: 11155420,
+    },
   },
   typechain: {
     outDir: "evm-types",

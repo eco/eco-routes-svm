@@ -10,3 +10,4 @@ test-ledger
 **/evm-cache
 **/evm-artifacts
 **/evm-types
+**/.env
