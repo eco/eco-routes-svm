@@ -268,7 +268,7 @@ describe("SVM -> EVM e2e", () => {
   });
 
   it("Fulfil intent on EVM (mock Hyperlane)", async () => {
-    const l2Provider = new JsonRpcProvider(process.env.RPC_OPTIMISM_SEPOLIA);
+    const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
     const creatorEvm = new ethers.Wallet(process.env.PK_CREATOR!, l2Provider);
     const solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
 

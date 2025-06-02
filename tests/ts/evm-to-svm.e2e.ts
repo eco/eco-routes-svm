@@ -31,7 +31,6 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { ethers, JsonRpcProvider, Signer } from "ethers";
-import { ethers as hardhatEthers } from "hardhat";
 import {
   TestERC20__factory,
   IntentSource__factory,
@@ -139,7 +138,7 @@ describe("EVM → SVM e2e", () => {
   });
 
   it("publishes & funds on EVM", async () => {
-    const l2Provider = new JsonRpcProvider(process.env.RPC_OPTIMISM_SEPOLIA);
+    const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
     creatorEvm = new ethers.Wallet(process.env.PK_CREATOR!, l2Provider);
     solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
 
@@ -198,7 +197,9 @@ describe("EVM → SVM e2e", () => {
 
     // allow IntentSource to pull USDC + publishAndFund
     await usdc.approve(intentSourceAddress, evmUsdcAmount(6));
-    await intentSource.publishAndFund({ route, reward }, false);
+    await intentSource[
+      "publishAndFund(((bytes32,uint256,uint256,address,(address,uint256)[],(address,bytes,uint256)[]),(address,address,uint256,uint256,(address,uint256)[])),bool)"
+    ]({ reward, route }, false);
 
     // produce 32-byte intent hash for Solana flow
     intentHashHex = hashIntent(encodeRoute(route), encodeReward(reward));
@@ -336,6 +337,7 @@ describe("EVM → SVM e2e", () => {
   });
 
   it("proves and withdraws on EVM", async () => {
+    const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
     const solverEvmAddress = await solverEvm.getAddress();
 
     // simulate prover writing the mapping
@@ -345,7 +347,9 @@ describe("EVM → SVM e2e", () => {
 
     // balances before
     const solverBalanceBefore = await usdc.balanceOf(solverEvmAddress);
-    const vaultAddress = await intentSource.intentVaultAddress({
+    const vaultAddress = await intentSource[
+      "intentVaultAddress(((bytes32,uint256,uint256,address,(address,uint256)[],(address,bytes,uint256)[]),(address,address,uint256,uint256,(address,uint256)[])))"
+    ]({
       route,
       reward,
     });
@@ -354,13 +358,17 @@ describe("EVM → SVM e2e", () => {
 
     // withdraw
     const routeHash = ethers.keccak256(encodeRoute(route));
-    await intentSource.connect(solverEvm).withdrawRewards(routeHash, reward);
+    await intentSource
+      .connect(solverEvm)
+      [
+        "withdrawRewards(bytes32,(address,address,uint256,uint256,(address,uint256)[]))"
+      ](routeHash, reward);
 
     // after balances
     const solverBalanceAfter = await usdc.balanceOf(solverEvmAddress);
     expect(solverBalanceAfter - solverBalanceBefore).to.equal(evmUsdcAmount(1));
 
     // vault should be self-destructed, hence balance 0
-    expect(await hardhatEthers.provider.getCode(vaultAddress)).to.equal("0x");
+    expect(await l2Provider.provider.getCode(vaultAddress)).to.equal("0x");
   });
 });

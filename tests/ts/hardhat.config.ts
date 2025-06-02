@@ -13,10 +13,10 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: { chainId: 11155111 },
-    optimismSepolia: {
-      url: "https://sepolia.optimism.io",
+    sepolia: {
+      url: process.env.RPC_SEPOLIA!,
       accounts: [process.env.PK_CREATOR!, process.env.PK_SOLVER!],
-      chainId: 11155420,
+      chainId: 11155111,
     },
   },
   typechain: {

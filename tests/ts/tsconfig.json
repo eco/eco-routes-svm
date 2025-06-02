@@ -10,5 +10,5 @@
         "typeRoots": ["./node_modules/@types"],
         "skipLibCheck": true
     },
-    "include": ["*.ts"]
+    "include": ["*.ts", "scripts/mintUsdc.ts"]
 }
