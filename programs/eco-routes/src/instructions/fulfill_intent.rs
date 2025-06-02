@@ -16,8 +16,11 @@ use anchor_spl::{
     token_interface::{transfer_checked, Mint, TokenAccount, TransferChecked},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
+use itertools::multiunzip;
 
 use super::SerializableAccountMeta;
+
+const ACCOUNTS_COUNT_PER_TOKEN: usize = 3; // mint, source, destination
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct SvmCallData {
@@ -29,6 +32,23 @@ pub struct SvmCallData {
 pub struct SvmCallDataWithAccountMetas {
     pub svm_call_data: SvmCallData,
     pub account_metas: Vec<SerializableAccountMeta>,
+}
+
+impl SvmCallDataWithAccountMetas {
+    fn new(
+        svm_call_data: SvmCallData,
+        account_metas: Vec<SerializableAccountMeta>,
+    ) -> Result<Self> {
+        require!(
+            svm_call_data.num_account_metas as usize == account_metas.len(),
+            EcoRoutesError::InvalidAccounts
+        );
+
+        Ok(Self {
+            svm_call_data,
+            account_metas,
+        })
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -114,41 +134,39 @@ pub fn fulfill_intent<'info>(
     let solver = &ctx.accounts.solver;
     let execution_authority = &ctx.accounts.execution_authority;
     let intent_hash = args.intent_hash;
-    let mut route = args.route;
+    let route = args.route;
     let reward = args.reward;
 
-    let mut remaining_accounts = ctx.remaining_accounts.iter();
-
-    let route_token_accounts: Vec<_> = remaining_accounts
-        .by_ref()
-        .take(route.tokens.len() * 3)
-        .collect();
+    let (token_accounts, route_calls_accounts) = ctx
+        .remaining_accounts
+        .split_at_checked(route.tokens.len() * ACCOUNTS_COUNT_PER_TOKEN)
+        .ok_or(EcoRoutesError::InvalidAccounts)?;
+    let token_accounts = token_accounts
+        .chunks_exact(ACCOUNTS_COUNT_PER_TOKEN)
+        .map(TryInto::try_into)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| EcoRoutesError::InvalidAccounts)?;
 
     transfer_route_tokens(
-        route_token_accounts,
+        &token_accounts,
         &route,
         solver,
         execution_authority,
         ctx.accounts.spl_token_program.to_account_info(),
         ctx.accounts.spl_token_2022_program.to_account_info(),
     )?;
-
-    let route_calls_accounts: Vec<_> = remaining_accounts.collect();
-
-    execute_route_calls(
+    let route = execute_route_calls(
         route_calls_accounts,
-        &mut route,
+        route,
         solver,
         ctx.bumps.execution_authority,
     )?;
-
     validate_intent_hash(&route, &reward, &intent_hash)?;
-
     mark_fulfillment(
         &mut ctx.accounts.intent_fulfillment_marker,
         intent_hash,
         ctx.bumps.intent_fulfillment_marker,
-    )?;
+    );
 
     hyperlane::dispatch_fulfillment_message(
         &route,
@@ -164,37 +182,33 @@ pub fn fulfill_intent<'info>(
         &ctx.accounts.system_program,
         &ctx.accounts.dispatched_message_pda,
         ctx.bumps.dispatch_authority,
-    )?;
-
-    Ok(())
+    )
 }
 
 fn transfer_route_tokens<'info>(
-    accounts: Vec<&AccountInfo<'info>>,
+    token_accounts: &[&[AccountInfo<'info>; ACCOUNTS_COUNT_PER_TOKEN]],
     route: &Route,
     solver: &Signer<'info>,
     execution_authority: &AccountInfo<'info>,
     spl_token_program: AccountInfo<'info>,
     spl_token_2022_program: AccountInfo<'info>,
 ) -> Result<()> {
-    let mut route_token_accounts = accounts.into_iter();
+    require!(
+        token_accounts.len() == route.tokens.len(),
+        EcoRoutesError::InvalidAccounts
+    );
 
-    for token in &route.tokens {
+    for (token, [mint_account, source_account, destination_account]) in
+        route.tokens.iter().zip(token_accounts.iter())
+    {
         let mint_key = Pubkey::new_from_array(token.token);
         let expected_destination = spl_associated_token_account::get_associated_token_address(
             &execution_authority.key(),
             &mint_key,
         );
-
-        let mint_account = route_token_accounts
-            .next()
-            .ok_or(EcoRoutesError::InvalidRouteMint)?;
-        let source_account = route_token_accounts
-            .next()
-            .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
-        let destination_account = route_token_accounts
-            .next()
-            .ok_or(EcoRoutesError::InvalidRouteTokenAccount)?;
+        let mint = Mint::try_deserialize(&mut &mint_account.data.borrow()[..])?;
+        let source_token_account =
+            TokenAccount::try_deserialize(&mut &source_account.data.borrow()[..])?;
 
         require_keys_eq!(
             mint_account.key(),
@@ -202,18 +216,18 @@ fn transfer_route_tokens<'info>(
             EcoRoutesError::InvalidRouteMint
         );
         require_keys_eq!(
-            destination_account.key(),
-            expected_destination,
+            source_token_account.mint,
+            mint_key,
+            EcoRoutesError::InvalidRouteMint
+        );
+        require_keys_eq!(
+            source_token_account.owner,
+            solver.key(),
             EcoRoutesError::InvalidRouteTokenAccount
         );
-
-        let mint = Mint::try_deserialize(&mut &mint_account.data.borrow()[..])?;
-        let src_token = TokenAccount::try_deserialize(&mut &source_account.data.borrow()[..])?;
-
-        require_keys_eq!(src_token.mint, mint_key, EcoRoutesError::InvalidRouteMint);
         require_keys_eq!(
-            src_token.owner,
-            solver.key(),
+            destination_account.key(),
+            expected_destination,
             EcoRoutesError::InvalidRouteTokenAccount
         );
 
@@ -237,87 +251,109 @@ fn transfer_route_tokens<'info>(
             mint.decimals,
         )?;
     }
+
     Ok(())
 }
 
 fn execute_route_calls<'info>(
-    route_calls_accounts: Vec<&AccountInfo<'info>>,
-    route: &mut Route,
+    route_calls_accounts: &[AccountInfo<'info>],
+    mut route: Route,
     solver: &Signer<'info>,
     execution_authority_bump: u8,
-) -> Result<()> {
+) -> Result<Route> {
     let mut route_calls_accounts = route_calls_accounts.into_iter();
+    let (call_accounts, svm_call_datas, instructions): (Vec<_>, Vec<_>, Vec<_>) = route
+        .calls
+        .iter()
+        .map(|call| {
+            let svm_call_data = SvmCallData::try_from_slice(&call.calldata)?;
+            let call_accounts: Vec<_> = route_calls_accounts
+                .by_ref()
+                .take(svm_call_data.num_account_metas as usize)
+                .map(ToAccountInfo::to_account_info)
+                .collect();
+            let expected_account_metas: Vec<SerializableAccountMeta> = call_accounts
+                .iter()
+                .map(|account| expected_account_meta(account, solver, route.salt))
+                .map(Into::into)
+                .collect();
 
-    for call in &mut route.calls {
-        let mut call_data_with_account_metas = SvmCallDataWithAccountMetas {
-            svm_call_data: SvmCallData::try_from_slice(&call.calldata)?,
-            account_metas: Vec::new(),
-        };
+            let program_id = Pubkey::new_from_array(call.destination);
+            let accounts = call_accounts
+                .iter()
+                .map(|account| actual_account_meta(account, route.salt))
+                .collect();
+            let instruction =
+                Instruction::new_with_bytes(program_id, &svm_call_data.instruction_data, accounts);
 
-        let call_accounts: Vec<_> = route_calls_accounts
-            .by_ref()
-            .take(call_data_with_account_metas.svm_call_data.num_account_metas as usize)
-            .map(|a| a.to_account_info())
-            .collect();
+            Ok((
+                call_accounts,
+                SvmCallDataWithAccountMetas::new(svm_call_data, expected_account_metas)?,
+                instruction,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(multiunzip)?;
 
-        for acc in &call_accounts {
-            let meta = AccountMeta {
-                pubkey: if acc.key() == solver.key() {
-                    SOLVER_PLACEHOLDER_PUBKEY
-                } else {
-                    acc.key()
-                },
-                is_signer: if acc.key == &execution_authority_key(&route.salt).0 {
-                    true
-                } else {
-                    acc.is_signer
-                },
-                is_writable: acc.is_writable,
-            };
-            call_data_with_account_metas.account_metas.push(meta.into());
-        }
+    call_accounts
+        .iter()
+        .zip(instructions)
+        .try_for_each(|(call_accounts, instruction)| {
+            invoke_signed(
+                &instruction,
+                &call_accounts,
+                &[&[
+                    b"execution_authority",
+                    route.salt.as_ref(),
+                    &[execution_authority_bump],
+                ]],
+            )
+        })?;
 
-        call.calldata = call_data_with_account_metas.try_to_vec()?;
+    // Replace solver's pubkey with placeholder to reconstruct route data matching the intent hash.
+    // We don't know the solver when creating the route on source chain, so we use a placeholder
+    // that gets replaced with the actual solver during fulfillment to avoid tx size limits.
+    route
+        .calls
+        .iter_mut()
+        .zip(svm_call_datas)
+        .try_for_each(|(call, svm_call_data)| {
+            call.calldata = svm_call_data.try_to_vec()?;
 
-        let ix = Instruction {
-            program_id: Pubkey::new_from_array(call.destination),
-            data: call_data_with_account_metas
-                .svm_call_data
-                .instruction_data
-                .clone(),
-            accounts: call_data_with_account_metas
-                .account_metas
-                .into_iter()
-                .map(|m| {
-                    if m.pubkey == SOLVER_PLACEHOLDER_PUBKEY {
-                        AccountMeta {
-                            pubkey: solver.key(),
-                            is_signer: m.is_signer,
-                            is_writable: m.is_writable,
-                        }
-                    } else {
-                        m.into()
-                    }
-                })
-                .collect(),
-        };
+            Result::<()>::Ok(())
+        })?;
 
-        invoke_signed(
-            &ix,
-            &call_accounts,
-            &[&[
-                b"execution_authority",
-                route.salt.as_ref(),
-                &[execution_authority_bump],
-            ]],
-        )?;
+    Ok(route)
+}
+
+fn expected_account_meta(
+    account: &AccountInfo,
+    solver: &Signer,
+    route_salt: [u8; 32],
+) -> AccountMeta {
+    AccountMeta {
+        pubkey: if account.key() == solver.key() {
+            SOLVER_PLACEHOLDER_PUBKEY
+        } else {
+            account.key()
+        },
+        is_signer: account.key == &execution_authority_key(&route_salt).0 || account.is_signer,
+        is_writable: account.is_writable,
     }
-    Ok(())
+}
+
+fn actual_account_meta(account: &AccountInfo, route_salt: [u8; 32]) -> AccountMeta {
+    AccountMeta {
+        pubkey: account.key(),
+        is_signer: account.key == &execution_authority_key(&route_salt).0 || account.is_signer,
+        is_writable: account.is_writable,
+    }
 }
 
 fn validate_intent_hash(route: &Route, reward: &Reward, expected: &[u8; 32]) -> Result<()> {
     let hash = encoding::get_intent_hash(route, reward);
     require!(hash == *expected, EcoRoutesError::InvalidIntent);
+
     Ok(())
 }
 
@@ -325,8 +361,7 @@ fn mark_fulfillment<'info>(
     marker: &mut Account<'info, IntentFulfillmentMarker>,
     hash: [u8; 32],
     intent_fulfillment_marker_bump: u8,
-) -> Result<()> {
+) {
     marker.intent_hash = hash;
     marker.bump = intent_fulfillment_marker_bump;
-    Ok(())
 }

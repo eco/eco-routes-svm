@@ -23,7 +23,7 @@ pub struct ClaimIntentNative<'info> {
 
     #[account(
         mut,
-        constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer
+        constraint = intent.solver.map(Pubkey::new_from_array).is_some_and(|solver| claimer.key() == solver) @ EcoRoutesError::InvalidClaimer
     )]
     pub claimer: Signer<'info>,
 
@@ -42,7 +42,5 @@ pub fn claim_intent_native(
     **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
     **claimer.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;
 
-    intent.claim_native()?;
-
-    Ok(())
+    intent.claim_native()
 }

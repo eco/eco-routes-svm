@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
+eco_routes = "J1Lfg3UWyGR1Z7BrBtjHFthxTVstGigLvAJ1wr9uSvRz"
 
 [programs.devnet]
 eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
@@ -15,7 +15,7 @@ eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
