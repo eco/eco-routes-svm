@@ -40,8 +40,8 @@ fn hash_route(route: &Route) -> [u8; 32] {
 
     let mut call_sizes = Vec::with_capacity(route.calls.len());
 
-    for c in &route.calls {
-        let data_padded = padded(c.calldata.len());
+    for call in &route.calls {
+        let data_padded = padded(call.calldata.len());
         let size = 96 + 32 + data_padded;
         call_sizes.push(size);
     }

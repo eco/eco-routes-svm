@@ -1,10 +1,7 @@
 use anchor_lang::prelude::*;
+use itertools::izip;
 
-use crate::{
-    encoding,
-    error::EcoRoutesError,
-    state::{Intent, IntentStatus},
-};
+use crate::{encoding, error::EcoRoutesError, state::Intent};
 
 #[derive(Accounts)]
 pub struct Handle<'info> {
@@ -34,35 +31,26 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
 ) -> Result<()> {
     let (intent_hashes, solvers) = encoding::decode_fulfillment_message(&payload)
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
-
-    let remaining_accounts = ctx.remaining_accounts.iter();
-    let remaining_accounts: Vec<_> = remaining_accounts.collect();
+    let accounts: Vec<_> = ctx.remaining_accounts.iter().collect();
 
     require!(
         intent_hashes.len() == solvers.len(),
         EcoRoutesError::InvalidHandlePayload
     );
     require!(
-        intent_hashes.len() == remaining_accounts.len(),
+        intent_hashes.len() == accounts.len(),
         EcoRoutesError::InvalidHandlePayload
     );
 
-    for ((intent_hash, solver), intent_account_info) in intent_hashes
-        .into_iter()
-        .zip(solvers)
-        .zip(remaining_accounts)
-    {
+    for (intent_hash, solver, account) in izip!(intent_hashes, solvers, accounts) {
         require_keys_eq!(
-            intent_account_info.key(),
+            account.key(),
             Intent::pda(intent_hash).0,
             EcoRoutesError::InvalidIntent
         );
-        require!(
-            intent_account_info.is_writable,
-            EcoRoutesError::InvalidIntent
-        );
+        require!(account.is_writable, EcoRoutesError::InvalidIntent);
 
-        let mut intent: Account<Intent> = Account::try_from(intent_account_info)?;
+        let mut intent: Account<Intent> = Account::try_from(account)?;
 
         require!(intent.route.inbox == sender, EcoRoutesError::InvalidSender);
         require!(
@@ -70,9 +58,7 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
             EcoRoutesError::InvalidOrigin
         );
 
-        intent.status = IntentStatus::Fulfilled;
-        intent.solver = Some(solver);
-
+        intent.fulfill(solver)?;
         intent.exit(ctx.program_id)?;
     }
 

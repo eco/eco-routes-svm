@@ -774,7 +774,7 @@ fn initialize_context<'a>(
             amount: usdc_amount(5.0),
         }],
         native_amount: sol_amount(0.03),
-        deadline: 0,
+        deadline: 100,
     };
 
     let intent_hash = eco_routes::encoding::get_intent_hash(&route, &reward);
@@ -871,7 +871,7 @@ fn fund_intent(context: &mut Context) -> Result<()> {
     let fund_intent_spl_args = eco_routes::instruction::FundIntentSpl {
         args: FundIntentSplArgs {
             intent_hash: context.intent_hash,
-            token_to_fund: 0,
+            token_index: 0,
         },
     };
 
@@ -884,7 +884,6 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                     accounts: eco_routes::accounts::FundIntentNative {
                         intent: Intent::pda(context.intent_hash).0,
                         funder: context.source_user.pubkey(),
-                        payer: context.fee_payer.pubkey(),
                         system_program: solana_system_interface::program::ID,
                     }
                     .to_account_metas(None),
@@ -1257,7 +1256,7 @@ fn claim_intent(context: &mut Context) -> Result<()> {
     let claim_intent_spl_args = eco_routes::instruction::ClaimIntentSpl {
         args: ClaimIntentSplArgs {
             intent_hash: context.intent_hash,
-            token_to_claim: 0,
+            token_index: 0,
         },
     };
 

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::state::{Call, Intent, IntentStatus, Reward, Route, TokenAmount};
+use crate::state::{Call, Intent, Reward, Route, TokenAmount};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct PublishIntentArgs {
@@ -48,17 +48,17 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
         deadline,
     } = args;
 
-    let intent = &mut ctx.accounts.intent;
-    let creator = &ctx.accounts.creator;
-
-    intent.intent_hash = intent_hash;
-    intent.status = IntentStatus::Funding(false, 0);
-    intent.route = Route::new(salt, destination_domain_id, inbox, route_tokens, calls);
-    intent.reward = Reward::new(reward_tokens, creator.key(), native_reward, deadline)?;
-    intent.solver = None;
-    intent.bump = ctx.bumps.intent;
-
-    intent.validate(intent_hash)?;
+    *ctx.accounts.intent = Intent::new(
+        intent_hash,
+        Route::new(salt, destination_domain_id, inbox, route_tokens, calls)?,
+        Reward::new(
+            reward_tokens,
+            ctx.accounts.creator.key(),
+            native_reward,
+            deadline,
+        )?,
+        ctx.bumps.intent,
+    )?;
 
     Ok(())
 }
