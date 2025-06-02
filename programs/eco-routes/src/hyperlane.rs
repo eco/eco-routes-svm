@@ -9,6 +9,7 @@ use anchor_lang::{
 
 use crate::{
     encoding,
+    instructions::FulfillIntent,
     state::{Reward, Route},
 };
 
@@ -54,28 +55,32 @@ struct OutboxDispatch {
 struct InboxProcess {}
 
 pub fn dispatch_fulfillment_message<'info>(
+    ctx: &Context<'_, '_, '_, 'info, FulfillIntent<'info>>,
     route: &Route,
     reward: &Reward,
     intent_hash: &[u8; 32],
     solver: &Signer<'info>,
-    mailbox_program: &UncheckedAccount<'info>,
-    outbox_pda: &UncheckedAccount<'info>,
-    dispatch_authority: &UncheckedAccount<'info>,
-    spl_noop_program: &UncheckedAccount<'info>,
-    payer: &Signer<'info>,
-    unique_message: &Signer<'info>,
-    system_program: &Program<'info, System>,
-    dispatched_message_pda: &UncheckedAccount<'info>,
-    dispatch_authority_bump: u8,
 ) -> Result<()> {
+    let mailbox_program = &ctx.accounts.mailbox_program;
+    let outbox_pda = &ctx.accounts.outbox_pda;
+    let dispatch_authority = &ctx.accounts.dispatch_authority;
+    let spl_noop_program = &ctx.accounts.spl_noop_program;
+    let payer = &ctx.accounts.payer;
+    let unique_message = &ctx.accounts.unique_message;
+    let system_program = &ctx.accounts.system_program;
+    let dispatched_message_pda = &ctx.accounts.dispatched_message_pda;
+    let dispatch_authority_bump = ctx.bumps.dispatch_authority;
+
     let outbox_dispatch = MailboxInstruction::OutboxDispatch(OutboxDispatch {
         sender: dispatch_authority.key(),
         destination_domain: route.destination_domain_id,
         recipient: reward.prover,
-        message_body: encoding::encode_fulfillment_message(
-            &[*intent_hash],
-            &[solver.key().to_bytes()],
-        ),
+        message_body: encoding::FulfillMessages::new(
+            vec![*intent_hash],
+            vec![solver.key().to_bytes()],
+        )
+        .expect("fulfill messages must be valid with once intent hash and one solver")
+        .encode(),
     });
 
     let ix = Instruction {

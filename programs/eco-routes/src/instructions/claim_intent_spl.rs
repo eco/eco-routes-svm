@@ -9,7 +9,6 @@ use crate::{
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ClaimIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_index: u8,
 }
 
 #[derive(Accounts)]
@@ -51,7 +50,7 @@ pub struct ClaimIntentSpl<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) -> Result<()> {
+pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, _args: ClaimIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let vault = &mut ctx.accounts.vault;
     let claimer_token = &mut ctx.accounts.claimer_token;
@@ -59,15 +58,7 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    let token = intent
-        .reward
-        .tokens
-        .get(args.token_index as usize)
-        .ok_or(EcoRoutesError::InvalidTokenIndex)?;
-
-    if mint.key() != Pubkey::new_from_array(token.token) {
-        return Err(EcoRoutesError::InvalidMint.into());
-    }
+    intent.claim_token(mint.key().as_array())?;
 
     anchor_spl::token_interface::transfer_checked(
         CpiContext::new_with_signer(
@@ -91,7 +82,5 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
             authority: intent.to_account_info(),
         },
         &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
-    ))?;
-
-    intent.claim_token()
+    ))
 }

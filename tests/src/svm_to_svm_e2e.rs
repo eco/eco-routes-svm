@@ -871,7 +871,6 @@ fn fund_intent(context: &mut Context) -> Result<()> {
     let fund_intent_spl_args = eco_routes::instruction::FundIntentSpl {
         args: FundIntentSplArgs {
             intent_hash: context.intent_hash,
-            token_index: 0,
         },
     };
 
@@ -1256,7 +1255,6 @@ fn claim_intent(context: &mut Context) -> Result<()> {
     let claim_intent_spl_args = eco_routes::instruction::ClaimIntentSpl {
         args: ClaimIntentSplArgs {
             intent_hash: context.intent_hash,
-            token_index: 0,
         },
     };
 

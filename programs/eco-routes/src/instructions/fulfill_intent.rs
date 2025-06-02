@@ -168,21 +168,7 @@ pub fn fulfill_intent<'info>(
         ctx.bumps.intent_fulfillment_marker,
     );
 
-    hyperlane::dispatch_fulfillment_message(
-        &route,
-        &reward,
-        &intent_hash,
-        solver,
-        &ctx.accounts.mailbox_program,
-        &ctx.accounts.outbox_pda,
-        &ctx.accounts.dispatch_authority,
-        &ctx.accounts.spl_noop_program,
-        &ctx.accounts.payer,
-        &ctx.accounts.unique_message,
-        &ctx.accounts.system_program,
-        &ctx.accounts.dispatched_message_pda,
-        ctx.bumps.dispatch_authority,
-    )
+    hyperlane::dispatch_fulfillment_message(&ctx, &route, &reward, &intent_hash, solver)
 }
 
 fn transfer_route_tokens<'info>(
@@ -261,7 +247,7 @@ fn execute_route_calls<'info>(
     solver: &Signer<'info>,
     execution_authority_bump: u8,
 ) -> Result<Route> {
-    let mut route_calls_accounts = route_calls_accounts.into_iter();
+    let mut route_calls_accounts = route_calls_accounts.iter();
     let (call_accounts, svm_call_datas, instructions): (Vec<_>, Vec<_>, Vec<_>) = route
         .calls
         .iter()
@@ -301,7 +287,7 @@ fn execute_route_calls<'info>(
         .try_for_each(|(call_accounts, instruction)| {
             invoke_signed(
                 &instruction,
-                &call_accounts,
+                call_accounts,
                 &[&[
                     b"execution_authority",
                     route.salt.as_ref(),
@@ -357,8 +343,8 @@ fn validate_intent_hash(route: &Route, reward: &Reward, expected: &[u8; 32]) -> 
     Ok(())
 }
 
-fn mark_fulfillment<'info>(
-    marker: &mut Account<'info, IntentFulfillmentMarker>,
+fn mark_fulfillment(
+    marker: &mut Account<IntentFulfillmentMarker>,
     hash: [u8; 32],
     intent_fulfillment_marker_bump: u8,
 ) {

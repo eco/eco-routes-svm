@@ -1,7 +1,8 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 use borsh::BorshSerialize;
+use std::iter;
 
-use crate::{encoding, error::EcoRoutesError, state::Intent};
+use crate::{encoding, state::Intent};
 
 use super::expected_process_authority;
 
@@ -22,12 +23,12 @@ impl From<AccountMeta> for SerializableAccountMeta {
     }
 }
 
-impl Into<AccountMeta> for SerializableAccountMeta {
-    fn into(self) -> AccountMeta {
+impl From<SerializableAccountMeta> for AccountMeta {
+    fn from(serializable_account_meta: SerializableAccountMeta) -> Self {
         AccountMeta {
-            pubkey: self.pubkey,
-            is_signer: self.is_signer,
-            is_writable: self.is_writable,
+            pubkey: serializable_account_meta.pubkey,
+            is_signer: serializable_account_meta.is_signer,
+            is_writable: serializable_account_meta.is_writable,
         }
     }
 }
@@ -36,7 +37,7 @@ impl Into<AccountMeta> for SerializableAccountMeta {
 pub struct HandleAccountMetas<'info> {
     /// CHECK: simulation only
     #[account(
-        seeds = [b"hyperlane_message_recipient", b"-", b"handle", b"-", b"account_metas"], 
+        seeds = [b"hyperlane_message_recipient", b"-", b"handle", b"-", b"account_metas"],
         bump
     )]
     pub handle_account_metas: AccountInfo<'info>,
@@ -48,22 +49,21 @@ pub fn handle_account_metas(
     _sender: [u8; 32],
     payload: Vec<u8>,
 ) -> Result<()> {
-    let (intent_hashes, _solvers) = encoding::decode_fulfillment_message(&payload)
-        .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
-
-    let mut metas = vec![SerializableAccountMeta::from(AccountMeta::new_readonly(
+    let fulfill_messages = encoding::FulfillMessages::decode(&payload)?;
+    let account_metas: Vec<SerializableAccountMeta> = iter::once(AccountMeta::new_readonly(
         expected_process_authority(),
         true,
-    ))];
+    ))
+    .chain(
+        fulfill_messages
+            .intent_hashes()
+            .into_iter()
+            .map(|intent_hash| AccountMeta::new(Intent::pda(intent_hash).0, false)),
+    )
+    .map(Into::into)
+    .collect();
 
-    for intent_hash in intent_hashes {
-        metas.push(SerializableAccountMeta::from(AccountMeta::new(
-            Intent::pda(intent_hash).0,
-            false,
-        )));
-    }
-
-    set_return_data(&metas.try_to_vec()?);
+    set_return_data(&account_metas.try_to_vec()?);
 
     Ok(())
 }
