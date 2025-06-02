@@ -9,7 +9,7 @@ use crate::{
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_to_refund: u8,
+    pub token_index: u8,
 }
 
 #[derive(Accounts)]
@@ -20,7 +20,7 @@ pub struct RefundIntentSpl<'info> {
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
         constraint = matches!(intent.status, IntentStatus::Funding(_, _) | IntentStatus::Funded) @ EcoRoutesError::NotFunded,
-        constraint = intent.is_expired().unwrap_or(false) @ EcoRoutesError::IntentNotExpired,
+        constraint = intent.is_expired().unwrap_or_default() @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -59,13 +59,13 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    let token_to_refund = intent
+    let token = intent
         .reward
         .tokens
-        .get(args.token_to_refund as usize)
+        .get(args.token_index as usize)
         .ok_or(EcoRoutesError::InvalidTokenIndex)?;
 
-    if mint.key() != Pubkey::new_from_array(token_to_refund.token) {
+    if mint.key() != Pubkey::new_from_array(token.token) {
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
@@ -83,7 +83,6 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         vault.amount,
         mint.decimals,
     )?;
-
     anchor_spl::token_interface::close_account(CpiContext::new_with_signer(
         token_program.to_account_info(),
         anchor_spl::token_interface::CloseAccount {
@@ -94,7 +93,5 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
         &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
     ))?;
 
-    intent.refund_token()?;
-
-    Ok(())
+    intent.refund_token()
 }

@@ -24,14 +24,12 @@ pub fn close_intent(ctx: Context<CloseIntent>) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let payer = &ctx.accounts.payer;
 
-    // the check is against a variable number of reward tokens so we cannot use matches! in our constraint
-    if let IntentStatus::Claimed(false, claimed_token_count) = intent.status {
-        if claimed_token_count != intent.reward.tokens.len() as u8 {
-            return Err(EcoRoutesError::IntentStillFunded.into());
+    match intent.status {
+        IntentStatus::Claimed(true, claimed_token_count)
+            if claimed_token_count == intent.reward.tokens.len() as u8 =>
+        {
+            intent.close(payer.to_account_info())
         }
+        _ => Err(EcoRoutesError::IntentStillFunded.into()),
     }
-
-    intent.close(payer.to_account_info())?;
-
-    Ok(())
 }

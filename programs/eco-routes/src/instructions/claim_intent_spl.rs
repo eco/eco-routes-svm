@@ -9,7 +9,7 @@ use crate::{
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ClaimIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_to_claim: u8,
+    pub token_index: u8,
 }
 
 #[derive(Accounts)]
@@ -41,7 +41,7 @@ pub struct ClaimIntentSpl<'info> {
 
     pub mint: InterfaceAccount<'info, Mint>,
 
-    #[account(constraint = claimer.key() == Pubkey::new_from_array(intent.solver.unwrap()) @ EcoRoutesError::InvalidClaimer)]
+    #[account(constraint = intent.solver.map(Pubkey::new_from_array).is_some_and(|solver| claimer.key() == solver) @ EcoRoutesError::InvalidClaimer)]
     pub claimer: Signer<'info>,
 
     #[account(mut)]
@@ -59,13 +59,13 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    let token_to_claim = intent
+    let token = intent
         .reward
         .tokens
-        .get(args.token_to_claim as usize)
+        .get(args.token_index as usize)
         .ok_or(EcoRoutesError::InvalidTokenIndex)?;
 
-    if mint.key() != Pubkey::new_from_array(token_to_claim.token) {
+    if mint.key() != Pubkey::new_from_array(token.token) {
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
@@ -83,7 +83,6 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
         vault.amount,
         mint.decimals,
     )?;
-
     anchor_spl::token_interface::close_account(CpiContext::new_with_signer(
         token_program.to_account_info(),
         anchor_spl::token_interface::CloseAccount {
@@ -94,7 +93,5 @@ pub fn claim_intent_spl(ctx: Context<ClaimIntentSpl>, args: ClaimIntentSplArgs) 
         &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
     ))?;
 
-    intent.claim_token()?;
-
-    Ok(())
+    intent.claim_token()
 }

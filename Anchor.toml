@@ -6,13 +6,13 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-eco_routes = "3zbEiMYyf4y1bGsVBAzKrXVzMndRQdTMDgx3aKCs8BHs"
+eco_routes = "J1Lfg3UWyGR1Z7BrBtjHFthxTVstGigLvAJ1wr9uSvRz"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "Localnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

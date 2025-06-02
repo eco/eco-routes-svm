@@ -9,7 +9,7 @@ use crate::{
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FundIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_to_fund: u8,
+    pub token_index: u8,
 }
 
 #[derive(Accounts)]
@@ -59,31 +59,26 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
     let funder = &ctx.accounts.funder;
     let token_program = &ctx.accounts.token_program;
 
-    let token_to_fund = intent
+    let token = intent
         .reward
         .tokens
-        .get(args.token_to_fund as usize)
+        .get(args.token_index as usize)
         .ok_or(EcoRoutesError::InvalidTokenIndex)?;
 
-    if mint.key() != Pubkey::new_from_array(token_to_fund.token) {
+    if mint.key() != Pubkey::new_from_array(token.token) {
         return Err(EcoRoutesError::InvalidMint.into());
     }
 
-    anchor_spl::token_interface::transfer_checked(
-        CpiContext::new(
-            token_program.to_account_info(),
-            anchor_spl::token_interface::TransferChecked {
-                from: funder_token.to_account_info(),
-                mint: mint.to_account_info(),
-                to: vault.to_account_info(),
-                authority: funder.to_account_info(),
-            },
-        ),
-        token_to_fund.amount,
-        mint.decimals,
-    )?;
+    let ctx = CpiContext::new(
+        token_program.to_account_info(),
+        anchor_spl::token_interface::TransferChecked {
+            from: funder_token.to_account_info(),
+            mint: mint.to_account_info(),
+            to: vault.to_account_info(),
+            authority: funder.to_account_info(),
+        },
+    );
+    anchor_spl::token_interface::transfer_checked(ctx, token.amount, mint.decimals)?;
 
-    intent.fund_token()?;
-
-    Ok(())
+    intent.fund_token()
 }

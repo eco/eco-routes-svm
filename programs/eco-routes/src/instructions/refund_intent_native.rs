@@ -18,13 +18,13 @@ pub struct RefundIntentNative<'info> {
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
         constraint = matches!(intent.status, IntentStatus::Funding(true, _) | IntentStatus::Funded) @ EcoRoutesError::NotFunded,
-        constraint = intent.is_expired().unwrap_or(false) @ EcoRoutesError::IntentNotExpired,
+        constraint = intent.is_expired().unwrap_or_default() @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
 
     #[account(
         mut,
-        constraint = refundee.key() == intent.reward.creator @ EcoRoutesError::InvalidRefundee
+        address = intent.reward.creator @ EcoRoutesError::InvalidRefundee
     )]
     pub refundee: Signer<'info>,
 
@@ -43,7 +43,5 @@ pub fn refund_intent_native(
     **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
     **refundee.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;
 
-    intent.refund_native()?;
-
-    Ok(())
+    intent.refund_native()
 }

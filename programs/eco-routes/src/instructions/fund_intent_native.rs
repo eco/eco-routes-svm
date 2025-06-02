@@ -24,8 +24,6 @@ pub struct FundIntentNative<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
 
-    pub payer: Signer<'info>,
-
     pub system_program: Program<'info, System>,
 }
 
@@ -36,9 +34,9 @@ pub fn fund_intent_native(
     let intent = &mut ctx.accounts.intent;
     let funder = &ctx.accounts.funder;
 
-    let native_funded_lamports = intent.rent_exempt_lamports(&intent.to_account_info())?;
+    let spendable_lamports = intent.spendable_lamports(&intent.to_account_info())?;
 
-    if native_funded_lamports < intent.reward.native_amount {
+    if spendable_lamports < intent.reward.native_amount {
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -47,11 +45,9 @@ pub fn fund_intent_native(
                     to: intent.to_account_info(),
                 },
             ),
-            intent.reward.native_amount - native_funded_lamports,
+            intent.reward.native_amount - spendable_lamports,
         )?;
     }
 
-    intent.fund_native()?;
-
-    Ok(())
+    intent.fund_native()
 }
