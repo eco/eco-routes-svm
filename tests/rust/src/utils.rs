@@ -1,5 +1,6 @@
+use crate::{helpers, svm_to_svm_e2e::spl_noop};
 use borsh::{BorshDeserialize, BorshSerialize};
-
+use core::include_bytes;
 use litesvm::LiteSVM;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_message::Message;
@@ -8,12 +9,10 @@ use solana_sdk::{
 };
 use solana_transaction::Transaction;
 
-use crate::{helpers, svm_to_svm_e2e::spl_noop};
-
-const MAILBOX_BIN: &[u8] = include_bytes!("../../bins/mailbox.so");
-const MULTISIG_ISM_BIN: &[u8] = include_bytes!("../../bins/multisig_ism.so");
-const ECO_ROUTES_BIN: &[u8] = include_bytes!("../../target/deploy/eco_routes.so");
-const SPL_NOOP_BIN: &[u8] = include_bytes!("../../bins/noop.so");
+const MAILBOX_BIN: &[u8] = include_bytes!("../../../bins/mailbox.so");
+const MULTISIG_ISM_BIN: &[u8] = include_bytes!("../../../bins/multisig_ism.so");
+const ECO_ROUTES_BIN: &[u8] = include_bytes!("../../../target/deploy/eco_routes.so");
+const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 #[derive(BorshDeserialize, BorshSerialize, Debug, PartialEq)]
 pub enum MailboxInstruction {

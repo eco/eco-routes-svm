@@ -29,7 +29,7 @@ pub mod spl_noop {
 }
 
 use crate::{
-    helpers::{self, sol_amount, usdc_amount},
+    helpers::{self, sol_amount, usdc_amount, usdc_decimals},
     utils,
 };
 
@@ -229,7 +229,7 @@ impl<'a> Context<'a> {
         fn get_token_balance(svm: &LiteSVM, token_address: Pubkey) -> u64 {
             svm.get_account(&token_address)
                 .map(|a| {
-                    spl_token::state::Account::unpack(&a.data)
+                    spl_token_2022::state::Account::unpack(&a.data)
                         .ok()
                         .map(|a| a.amount)
                 })
@@ -256,30 +256,34 @@ impl<'a> Context<'a> {
 
         let source_user_usdc = get_token_balance(
             self.source_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.source_user.pubkey(),
                 &self.source_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
         let destination_user_usdc = get_token_balance(
             self.destination_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.destination_user.pubkey(),
                 &self.destination_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
         let source_solver_usdc = get_token_balance(
             self.source_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.solver.pubkey(),
                 &self.source_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
         let destination_solver_usdc = get_token_balance(
             self.destination_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.solver.pubkey(),
                 &self.destination_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
 
@@ -464,7 +468,7 @@ impl<'a> Context<'a> {
         fn get_token_balance(svm: &LiteSVM, token_address: Pubkey) -> u64 {
             svm.get_account(&token_address)
                 .map(|a| {
-                    spl_token::state::Account::unpack(&a.data)
+                    spl_token_2022::state::Account::unpack(&a.data)
                         .map(|a| a.amount)
                         .unwrap_or(0)
                 })
@@ -490,30 +494,34 @@ impl<'a> Context<'a> {
 
         let source_user_usdc = get_token_balance(
             self.source_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.source_user.pubkey(),
                 &self.source_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
         let destination_user_usdc = get_token_balance(
             self.destination_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.destination_user.pubkey(),
                 &self.destination_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
         let source_solver_usdc = get_token_balance(
             self.source_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.solver.pubkey(),
                 &self.source_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
         let destination_solver_usdc = get_token_balance(
             self.destination_svm,
-            spl_associated_token_account::get_associated_token_address(
+            spl_associated_token_account::get_associated_token_address_with_program_id(
                 &self.solver.pubkey(),
                 &self.destination_usdc_mint.pubkey(),
+                &spl_token_2022::ID,
             ),
         );
 
@@ -585,12 +593,12 @@ fn initialize_context<'a>(
 
     // Initialize mint accounts
 
-    let usdc_mint_data = &mut [0u8; spl_token::state::Mint::LEN];
-    spl_token::state::Mint::pack(
-        spl_token::state::Mint {
-            decimals: 6,
+    let usdc_mint_data = &mut [0u8; spl_token_2022::state::Mint::LEN];
+    spl_token_2022::state::Mint::pack(
+        spl_token_2022::state::Mint {
+            decimals: usdc_decimals(),
             is_initialized: true,
-            ..spl_token::state::Mint::default()
+            ..spl_token_2022::state::Mint::default()
         },
         usdc_mint_data,
     )?;
@@ -598,32 +606,34 @@ fn initialize_context<'a>(
     helpers::write_account_re(
         source_svm,
         source_usdc_mint.pubkey(),
-        spl_token::ID,
+        spl_token_2022::ID,
         usdc_mint_data.to_vec(),
     )?;
 
     helpers::write_account_re(
         destination_svm,
         destination_usdc_mint.pubkey(),
-        spl_token::ID,
+        spl_token_2022::ID,
         usdc_mint_data.to_vec(),
     )?;
 
     // Initialize token accounts
 
-    let source_user_usdc_token_pubkey = spl_associated_token_account::get_associated_token_address(
-        &source_user.pubkey(),
-        &source_usdc_mint.pubkey(),
-    );
+    let source_user_usdc_token_pubkey =
+        spl_associated_token_account::get_associated_token_address_with_program_id(
+            &source_user.pubkey(),
+            &source_usdc_mint.pubkey(),
+            &spl_token_2022::ID,
+        );
 
-    let source_user_usdc_token_data = &mut [0u8; spl_token::state::Account::LEN];
-    spl_token::state::Account::pack(
-        spl_token::state::Account {
+    let source_user_usdc_token_data = &mut [0u8; spl_token_2022::state::Account::LEN];
+    spl_token_2022::state::Account::pack(
+        spl_token_2022::state::Account {
             amount: usdc_amount(5.0),
             mint: source_usdc_mint.pubkey(),
             owner: source_user.pubkey(),
-            state: spl_token::state::AccountState::Initialized,
-            ..spl_token::state::Account::default()
+            state: spl_token_2022::state::AccountState::Initialized,
+            ..spl_token_2022::state::Account::default()
         },
         source_user_usdc_token_data,
     )?;
@@ -631,24 +641,25 @@ fn initialize_context<'a>(
     helpers::write_account_re(
         source_svm,
         source_user_usdc_token_pubkey,
-        spl_token::ID,
+        spl_token_2022::ID,
         source_user_usdc_token_data.to_vec(),
     )?;
 
     let solver_source_usdc_token_pubkey =
-        spl_associated_token_account::get_associated_token_address(
+        spl_associated_token_account::get_associated_token_address_with_program_id(
             &solver.pubkey(),
             &source_usdc_mint.pubkey(),
+            &spl_token_2022::ID,
         );
 
-    let solver_source_usdc_token_data = &mut [0u8; spl_token::state::Account::LEN];
-    spl_token::state::Account::pack(
-        spl_token::state::Account {
+    let solver_source_usdc_token_data = &mut [0u8; spl_token_2022::state::Account::LEN];
+    spl_token_2022::state::Account::pack(
+        spl_token_2022::state::Account {
             amount: usdc_amount(0.0),
             mint: source_usdc_mint.pubkey(),
             owner: solver.pubkey(),
-            state: spl_token::state::AccountState::Initialized,
-            ..spl_token::state::Account::default()
+            state: spl_token_2022::state::AccountState::Initialized,
+            ..spl_token_2022::state::Account::default()
         },
         solver_source_usdc_token_data,
     )?;
@@ -656,24 +667,25 @@ fn initialize_context<'a>(
     helpers::write_account_re(
         source_svm,
         solver_source_usdc_token_pubkey,
-        spl_token::ID,
+        spl_token_2022::ID,
         solver_source_usdc_token_data.to_vec(),
     )?;
 
     let solver_destination_usdc_token_pubkey =
-        spl_associated_token_account::get_associated_token_address(
+        spl_associated_token_account::get_associated_token_address_with_program_id(
             &solver.pubkey(),
             &destination_usdc_mint.pubkey(),
+            &spl_token_2022::ID,
         );
 
-    let solver_destination_usdc_token_data = &mut [0u8; spl_token::state::Account::LEN];
-    spl_token::state::Account::pack(
-        spl_token::state::Account {
+    let solver_destination_usdc_token_data = &mut [0u8; spl_token_2022::state::Account::LEN];
+    spl_token_2022::state::Account::pack(
+        spl_token_2022::state::Account {
             amount: usdc_amount(5.0),
             mint: destination_usdc_mint.pubkey(),
             owner: solver.pubkey(),
-            state: spl_token::state::AccountState::Initialized,
-            ..spl_token::state::Account::default()
+            state: spl_token_2022::state::AccountState::Initialized,
+            ..spl_token_2022::state::Account::default()
         },
         solver_destination_usdc_token_data,
     )?;
@@ -681,7 +693,7 @@ fn initialize_context<'a>(
     helpers::write_account_re(
         destination_svm,
         solver_destination_usdc_token_pubkey,
-        spl_token::ID,
+        spl_token_2022::ID,
         solver_destination_usdc_token_data.to_vec(),
     )?;
 
@@ -696,22 +708,26 @@ fn initialize_context<'a>(
             &SOLVER_PLACEHOLDER_PUBKEY,
             &destination_user.pubkey(),
             &destination_usdc_mint.pubkey(),
-            &spl_token::ID,
+            &spl_token_2022::ID,
         );
 
-    let mut transfer_instruction = spl_token::instruction::transfer(
-        &spl_token::ID,
-        &spl_associated_token_account::get_associated_token_address(
+    let mut transfer_instruction = spl_token_2022::instruction::transfer_checked(
+        &spl_token_2022::ID,
+        &spl_associated_token_account::get_associated_token_address_with_program_id(
             &execution_authority_pubkey,
             &destination_usdc_mint.pubkey(),
+            &spl_token_2022::ID,
         ),
-        &spl_associated_token_account::get_associated_token_address(
+        &destination_usdc_mint.pubkey(),
+        &spl_associated_token_account::get_associated_token_address_with_program_id(
             &destination_user.pubkey(),
             &destination_usdc_mint.pubkey(),
+            &spl_token_2022::ID,
         ),
         &execution_authority_pubkey,
         &[],
         usdc_amount(5.0),
+        usdc_decimals(),
     )?;
 
     transfer_instruction.accounts.iter_mut().for_each(|a| {
@@ -749,7 +765,7 @@ fn initialize_context<'a>(
                 .try_to_vec()?,
             },
             Call {
-                destination: spl_token::ID.to_bytes(),
+                destination: spl_token_2022::ID.to_bytes(),
                 calldata: SvmCallDataWithAccountMetas {
                     svm_call_data: SvmCallData {
                         instruction_data: transfer_instruction.data,
@@ -896,9 +912,10 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                         funder: context.source_user.pubkey(),
                         payer: context.fee_payer.pubkey(),
                         system_program: solana_system_interface::program::ID,
-                        funder_token: spl_associated_token_account::get_associated_token_address(
+                        funder_token: spl_associated_token_account::get_associated_token_address_with_program_id(
                             &context.source_user.pubkey(),
                             &context.source_usdc_mint.pubkey(),
+                            &spl_token_2022::ID
                         ),
                         vault: Pubkey::find_program_address(
                             &[
@@ -910,7 +927,7 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                         )
                         .0,
                         mint: context.source_usdc_mint.pubkey(),
-                        token_program: spl_token::ID,
+                        token_program: spl_token_2022::ID,
                     }
                     .to_account_metas(None),
                     data: fund_intent_spl_args.data(),
@@ -980,7 +997,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                 &context.solver.pubkey(),
                 &execution_authority_key(&context.route.salt).0,
                 &Pubkey::new_from_array(t.token),
-                &spl_token::ID,
+                &spl_token_2022::ID,
             )
         })
         .collect::<Vec<_>>();
@@ -1017,17 +1034,19 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                             is_writable: false,
                         },
                         AccountMeta {
-                            pubkey: spl_associated_token_account::get_associated_token_address(
+                            pubkey: spl_associated_token_account::get_associated_token_address_with_program_id(
                                 &context.solver.pubkey(),
                                 &Pubkey::new_from_array(t.token),
+                                &spl_token_2022::ID,
                             ),
                             is_signer: false,
                             is_writable: true,
                         },
                         AccountMeta {
-                            pubkey: spl_associated_token_account::get_associated_token_address(
+                            pubkey: spl_associated_token_account::get_associated_token_address_with_program_id(
                                 &execution_authority_key(&context.route.salt).0,
                                 &Pubkey::new_from_array(t.token),
+                                &spl_token_2022::ID,
                             ),
                             is_signer: false,
                             is_writable: true,
@@ -1092,21 +1111,25 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         .send_transaction(fulfill_tx)
         .map_err(|e| anyhow::anyhow!("Failed to send transaction: {:?}", e))?;
 
-    let destination_usdc_token = spl_associated_token_account::get_associated_token_address(
-        &context.destination_user.pubkey(),
-        &context.destination_usdc_mint.pubkey(),
-    );
+    let destination_usdc_token =
+        spl_associated_token_account::get_associated_token_address_with_program_id(
+            &context.destination_user.pubkey(),
+            &context.destination_usdc_mint.pubkey(),
+            &spl_token_2022::ID,
+        );
 
     let destination_usdc_token_data = context
         .destination_svm
         .get_account(&destination_usdc_token)
         .ok_or_else(|| anyhow::anyhow!("destination usdc token account missing"))?;
 
-    let destination_usdc_token_amount =
-        spl_token::state::Account::unpack(&destination_usdc_token_data.data)?;
+    let destination_usdc_token_account = spl_token_2022::extension::StateWithExtensions::<
+        spl_token_2022::state::Account,
+    >::unpack(&destination_usdc_token_data.data)?
+    .base;
 
     assert_eq!(
-        destination_usdc_token_amount.amount,
+        destination_usdc_token_account.amount,
         usdc_amount(5.0),
         "destination usdc token amount should be 5"
     );
@@ -1291,12 +1314,13 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                             &eco_routes::ID,
                         )
                         .0,
-                        claimer_token: spl_associated_token_account::get_associated_token_address(
+                        claimer_token: spl_associated_token_account::get_associated_token_address_with_program_id(
                             &context.solver.pubkey(),
                             &context.source_usdc_mint.pubkey(),
+                            &spl_token_2022::ID
                         ),
                         mint: context.source_usdc_mint.pubkey(),
-                        token_program: spl_token::ID,
+                        token_program: spl_token_2022::ID,
                     }
                     .to_account_metas(None),
                     data: claim_intent_spl_args.data(),

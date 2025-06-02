@@ -215,7 +215,6 @@ describe("SVM -> EVM e2e", () => {
       .accountsStrict({
         intent,
         funder: sourceUser.publicKey,
-        payer: feePayer.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -224,7 +223,7 @@ describe("SVM -> EVM e2e", () => {
     const fundSplIx = await program.methods
       .fundIntentSpl({
         intentHash: Array.from(intentHash) as number[],
-        tokenToFund: 0, // USDC reward index
+        tokenIndex: 0, // USDC reward index
       })
       .accountsStrict({
         intent,
@@ -362,7 +361,7 @@ describe("SVM -> EVM e2e", () => {
     const claimSplIx = await program.methods
       .claimIntentSpl({
         intentHash: Array.from(intentHash) as number[],
-        tokenToClaim: 0,
+        tokenIndex: 0,
       })
       .accountsStrict({
         intent,
