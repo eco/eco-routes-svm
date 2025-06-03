@@ -19,6 +19,7 @@ anchor-debug = []
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 anchor-spl = "0.31.1"
+derive_more = { version = "2.0.1", features = ["deref"] }
 ethers-core = "2.0.14"
 itertools = "0.14.0"
 tiny-keccak = "2.0.2"

@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use itertools::izip;
 
 use crate::{encoding, error::EcoRoutesError, state::Intent};
 
@@ -29,23 +28,18 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
     sender: [u8; 32],
     payload: Vec<u8>,
 ) -> Result<()> {
-    let (intent_hashes, solvers) = encoding::decode_fulfillment_message(&payload)
-        .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
+    let fulfill_messages = encoding::FulfillMessages::decode(&payload)?;
     let accounts: Vec<_> = ctx.remaining_accounts.iter().collect();
 
     require!(
-        intent_hashes.len() == solvers.len(),
-        EcoRoutesError::InvalidHandlePayload
-    );
-    require!(
-        intent_hashes.len() == accounts.len(),
-        EcoRoutesError::InvalidHandlePayload
+        fulfill_messages.len() == accounts.len(),
+        EcoRoutesError::InvalidFulfillMessage
     );
 
-    for (intent_hash, solver, account) in izip!(intent_hashes, solvers, accounts) {
+    for ((intent_hash, solver), account) in fulfill_messages.iter().zip(accounts) {
         require_keys_eq!(
             account.key(),
-            Intent::pda(intent_hash).0,
+            Intent::pda(*intent_hash).0,
             EcoRoutesError::InvalidIntent
         );
         require!(account.is_writable, EcoRoutesError::InvalidIntent);
@@ -58,7 +52,7 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
             EcoRoutesError::InvalidOrigin
         );
 
-        intent.fulfill(solver)?;
+        intent.fulfill(*solver)?;
         intent.exit(ctx.program_id)?;
     }
 

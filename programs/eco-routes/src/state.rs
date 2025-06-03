@@ -185,6 +185,10 @@ impl Intent {
         Ok(self.reward.deadline < Clock::get()?.unix_timestamp)
     }
 
+    fn token(&self, token: &[u8; 32]) -> Option<&TokenAmount> {
+        self.reward.tokens.iter().find(|t| t.token == *token)
+    }
+
     pub fn fund_native(&mut self) -> Result<()> {
         let reward_token_count = self.reward.tokens.len() as u8;
 
@@ -203,7 +207,7 @@ impl Intent {
         }
     }
 
-    pub fn fund_token(&mut self) -> Result<()> {
+    pub fn fund_token(&mut self, token: &[u8; 32]) -> Result<&TokenAmount> {
         let reward_token_count = self.reward.tokens.len() as u8;
 
         match self.status {
@@ -211,14 +215,14 @@ impl Intent {
                 if funded_token_count + 1 == reward_token_count && native_funded =>
             {
                 self.status = IntentStatus::Funded;
-                Ok(())
             }
             IntentStatus::Funding(native_funded, funded_token_count) => {
                 self.status = IntentStatus::Funding(native_funded, funded_token_count + 1);
-                Ok(())
             }
-            _ => Err(EcoRoutesError::NotInFundingPhase.into()),
+            _ => return Err(EcoRoutesError::NotInFundingPhase.into()),
         }
+
+        Ok(self.token(token).ok_or(EcoRoutesError::InvalidToken)?)
     }
 
     pub fn refund_native(&mut self) -> Result<()> {
@@ -235,18 +239,18 @@ impl Intent {
         }
     }
 
-    pub fn refund_token(&mut self) -> Result<()> {
+    pub fn refund_token(&mut self, token: &[u8; 32]) -> Result<&TokenAmount> {
         match self.status {
             IntentStatus::Funding(native_funded, funded_token_count) if funded_token_count > 0 => {
                 self.status = IntentStatus::Funding(native_funded, funded_token_count - 1);
-                Ok(())
             }
             IntentStatus::Funded => {
                 self.status = IntentStatus::Funding(true, self.reward.tokens.len() as u8 - 1);
-                Ok(())
             }
-            _ => Err(EcoRoutesError::NotInRefundingPhase.into()),
+            _ => return Err(EcoRoutesError::NotInRefundingPhase.into()),
         }
+
+        Ok(self.token(token).ok_or(EcoRoutesError::InvalidToken)?)
     }
 
     pub fn claim_native(&mut self) -> Result<()> {
@@ -263,20 +267,20 @@ impl Intent {
         }
     }
 
-    pub fn claim_token(&mut self) -> Result<()> {
+    pub fn claim_token(&mut self, token: &[u8; 32]) -> Result<&TokenAmount> {
         match self.status {
             IntentStatus::Claimed(native_claimed, claimed_token_count)
-                if claimed_token_count + 1 <= self.reward.tokens.len() as u8 =>
+                if claimed_token_count < self.reward.tokens.len() as u8 =>
             {
                 self.status = IntentStatus::Claimed(native_claimed, claimed_token_count + 1);
-                Ok(())
             }
             IntentStatus::Fulfilled => {
                 self.status = IntentStatus::Claimed(false, 1);
-                Ok(())
             }
-            _ => Err(EcoRoutesError::NotFulfilled.into()),
+            _ => return Err(EcoRoutesError::NotFulfilled.into()),
         }
+
+        Ok(self.token(token).ok_or(EcoRoutesError::InvalidToken)?)
     }
 
     pub fn fulfill(&mut self, solver: [u8; 32]) -> Result<()> {

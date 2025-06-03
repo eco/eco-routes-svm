@@ -9,7 +9,6 @@ use crate::{
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_index: u8,
 }
 
 #[derive(Accounts)]
@@ -51,7 +50,7 @@ pub struct RefundIntentSpl<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArgs) -> Result<()> {
+pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, _args: RefundIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let vault = &mut ctx.accounts.vault;
     let refundee_token = &mut ctx.accounts.refundee_token;
@@ -59,15 +58,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    let token = intent
-        .reward
-        .tokens
-        .get(args.token_index as usize)
-        .ok_or(EcoRoutesError::InvalidTokenIndex)?;
-
-    if mint.key() != Pubkey::new_from_array(token.token) {
-        return Err(EcoRoutesError::InvalidMint.into());
-    }
+    intent.refund_token(mint.key().as_array())?;
 
     anchor_spl::token_interface::transfer_checked(
         CpiContext::new_with_signer(
@@ -91,7 +82,5 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, args: RefundIntentSplArg
             authority: intent.to_account_info(),
         },
         &[&[b"intent", intent.intent_hash.as_ref(), &[intent.bump]]],
-    ))?;
-
-    intent.refund_token()
+    ))
 }

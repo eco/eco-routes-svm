@@ -9,7 +9,6 @@ use crate::{
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FundIntentSplArgs {
     pub intent_hash: [u8; 32],
-    pub token_index: u8,
 }
 
 #[derive(Accounts)]
@@ -51,7 +50,7 @@ pub struct FundIntentSpl<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> Result<()> {
+pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, _args: FundIntentSplArgs) -> Result<()> {
     let intent = &mut ctx.accounts.intent;
     let funder_token = &mut ctx.accounts.funder_token;
     let vault = &mut ctx.accounts.vault;
@@ -59,26 +58,19 @@ pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> 
     let funder = &ctx.accounts.funder;
     let token_program = &ctx.accounts.token_program;
 
-    let token = intent
-        .reward
-        .tokens
-        .get(args.token_index as usize)
-        .ok_or(EcoRoutesError::InvalidTokenIndex)?;
+    let token = intent.fund_token(mint.key().as_array())?;
 
-    if mint.key() != Pubkey::new_from_array(token.token) {
-        return Err(EcoRoutesError::InvalidMint.into());
-    }
-
-    let ctx = CpiContext::new(
-        token_program.to_account_info(),
-        anchor_spl::token_interface::TransferChecked {
-            from: funder_token.to_account_info(),
-            mint: mint.to_account_info(),
-            to: vault.to_account_info(),
-            authority: funder.to_account_info(),
-        },
-    );
-    anchor_spl::token_interface::transfer_checked(ctx, token.amount, mint.decimals)?;
-
-    intent.fund_token()
+    anchor_spl::token_interface::transfer_checked(
+        CpiContext::new(
+            token_program.to_account_info(),
+            anchor_spl::token_interface::TransferChecked {
+                from: funder_token.to_account_info(),
+                mint: mint.to_account_info(),
+                to: vault.to_account_info(),
+                authority: funder.to_account_info(),
+            },
+        ),
+        token.amount,
+        mint.decimals,
+    )
 }

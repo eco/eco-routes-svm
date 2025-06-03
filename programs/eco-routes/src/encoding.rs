@@ -1,3 +1,5 @@
+use anchor_lang::{require, Result};
+use derive_more::Deref;
 use ethers_core::abi::{decode, encode, ParamType, Token};
 use tiny_keccak::{Hasher, Keccak};
 
@@ -121,42 +123,63 @@ pub fn get_intent_hash(route: &Route, reward: &Reward) -> [u8; 32] {
     use anchor_lang::solana_program::keccak;
     keccak::hashv(&[&hash_route(route), &hash_reward(reward)]).0
 }
+#[derive(Deref)]
+pub struct FulfillMessages(Vec<([u8; 32], [u8; 32])>);
 
-pub fn encode_fulfillment_message(intent_hashes: &[[u8; 32]], solvers: &[[u8; 32]]) -> Vec<u8> {
-    assert_eq!(intent_hashes.len(), solvers.len(), "length mismatch");
+impl FulfillMessages {
+    pub fn new(intent_hashes: Vec<[u8; 32]>, solvers: Vec<[u8; 32]>) -> Result<Self> {
+        require!(
+            intent_hashes.len() == solvers.len(),
+            EcoRoutesError::InvalidFulfillMessage
+        );
 
-    let hash_tokens = intent_hashes
-        .iter()
-        .map(|h| Token::FixedBytes(h.to_vec()))
-        .collect::<Vec<_>>();
-
-    let solver_tokens = solvers
-        .iter()
-        .map(|c| Token::FixedBytes(c.to_vec()))
-        .collect::<Vec<_>>();
-
-    encode(&[Token::Array(hash_tokens), Token::Array(solver_tokens)])
-}
-
-pub fn decode_fulfillment_message(
-    data: &[u8],
-) -> anchor_lang::Result<(Vec<[u8; 32]>, Vec<[u8; 32]>)> {
-    let schema_fixed = vec![
-        ParamType::Array(Box::new(ParamType::FixedBytes(32))),
-        ParamType::Array(Box::new(ParamType::FixedBytes(32))),
-    ];
-
-    let tokens = decode(&schema_fixed, data).map_err(|_| EcoRoutesError::InvalidHandlePayload)?;
-
-    if let (Some(Token::Array(h)), Some(Token::Array(c))) = (tokens.get(0), tokens.get(1)) {
-        let hashes = h.iter().filter_map(as_bytes32).collect::<Vec<_>>();
-        let claims = c.iter().filter_map(as_bytes32).collect::<Vec<_>>();
-        if hashes.len() == h.len() && claims.len() == c.len() {
-            return Ok((hashes, claims));
-        }
+        Ok(Self(intent_hashes.into_iter().zip(solvers).collect()))
     }
 
-    Err(EcoRoutesError::InvalidHandlePayload.into())
+    pub fn intent_hashes(&self) -> Vec<[u8; 32]> {
+        self.iter().map(|(intent_hash, _)| *intent_hash).collect()
+    }
+
+    pub fn solvers(&self) -> Vec<[u8; 32]> {
+        self.iter().map(|(_, solver)| *solver).collect()
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let (intent_hashes, solvers) = self
+            .iter()
+            .map(|(intent_hash, solver)| {
+                (
+                    Token::FixedBytes(intent_hash.to_vec()),
+                    Token::FixedBytes(solver.to_vec()),
+                )
+            })
+            .unzip();
+
+        encode(&[Token::Array(intent_hashes), Token::Array(solvers)])
+    }
+
+    pub fn decode(data: &[u8]) -> Result<Self> {
+        let schema_fixed = vec![
+            ParamType::Array(Box::new(ParamType::FixedBytes(32))),
+            ParamType::Array(Box::new(ParamType::FixedBytes(32))),
+        ];
+
+        let tokens =
+            decode(&schema_fixed, data).map_err(|_| EcoRoutesError::InvalidFulfillMessage)?;
+
+        match &tokens[..] {
+            [Token::Array(intent_hashes), Token::Array(solvers)] => {
+                let intent_hashes = intent_hashes
+                    .iter()
+                    .filter_map(as_bytes32)
+                    .collect::<Vec<_>>();
+                let solvers = solvers.iter().filter_map(as_bytes32).collect::<Vec<_>>();
+
+                Self::new(intent_hashes, solvers)
+            }
+            _ => Err(EcoRoutesError::InvalidFulfillMessage.into()),
+        }
+    }
 }
 
 fn as_bytes32(token: &Token) -> Option<[u8; 32]> {
