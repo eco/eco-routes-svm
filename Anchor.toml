@@ -8,6 +8,9 @@ skip-lint = false
 [programs.localnet]
 eco_routes = "J1Lfg3UWyGR1Z7BrBtjHFthxTVstGigLvAJ1wr9uSvRz"
 
+[programs.testnet]
+eco_routes = "aEGzbWJhZ7RX8uCmeG4jVfskQe6eoP7zcdoHmY2PWys"
+
 [programs.devnet]
 eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
 

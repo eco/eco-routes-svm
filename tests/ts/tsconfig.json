@@ -3,6 +3,7 @@
         "target": "es6",
         "module": "CommonJS",
         "moduleResolution": "Node",
+        "resolveJsonModule": true,
         "types": ["node", "mocha", "chai"],
         "lib": ["es2015"],
         "esModuleInterop": true,

@@ -3,7 +3,7 @@
  *     2. Fulfil intent on EVM             (mocked / TODO)
  *     3. Claim on Solana                  (call to devnet program)
  */
-
+import "dotenv/config";
 import {
   AnchorProvider,
   BN,
@@ -31,15 +31,15 @@ import { EcoRoutes } from "../../target/types/eco_routes";
 import { describe, it } from "node:test";
 import { generateIntentHash, usdcAmount, loadKeypairFromFile } from "./utils";
 import {
-  DEVNET_RPC,
   EVM_DOMAIN_ID,
   INBOX_ADDRESS_TESTNET,
   SOLANA_DOMAIN_ID,
   STORAGE_PROVER_ADDRESS_TESTNET,
   TEST_USDC_ADDRESS_TESTNET,
+  TESTNET_RPC,
   USDC_DECIMALS,
 } from "./constants";
-import { ethers, JsonRpcProvider } from "ethers";
+import { ethers, hexlify, JsonRpcProvider } from "ethers";
 import { Inbox__factory, TestERC20__factory } from "./evm-types";
 import {
   addressToBytes32,
@@ -47,22 +47,17 @@ import {
   encodeRoute,
   evmUsdcAmount,
 } from "./evmUtils";
+import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 
-anchor.setProvider(
-  new AnchorProvider(
-    new Connection(DEVNET_RPC, "confirmed"),
-    new anchor.Wallet(Keypair.generate()),
-    { commitment: "confirmed" }
-  )
-);
-
-const provider = anchor.getProvider() as AnchorProvider;
-const connection = provider.connection;
-const program = anchor.workspace.EcoRoutes as Program<EcoRoutes>;
-
-const feePayer = loadKeypairFromFile("../../keys/program_auth.json");
-const sourceUser = Keypair.generate();
-const solver = Keypair.generate();
+const creatorSvm = loadKeypairFromFile("../../keys/program_auth.json");
+const connection = new Connection(TESTNET_RPC, "confirmed");
+const provider = new AnchorProvider(connection, new anchor.Wallet(creatorSvm), {
+  commitment: "confirmed",
+});
+const program = new Program(
+  ecoRoutesIdl as anchor.Idl,
+  provider
+) as Program<EcoRoutes>;
 
 const salt = anchorUtils.bytes.utf8.encode("svm-to-evm-test".padEnd(32, "\0"));
 
@@ -77,8 +72,8 @@ describe("SVM -> EVM e2e", () => {
 
     await createMint(
       connection,
-      feePayer, // payer
-      feePayer.publicKey, // mint authority
+      creatorSvm, // payer
+      creatorSvm.publicKey, // mint authority
       null, // freeze authority
       USDC_DECIMALS, // decimals
       usdcMint, // mint keypair
@@ -89,9 +84,9 @@ describe("SVM -> EVM e2e", () => {
 
     const ata = await createAssociatedTokenAccount(
       connection,
-      feePayer,
+      creatorSvm,
       mockSvmUsdcMint,
-      sourceUser.publicKey,
+      creatorSvm.publicKey,
       {
         commitment: "confirmed",
       }
@@ -99,10 +94,10 @@ describe("SVM -> EVM e2e", () => {
 
     await mintTo(
       connection,
-      feePayer,
+      creatorSvm,
       mockSvmUsdcMint,
       ata,
-      feePayer,
+      creatorSvm,
       usdcAmount(1000), // amount to mint
       [],
       {
@@ -113,9 +108,9 @@ describe("SVM -> EVM e2e", () => {
     // we need the solver to have an associated token account for the Claim SPL ix later
     await createAssociatedTokenAccount(
       connection,
-      feePayer,
+      creatorSvm,
       mockSvmUsdcMint,
-      solver.publicKey,
+      creatorSvm.publicKey,
       { commitment: "confirmed" }
     );
   });
@@ -136,8 +131,8 @@ describe("SVM -> EVM e2e", () => {
     };
 
     reward = {
-      creator: sourceUser.publicKey.toBytes(),
-      prover: Array.from(addressToBytes32(STORAGE_PROVER_ADDRESS_TESTNET)), // or should it be "program.programId"?
+      creator: creatorSvm.publicKey.toBytes(),
+      prover: Array.from(addressToBytes32(STORAGE_PROVER_ADDRESS_TESTNET)),
       tokens: [
         {
           token: Array.from(mockSvmUsdcMint.toBytes()),
@@ -175,8 +170,8 @@ describe("SVM -> EVM e2e", () => {
       })
       .accountsStrict({
         intent,
-        creator: sourceUser.publicKey,
-        payer: feePayer.publicKey,
+        creator: creatorSvm.publicKey,
+        payer: creatorSvm.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -184,12 +179,12 @@ describe("SVM -> EVM e2e", () => {
     let blockhash = await connection.getLatestBlockhash();
     let publishIntentTx = new VersionedTransaction(
       new TransactionMessage({
-        payerKey: feePayer.publicKey,
+        payerKey: creatorSvm.publicKey,
         recentBlockhash: blockhash.blockhash,
         instructions: [publishIx],
       }).compileToV0Message()
     );
-    publishIntentTx.sign([feePayer, sourceUser]);
+    publishIntentTx.sign([creatorSvm]);
 
     const publishIntentTxSignature = await connection.sendRawTransaction(
       publishIntentTx.serialize()
@@ -214,7 +209,7 @@ describe("SVM -> EVM e2e", () => {
       })
       .accountsStrict({
         intent,
-        funder: sourceUser.publicKey,
+        funder: creatorSvm.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -227,12 +222,12 @@ describe("SVM -> EVM e2e", () => {
       })
       .accountsStrict({
         intent,
-        funder: sourceUser.publicKey,
-        payer: feePayer.publicKey,
+        funder: creatorSvm.publicKey,
+        payer: creatorSvm.publicKey,
         systemProgram: SystemProgram.programId,
         funderToken: getAssociatedTokenAddressSync(
           mockSvmUsdcMint,
-          sourceUser.publicKey
+          creatorSvm.publicKey
         ),
         vault,
         mint: mockSvmUsdcMint,
@@ -243,12 +238,12 @@ describe("SVM -> EVM e2e", () => {
     blockhash = await connection.getLatestBlockhash();
     let fundIntentTx = new VersionedTransaction(
       new TransactionMessage({
-        payerKey: feePayer.publicKey,
+        payerKey: creatorSvm.publicKey,
         recentBlockhash: blockhash.blockhash,
         instructions: [fundNativeIx, fundSplIx],
       }).compileToV0Message()
     );
-    fundIntentTx.sign([feePayer, sourceUser]);
+    fundIntentTx.sign([creatorSvm]);
 
     const fundIntentTxSignature = await connection.sendRawTransaction(
       fundIntentTx.serialize()
@@ -269,7 +264,6 @@ describe("SVM -> EVM e2e", () => {
 
   it("Fulfil intent on EVM (mock Hyperlane)", async () => {
     const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
-    const creatorEvm = new ethers.Wallet(process.env.PK_CREATOR!, l2Provider);
     const solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
 
     const usdcEvm = TestERC20__factory.connect(
@@ -278,32 +272,37 @@ describe("SVM -> EVM e2e", () => {
     );
 
     const inbox = Inbox__factory.connect(INBOX_ADDRESS_TESTNET, solverEvm);
-
     const saltHex = "0x" + Buffer.from(salt).toString("hex");
+    const inboxBytes32 = hexlify(addressToBytes32(INBOX_ADDRESS_TESTNET));
+    const evmUsdcBytes32 = hexlify(
+      addressToBytes32(await usdcEvm.getAddress())
+    );
+
     const routeSol = {
       salt: saltHex as `0x${string}`,
       source: SOLANA_DOMAIN_ID,
       destination: EVM_DOMAIN_ID,
-      inbox: INBOX_ADDRESS_TESTNET,
+      inbox: inboxBytes32,
       tokens: [
         {
-          token: await usdcEvm.getAddress(),
+          token: evmUsdcBytes32,
           amount: BigInt(evmUsdcAmount(5)),
         },
       ],
       calls: [] as { target: string; data: string; value: bigint }[],
     };
 
-    const usdcMintAsEvmAddress =
-      "0x" + mockSvmUsdcMint.toBuffer().slice(12).toString("hex");
+    const usdcMintBytes32 = "0x" + mockSvmUsdcMint.toBuffer().toString("hex");
+    const creatorBytes32 =
+      "0x" + creatorSvm.publicKey.toBuffer().toString("hex");
     const rewardSol = {
-      creator: creatorEvm.address,
+      creator: creatorBytes32,
       prover: STORAGE_PROVER_ADDRESS_TESTNET,
       deadline: BigInt(0),
       nativeValue: BigInt(0),
       tokens: [
         {
-          token: usdcMintAsEvmAddress,
+          token: usdcMintBytes32,
           amount: BigInt(usdcAmount(10)),
         },
       ],
@@ -351,8 +350,8 @@ describe("SVM -> EVM e2e", () => {
       })
       .accountsStrict({
         intent,
-        claimer: solver.publicKey,
-        payer: solver.publicKey,
+        claimer: creatorSvm.publicKey,
+        payer: creatorSvm.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -365,13 +364,13 @@ describe("SVM -> EVM e2e", () => {
       })
       .accountsStrict({
         intent,
-        claimer: solver.publicKey,
-        payer: solver.publicKey,
+        claimer: creatorSvm.publicKey,
+        payer: creatorSvm.publicKey,
         systemProgram: SystemProgram.programId,
         vault,
         claimerToken: getAssociatedTokenAddressSync(
           mockSvmUsdcMint,
-          solver.publicKey
+          creatorSvm.publicKey
         ),
         mint: mockSvmUsdcMint,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -381,12 +380,12 @@ describe("SVM -> EVM e2e", () => {
     const blockhash = await connection.getLatestBlockhash();
     let claimIntentTx = new VersionedTransaction(
       new TransactionMessage({
-        payerKey: solver.publicKey,
+        payerKey: creatorSvm.publicKey,
         recentBlockhash: blockhash.blockhash,
         instructions: [claimNativeIx, claimSplIx],
       }).compileToV0Message()
     );
-    claimIntentTx.sign([solver]);
+    claimIntentTx.sign([creatorSvm]);
 
     const claimIntentTxSignature = await connection.sendRawTransaction(
       claimIntentTx.serialize()

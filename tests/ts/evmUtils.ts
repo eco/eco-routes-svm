@@ -21,44 +21,22 @@ export interface Reward {
   tokens: TokenAmount[];
 }
 
+const abi = ethers.AbiCoder.defaultAbiCoder();
+const ROUTE_TYPE =
+  "tuple(bytes32 salt,uint256 source,uint256 destination,bytes32 inbox," +
+  "tuple(bytes32 token,uint256 amount)[] tokens," +
+  "tuple(bytes32 target,bytes data,uint256 value)[] calls)";
+
+const REWARD_TYPE =
+  "tuple(bytes32 creator,bytes32 prover,uint256 deadline,uint256 nativeValue," +
+  "tuple(bytes32 token,uint256 amount)[] tokens)";
+
 export function encodeRoute(route: Route): string {
-  return ethers.solidityPacked(
-    [
-      "bytes32",
-      "uint256",
-      "uint256",
-      "address",
-      "tuple(address token,uint256 amount)[]",
-      "tuple(address target,bytes data,uint256 value)[]",
-    ],
-    [
-      route.salt,
-      route.source,
-      route.destination,
-      route.inbox,
-      route.tokens.map((t) => [t.token, t.amount]),
-      route.calls.map((c) => [c.target, c.data, c.value]),
-    ]
-  );
+  return abi.encode([ROUTE_TYPE], [route]);
 }
 
-export function encodeReward(r: Reward): string {
-  return ethers.solidityPacked(
-    [
-      "address",
-      "address",
-      "uint256",
-      "uint256",
-      "tuple(address token,uint256 amount)[]",
-    ],
-    [
-      r.creator,
-      r.prover,
-      r.deadline,
-      r.nativeValue,
-      r.tokens.map((t) => [t.token, t.amount]),
-    ]
-  );
+export function encodeReward(reward: Reward): string {
+  return abi.encode([REWARD_TYPE], [reward]);
 }
 
 export function hashIntent(routeEnc: string, rewardEnc: string): string {
