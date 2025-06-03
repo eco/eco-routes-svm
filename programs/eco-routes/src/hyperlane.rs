@@ -79,7 +79,7 @@ pub fn dispatch_fulfillment_message<'info>(
             vec![*intent_hash],
             vec![solver.key().to_bytes()],
         )
-        .expect("fulfill messages must be valid with once intent hash and one solver")
+        .expect("fulfill messages must be valid with one intent hash and one solver")
         .encode(),
     });
 
