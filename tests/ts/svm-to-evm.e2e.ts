@@ -39,13 +39,14 @@ import {
   TESTNET_RPC,
   USDC_DECIMALS,
 } from "./constants";
-import { ethers, hexlify, JsonRpcProvider } from "ethers";
+import { ethers, JsonRpcProvider } from "ethers";
 import { Inbox__factory, TestERC20__factory } from "./evm-types";
 import {
-  addressToBytes32,
+  addressToBytes32Hex,
   encodeReward,
   encodeRoute,
   evmUsdcAmount,
+  hex32ToBytes,
 } from "./evmUtils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 
@@ -120,7 +121,7 @@ describe("SVM -> EVM e2e", () => {
       salt,
       sourceDomainId: SOLANA_DOMAIN_ID,
       destinationDomainId: EVM_DOMAIN_ID,
-      inbox: Array.from(addressToBytes32(INBOX_ADDRESS_TESTNET)),
+      inbox: Array.from(addressToBytes32Hex(INBOX_ADDRESS_TESTNET)),
       tokens: [
         {
           token: Array.from(mockSvmUsdcMint.toBytes()),
@@ -132,7 +133,7 @@ describe("SVM -> EVM e2e", () => {
 
     reward = {
       creator: creatorSvm.publicKey.toBytes(),
-      prover: Array.from(addressToBytes32(STORAGE_PROVER_ADDRESS_TESTNET)),
+      prover: Array.from(addressToBytes32Hex(STORAGE_PROVER_ADDRESS_TESTNET)),
       tokens: [
         {
           token: Array.from(mockSvmUsdcMint.toBytes()),
@@ -273,9 +274,11 @@ describe("SVM -> EVM e2e", () => {
 
     const inbox = Inbox__factory.connect(INBOX_ADDRESS_TESTNET, solverEvm);
     const saltHex = "0x" + Buffer.from(salt).toString("hex");
-    const inboxBytes32 = hexlify(addressToBytes32(INBOX_ADDRESS_TESTNET));
-    const evmUsdcBytes32 = hexlify(
-      addressToBytes32(await usdcEvm.getAddress())
+    const inboxBytes32 = hex32ToBytes(
+      addressToBytes32Hex(INBOX_ADDRESS_TESTNET)
+    );
+    const evmUsdcBytes32 = hex32ToBytes(
+      addressToBytes32Hex(await usdcEvm.getAddress())
     );
 
     const routeSol = {
@@ -285,7 +288,7 @@ describe("SVM -> EVM e2e", () => {
       inbox: inboxBytes32,
       tokens: [
         {
-          token: evmUsdcBytes32,
+          token: "0x" + Buffer.from(evmUsdcBytes32).toString("hex"),
           amount: BigInt(evmUsdcAmount(5)),
         },
       ],

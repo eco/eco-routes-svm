@@ -9,11 +9,14 @@ export const MAILBOX_ID_MAINNET = new PublicKey(
 export const MAILBOX_ID_TESTNET = new PublicKey(
   "75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSXS5aR"
 );
+export const MAILBOX_FEE_RECEIVER_TESTNET = new PublicKey(
+  "C5J3aygMoXfZi4t6psSzG1w4favJ6xGeuCyLRuJsqbFk"
+);
 export const SPL_NOOP_ID = new PublicKey(
   "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"
 );
 export const EVM_DOMAIN_ID = 11155111;
-export const SOLANA_DOMAIN_ID = 1399811149;
+export const SOLANA_DOMAIN_ID = 1399811150;
 export const DEVNET_RPC = "https://api.devnet.solana.com";
 export const TESTNET_RPC = "https://api.testnet.solana.com";
 export const USDC_MINT = new PublicKey(

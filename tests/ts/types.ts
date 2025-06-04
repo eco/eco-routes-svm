@@ -1,7 +1,7 @@
 import BN from "bn.js";
 
 export interface TokenAmount {
-  token: Uint8Array; // 32-bytes
+  token: string;
   amount: BN;
 }
 

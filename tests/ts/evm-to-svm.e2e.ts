@@ -30,7 +30,7 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { expect } from "chai";
-import { ethers, hexlify, JsonRpcProvider, Signer } from "ethers";
+import { ethers, JsonRpcProvider, Signer } from "ethers";
 import {
   TestERC20__factory,
   UniversalSource__factory,
@@ -48,9 +48,10 @@ import {
   EVM_DOMAIN_ID,
   TEST_USDC_ADDRESS_TESTNET,
   INTENT_SOURCE_ADDRESS_TESTNET,
-  USDC_DECIMALS,
   STORAGE_PROVER_ADDRESS_TESTNET,
   INBOX_ADDRESS_TESTNET,
+  USDC_DECIMALS,
+  MAILBOX_FEE_RECEIVER_TESTNET,
 } from "./constants";
 import {
   evmUsdcAmount,
@@ -59,10 +60,11 @@ import {
   hashIntent,
   Route,
   Reward,
-  TokenAmount,
-  addressToBytes32,
+  addressToBytes32Hex,
+  hex32ToBytes,
+  hex32ToNums,
 } from "./evmUtils";
-import { loadKeypairFromFile, usdcAmount } from "./utils";
+import { calcProgramHash, loadKeypairFromFile, usdcAmount } from "./utils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 
 const solver = loadKeypairFromFile("../../keys/program_auth.json"); // SVM solver key
@@ -79,8 +81,11 @@ let intentHashBytes!: Uint8Array;
 let route!: Route;
 let reward!: Reward;
 
-// Re-use same 32-byte salt cross-chains
-const salt = anchorUtils.bytes.utf8.encode("evm-svm-e2e".padEnd(32, "\0"));
+const salt = (() => {
+  const bytes = anchorUtils.bytes.utf8.encode("evm-svm-e2e".padEnd(32, "\0"));
+  return bytes.slice(0, 32);
+})();
+const saltHex = "0x" + Buffer.from(salt).toString("hex");
 
 describe("EVM → SVM e2e", () => {
   let usdc: TestERC20;
@@ -151,49 +156,38 @@ describe("EVM → SVM e2e", () => {
       creatorEvm
     );
 
-    const creatorAddress = await creatorEvm.getAddress();
     const intentSourceAddress = await intentSource.getAddress();
-    const usdcAddress = await usdc.getAddress();
-    const testProverAddress = await testProver.getAddress();
 
-    // build Route + Reward structs
-    const saltHex = "0x" + Buffer.from(salt).toString("hex");
-
-    const usdcMintBytes32 = "0x" + mockSvmUsdcMint.toBuffer().toString("hex");
-    const routeTokens: TokenAmount[] = [
-      {
-        token: usdcMintBytes32,
-        amount: BigInt(usdcAmount(5)),
-      },
-    ];
-
-    const evmUsdcBytes32 = hexlify(addressToBytes32(usdcAddress));
-    const rewardTokens: TokenAmount[] = [
-      { token: evmUsdcBytes32, amount: evmUsdcAmount(5) },
-    ];
-
-    const inboxBytes32 = hexlify(addressToBytes32(INBOX_ADDRESS_TESTNET));
-    const creatorBytes32 = hexlify(addressToBytes32(creatorAddress));
-    const proverBytes32 = hexlify(addressToBytes32(testProverAddress));
+    const amountU64 = usdcAmount(5); // 5_000_000
+    const amountU256 = BigInt(amountU64);
 
     route = {
       salt: saltHex,
       source: EVM_DOMAIN_ID,
       destination: SOLANA_DOMAIN_ID,
-      inbox: inboxBytes32,
-      tokens: routeTokens,
+      inbox: addressToBytes32Hex(INBOX_ADDRESS_TESTNET),
+      tokens: [
+        {
+          token: "0x" + mockSvmUsdcMint.toBuffer().toString("hex"),
+          amount: amountU256,
+        },
+      ],
       calls: [],
     };
 
     reward = {
-      creator: creatorBytes32,
-      prover: proverBytes32,
+      creator: addressToBytes32Hex(await creatorEvm.getAddress()),
+      prover: addressToBytes32Hex(STORAGE_PROVER_ADDRESS_TESTNET),
       deadline: BigInt(0),
       nativeValue: BigInt(0),
-      tokens: rewardTokens,
+      tokens: [
+        {
+          token: addressToBytes32Hex(TEST_USDC_ADDRESS_TESTNET),
+          amount: amountU256,
+        },
+      ],
     };
 
-    // allow IntentSource to pull USDC + publishAndFund
     await usdc.approve(intentSourceAddress, evmUsdcAmount(10));
     const publishTx = await intentSource.publishAndFund(
       { reward, route },
@@ -201,11 +195,12 @@ describe("EVM → SVM e2e", () => {
     );
     await publishTx.wait();
 
-    // produce 32-byte intent hash for Solana flow
-    intentHashHex = hashIntent(encodeRoute(route), encodeReward(reward));
-    intentHashBytes = Uint8Array.from(
-      Buffer.from(intentHashHex.slice(2), "hex")
-    );
+    const intentHashSol = calcProgramHash(route, reward);
+    const intentHashEvm = hashIntent(encodeRoute(route), encodeReward(reward));
+    // store the one Solana needs
+    intentHashBytes = intentHashSol;
+    // EVM one for TestProver
+    intentHashHex = intentHashEvm;
 
     expect(intentHashBytes.length).equals(32);
   });
@@ -231,31 +226,42 @@ describe("EVM → SVM e2e", () => {
       MAILBOX_ID_TESTNET
     )[0];
 
+    const uniqueMessage = Keypair.generate();
+
     const dispatchedMessagePda = PublicKey.findProgramAddressSync(
       [
         Buffer.from("hyperlane"),
         Buffer.from("-"),
         Buffer.from("dispatched_message"),
         Buffer.from("-"),
-        Keypair.generate().publicKey.toBuffer(),
+        uniqueMessage.publicKey.toBuffer(),
       ],
       MAILBOX_ID_TESTNET
     )[0];
 
+    const amountBN = new BN(usdcAmount(5));
     const evmUsdcAddress = await usdc.getAddress();
 
-    const uniqueMessage = Keypair.generate();
-
-    const executionAuthorityAta = await createAssociatedTokenAccount(
-      connection,
-      solver,
+    const executionAuthorityAta = getAssociatedTokenAddressSync(
       mockSvmUsdcMint,
       executionAuthority,
-      { commitment: "confirmed" },
-      undefined,
-      undefined,
       true
     );
+    const executionAuthorityAtaData = await connection.getAccountInfo(
+      executionAuthorityAta
+    );
+    if (!executionAuthorityAtaData) {
+      await createAssociatedTokenAccount(
+        connection,
+        solver,
+        mockSvmUsdcMint,
+        executionAuthority,
+        { commitment: "confirmed" },
+        undefined,
+        undefined,
+        true
+      );
+    }
 
     const solverAta = getAssociatedTokenAddressSync(
       mockSvmUsdcMint,
@@ -268,31 +274,59 @@ describe("EVM → SVM e2e", () => {
       { pubkey: executionAuthorityAta, isWritable: true, isSigner: false },
     ];
 
+    const feeIx = anchor.web3.SystemProgram.transfer({
+      fromPubkey: solver.publicKey,
+      toPubkey: MAILBOX_FEE_RECEIVER_TESTNET,
+      lamports: 200_000, // mailbox fee
+    });
+
+    let blockhash = await connection.getLatestBlockhash();
+    const feeTx = new VersionedTransaction(
+      new TransactionMessage({
+        payerKey: solver.publicKey,
+        recentBlockhash: blockhash.blockhash,
+        instructions: [feeIx],
+      }).compileToV0Message()
+    );
+
+    feeTx.sign([solver]);
+    const feeTxSignature = await connection.sendRawTransaction(
+      feeTx.serialize()
+    );
+
+    await connection.confirmTransaction(
+      { signature: feeTxSignature, ...blockhash },
+      "confirmed"
+    );
+    console.log("Paid Mailbox fee tx: ", feeTxSignature);
+
     const fulfillIx = await program.methods
       .fulfillIntent({
         intentHash: Array.from(intentHashBytes),
         route: {
-          salt: Array.from(salt),
+          salt: Array.from(Buffer.from(saltHex.slice(2), "hex")),
           sourceDomainId: EVM_DOMAIN_ID,
           destinationDomainId: SOLANA_DOMAIN_ID,
-          inbox: Array.from(addressToBytes32(INBOX_ADDRESS_TESTNET)),
+          inbox: hex32ToNums(route.inbox),
           tokens: [
             {
               token: Array.from(mockSvmUsdcMint.toBytes()),
-              amount: new BN(usdcAmount(5)),
+              amount: amountBN,
             },
           ],
           calls: [],
         },
         reward: {
           creator: new PublicKey(
-            addressToBytes32(await creatorEvm.getAddress())
+            hex32ToBytes(addressToBytes32Hex(await creatorEvm.getAddress()))
           ),
-          prover: Array.from(addressToBytes32(STORAGE_PROVER_ADDRESS_TESTNET)),
+          prover: hex32ToNums(
+            addressToBytes32Hex(STORAGE_PROVER_ADDRESS_TESTNET)
+          ),
           tokens: [
             {
-              token: Array.from(addressToBytes32(evmUsdcAddress)),
-              amount: new BN(usdcAmount(8)),
+              token: hex32ToNums(addressToBytes32Hex(evmUsdcAddress)),
+              amount: amountBN,
             },
           ],
           nativeAmount: new BN(0),
@@ -315,9 +349,17 @@ describe("EVM → SVM e2e", () => {
         systemProgram: SystemProgram.programId,
       })
       .remainingAccounts(remainingAccounts)
+      .preInstructions([
+        anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+          units: 250_000,
+        }),
+        anchor.web3.ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: 300_000,
+        }),
+      ])
       .instruction();
 
-    const blockhash = await connection.getLatestBlockhash();
+    blockhash = await connection.getLatestBlockhash();
     const fulfillTx = new VersionedTransaction(
       new TransactionMessage({
         payerKey: solver.publicKey,
@@ -330,6 +372,7 @@ describe("EVM → SVM e2e", () => {
     const fulfillTxSignature = await connection.sendRawTransaction(
       fulfillTx.serialize()
     );
+
     await connection.confirmTransaction(
       { signature: fulfillTxSignature, ...blockhash },
       "confirmed"
