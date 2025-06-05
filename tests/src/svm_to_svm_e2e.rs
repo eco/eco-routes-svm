@@ -777,7 +777,7 @@ fn initialize_context<'a>(
         deadline: 100,
     };
 
-    let intent_hash = eco_routes::encoding::get_intent_hash(&route, &reward);
+    let intent_hash = eco_routes::encoding::intent_hash(&route, &reward);
 
     Ok(Context {
         source_svm,

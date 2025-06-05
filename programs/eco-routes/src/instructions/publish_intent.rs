@@ -56,6 +56,7 @@ pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> R
             ctx.accounts.creator.key(),
             native_reward,
             deadline,
+            Clock::get()?,
         )?,
         ctx.bumps.intent,
     )?;

@@ -1,10 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::{
-    error::EcoRoutesError,
-    state::{Intent, IntentStatus},
-};
+use crate::state::Intent;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FundIntentSplArgs {
@@ -18,7 +15,6 @@ pub struct FundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = matches!(intent.status, IntentStatus::Funding(_, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 

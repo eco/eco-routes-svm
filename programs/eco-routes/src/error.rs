@@ -20,7 +20,7 @@ pub enum EcoRoutesError {
     NotMailbox,
     InvalidProcessAuthority,
     InvalidClaimer,
-    NotFulfilled,
+    NotClaimable,
     AlreadyFulfilled,
     InvalidIntent,
     InvalidIntentHash,
