@@ -26,8 +26,6 @@ pub enum EcoRoutesError {
     InvalidIntentHash,
     InvalidRouteMint,
     InvalidRouteTokenAccount,
-    EmptyTokens,
-    EmptyCalls,
     ZeroTokenAmount,
     InvalidAccounts,
 }

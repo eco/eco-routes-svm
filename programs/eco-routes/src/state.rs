@@ -34,7 +34,6 @@ impl TokenAmount {
 
 fn validate_token_amounts(tokens: &[TokenAmount], max_len: usize) -> Result<()> {
     require!(tokens.len() <= max_len, EcoRoutesError::TooManyTokens);
-    require!(!tokens.is_empty(), EcoRoutesError::EmptyTokens);
     require!(
         tokens
             .iter()
@@ -69,7 +68,6 @@ impl Call {
 
 fn validate_calls(calls: &[Call], max_len: usize) -> Result<()> {
     require!(calls.len() <= max_len, EcoRoutesError::TooManyCalls);
-    require!(!calls.is_empty(), EcoRoutesError::EmptyCalls);
 
     calls.iter().try_for_each(Call::validate)?;
 
@@ -392,19 +390,6 @@ mod tests {
             EcoRoutesError::TooManyTokens.into()
         );
 
-        let token_amounts = vec![];
-        assert_eq!(
-            Route::new(
-                salt,
-                destination_domain_id,
-                inbox,
-                token_amounts,
-                calls.clone(),
-            )
-            .unwrap_err(),
-            EcoRoutesError::EmptyTokens.into()
-        );
-
         let token_amounts = vec![
             TokenAmount {
                 token: [2; 32],
@@ -475,19 +460,6 @@ mod tests {
             )
             .unwrap_err(),
             EcoRoutesError::TooManyCalls.into()
-        );
-
-        let calls = vec![];
-        assert_eq!(
-            Route::new(
-                salt,
-                destination_domain_id,
-                inbox,
-                token_amounts.clone(),
-                calls,
-            )
-            .unwrap_err(),
-            EcoRoutesError::EmptyCalls.into()
         );
 
         let calls = vec![Call {
@@ -583,12 +555,6 @@ mod tests {
         assert_eq!(
             Reward::new(tokens, creator, native_amount, deadline, clock.clone()).unwrap_err(),
             EcoRoutesError::TooManyTokens.into()
-        );
-
-        let tokens = vec![];
-        assert_eq!(
-            Reward::new(tokens, creator, native_amount, deadline, clock.clone()).unwrap_err(),
-            EcoRoutesError::EmptyTokens.into()
         );
 
         let tokens = vec![
