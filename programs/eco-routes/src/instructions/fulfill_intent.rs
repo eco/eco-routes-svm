@@ -337,7 +337,7 @@ fn actual_account_meta(account: &AccountInfo, route_salt: [u8; 32]) -> AccountMe
 }
 
 fn validate_intent_hash(route: &Route, reward: &Reward, expected: &[u8; 32]) -> Result<()> {
-    let hash = encoding::get_intent_hash(route, reward);
+    let hash = encoding::intent_hash(route, reward);
     require!(hash == *expected, EcoRoutesError::InvalidIntent);
 
     Ok(())

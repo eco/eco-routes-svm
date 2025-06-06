@@ -1,9 +1,6 @@
 use anchor_lang::{prelude::*, system_program};
 
-use crate::{
-    error::EcoRoutesError,
-    state::{Intent, IntentStatus},
-};
+use crate::state::Intent;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FundIntentNativeArgs {
@@ -17,7 +14,6 @@ pub struct FundIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = matches!(intent.status, IntentStatus::Funding(false, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -34,7 +30,7 @@ pub fn fund_intent_native(
     let intent = &mut ctx.accounts.intent;
     let funder = &ctx.accounts.funder;
 
-    let spendable_lamports = intent.spendable_lamports(&intent.to_account_info())?;
+    let spendable_lamports = Intent::spendable_lamports(Rent::get()?, &intent.to_account_info());
 
     if spendable_lamports < intent.reward.native_amount {
         system_program::transfer(

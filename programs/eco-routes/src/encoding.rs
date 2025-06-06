@@ -1,3 +1,4 @@
+use anchor_lang::solana_program::keccak;
 use anchor_lang::{require, Result};
 use derive_more::Deref;
 use ethers_core::abi::{decode, encode, ParamType, Token};
@@ -119,8 +120,7 @@ fn hash_reward(r: &Reward) -> [u8; 32] {
     out
 }
 
-pub fn get_intent_hash(route: &Route, reward: &Reward) -> [u8; 32] {
-    use anchor_lang::solana_program::keccak;
+pub fn intent_hash(route: &Route, reward: &Reward) -> [u8; 32] {
     keccak::hashv(&[&hash_route(route), &hash_reward(reward)]).0
 }
 #[derive(Deref)]

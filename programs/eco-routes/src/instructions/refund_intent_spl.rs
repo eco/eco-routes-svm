@@ -19,7 +19,7 @@ pub struct RefundIntentSpl<'info> {
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
         constraint = matches!(intent.status, IntentStatus::Funding(_, _) | IntentStatus::Funded) @ EcoRoutesError::NotFunded,
-        constraint = intent.is_expired().unwrap_or_default() @ EcoRoutesError::IntentNotExpired,
+        constraint = intent.is_expired(Clock::get()?) @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -58,7 +58,7 @@ pub fn refund_intent_spl(ctx: Context<RefundIntentSpl>, _args: RefundIntentSplAr
     let payer = &ctx.accounts.payer;
     let token_program = &ctx.accounts.token_program;
 
-    intent.refund_token(mint.key().as_array())?;
+    intent.refund_token(mint.key().as_array(), Clock::get()?)?;
 
     anchor_spl::token_interface::transfer_checked(
         CpiContext::new_with_signer(
