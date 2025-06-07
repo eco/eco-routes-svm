@@ -12,7 +12,7 @@ fn publish_intent_success() {
 
     ctx.publish_intent(&intent).unwrap();
 
-    let actual: Intent = ctx.account(&Intent::pda(intent.intent_hash).0);
+    let actual: Intent = ctx.account(&Intent::pda(intent.intent_hash).0).unwrap();
     assert_eq!(actual, intent);
     assert!(payer_balance > ctx.balance(&ctx.payer.pubkey()));
     assert_eq!(creator_balance, ctx.balance(&ctx.creator.pubkey()));

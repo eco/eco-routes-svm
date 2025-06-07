@@ -1,6 +1,6 @@
 use std::u64;
 
-use anchor_lang::{InstructionData, ToAccountMetas};
+use anchor_lang::{error::ERROR_CODE_OFFSET, InstructionData, ToAccountMetas};
 use anchor_spl::{
     associated_token::{
         get_associated_token_address_with_program_id,
@@ -11,15 +11,26 @@ use anchor_spl::{
 use derive_more::{Deref, DerefMut};
 use eco_routes::{
     encoding,
-    state::{Call, Intent, Reward, Route, TokenAmount, MAX_REWARD_TOKENS},
+    error::EcoRoutesError,
+    state::{
+        Call, Intent, Reward, Route, TokenAmount, MAX_CALLS, MAX_REWARD_TOKENS, MAX_ROUTE_TOKENS,
+    },
 };
 use litesvm::{
     types::{FailedTransactionMetadata, TransactionMetadata},
     LiteSVM,
 };
 use solana_sdk::{
-    clock::Clock, instruction::Instruction, message::Message, program_pack::Pack, pubkey::Pubkey,
-    rent::Rent, signature::Keypair, signer::Signer, system_program, transaction::Transaction,
+    clock::Clock,
+    instruction::{Instruction, InstructionError},
+    message::Message,
+    program_pack::Pack,
+    pubkey::Pubkey,
+    rent::Rent,
+    signature::Keypair,
+    signer::Signer,
+    system_program,
+    transaction::{Transaction, TransactionError},
 };
 
 const ECO_ROUTES_BIN: &[u8] = include_bytes!("../../../../target/deploy/eco_routes.so");
@@ -71,54 +82,37 @@ impl Context {
     }
 
     pub fn token_balance(&self, pubkey: &Pubkey) -> u64 {
-        let account = self.get_account(pubkey).unwrap();
-
-        spl_token::state::Account::unpack(&account.data)
-            .unwrap()
-            .amount
+        self.get_account(pubkey)
+            .and_then(|account| spl_token::state::Account::unpack(&account.data).ok())
+            .map(|account| account.amount)
+            .unwrap_or_default()
     }
 
     pub fn account<T: anchor_lang::AnchorDeserialize + anchor_lang::Discriminator>(
         &self,
         pubkey: &Pubkey,
-    ) -> T {
-        let account = self.get_account(pubkey).unwrap();
-
-        anchor_lang::AnchorDeserialize::deserialize(&mut &account.data.as_slice()[8..]).unwrap()
+    ) -> Option<T> {
+        self.get_account(pubkey).map(|account| {
+            anchor_lang::AnchorDeserialize::deserialize(&mut &account.data.as_slice()[8..]).unwrap()
+        })
     }
 
     pub fn rand_intent(&mut self) -> Intent {
-        let salt = rand_bytes32();
+        let salt = rand::random();
         let destination_domain_id = 2;
         let inbox = [4; 32];
-        let route_tokens = vec![
-            TokenAmount {
-                token: rand_bytes32(),
+        let route_tokens = (0..MAX_ROUTE_TOKENS)
+            .map(|_| TokenAmount {
+                token: rand::random(),
                 amount: token_amount(100.0),
-            },
-            TokenAmount {
-                token: rand_bytes32(),
-                amount: token_amount(100.0),
-            },
-            TokenAmount {
-                token: rand_bytes32(),
-                amount: token_amount(100.0),
-            },
-        ];
-        let calls = vec![
-            Call {
-                destination: rand_bytes32(),
-                calldata: rand_bytes32().to_vec(),
-            },
-            Call {
-                destination: rand_bytes32(),
-                calldata: rand_bytes32().to_vec(),
-            },
-            Call {
-                destination: rand_bytes32(),
-                calldata: rand_bytes32().to_vec(),
-            },
-        ];
+            })
+            .collect::<Vec<_>>();
+        let calls = (0..MAX_CALLS)
+            .map(|_| Call {
+                destination: rand::random(),
+                calldata: rand::random::<[u8; 32]>().to_vec(),
+            })
+            .collect::<Vec<_>>();
         let reward_tokens: Vec<_> = (0..MAX_REWARD_TOKENS)
             .map(|_| Keypair::new().pubkey())
             .map(|mint| TokenAmount {
@@ -259,6 +253,76 @@ impl Context {
         self.send_transaction(transaction)
     }
 
+    pub fn refund_intent_native(
+        &mut self,
+        intent_hash: [u8; 32],
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        let args = eco_routes::instructions::RefundIntentNativeArgs { intent_hash };
+        let instruction = eco_routes::instruction::RefundIntentNative { args };
+        let account_metas = eco_routes::accounts::RefundIntentNative {
+            intent: Intent::pda(intent_hash).0,
+            refundee: self.creator.pubkey(),
+            payer: self.payer.pubkey(),
+            system_program: system_program::ID,
+        }
+        .to_account_metas(None);
+        let instruction = Instruction {
+            program_id: eco_routes::ID,
+            accounts: account_metas,
+            data: instruction.data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, &self.creator],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn refund_intent_spl(
+        &mut self,
+        intent_hash: [u8; 32],
+        mint: &Pubkey,
+    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+        let args = eco_routes::instructions::RefundIntentSplArgs { intent_hash };
+        let instruction = eco_routes::instruction::RefundIntentSpl { args };
+
+        let vault_seeds = &[b"reward", intent_hash.as_ref(), mint.as_ref()];
+        let vault_pda = Pubkey::find_program_address(vault_seeds, &eco_routes::ID).0;
+
+        let refundee_token = get_associated_token_address_with_program_id(
+            &self.creator.pubkey(),
+            mint,
+            &spl_token::ID,
+        );
+        self.airdrop_token(mint, &self.creator.pubkey(), 0);
+
+        let account_metas = eco_routes::accounts::RefundIntentSpl {
+            intent: Intent::pda(intent_hash).0,
+            vault: vault_pda,
+            refundee_token,
+            mint: *mint,
+            refundee: self.creator.pubkey(),
+            payer: self.payer.pubkey(),
+            system_program: system_program::ID,
+            token_program: spl_token::ID,
+        }
+        .to_account_metas(None);
+        let instruction = Instruction {
+            program_id: eco_routes::ID,
+            accounts: account_metas,
+            data: instruction.data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, &self.creator],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
     fn send_transaction(
         &mut self,
         transaction: Transaction,
@@ -300,31 +364,50 @@ impl Context {
     pub fn airdrop_token(&mut self, mint: &Pubkey, recipient: &Pubkey, amount: u64) {
         let recipient_token =
             get_associated_token_address_with_program_id(recipient, mint, &spl_token::ID);
-        let create_token_account_instruction = create_associated_token_account(
-            &self.mint_authority.pubkey(),
-            recipient,
-            mint,
-            &spl_token::ID,
+
+        let mut instructions = if self.get_account(&recipient_token).is_none() {
+            vec![create_associated_token_account(
+                &self.mint_authority.pubkey(),
+                recipient,
+                mint,
+                &spl_token::ID,
+            )]
+        } else {
+            vec![]
+        };
+        instructions.push(
+            spl_token::instruction::mint_to(
+                &spl_token::ID,
+                mint,
+                &recipient_token,
+                &self.mint_authority.pubkey(),
+                &[],
+                amount,
+            )
+            .unwrap(),
         );
-        let mint_instruction = spl_token::instruction::mint_to(
-            &spl_token::ID,
-            mint,
-            &recipient_token,
-            &self.mint_authority.pubkey(),
-            &[],
-            amount,
-        )
-        .unwrap();
+
         let transaction = Transaction::new(
             &[&self.mint_authority],
-            Message::new(
-                &[create_token_account_instruction, mint_instruction],
-                Some(&self.mint_authority.pubkey()),
-            ),
+            Message::new(&instructions, Some(&self.mint_authority.pubkey())),
             self.latest_blockhash(),
         );
 
         self.send_transaction(transaction).unwrap();
+    }
+
+    pub fn expire_intent(&mut self, intent_hash: [u8; 32]) {
+        let intent_pda = Intent::pda(intent_hash).0;
+        let intent: Intent = self.account(&intent_pda).unwrap();
+
+        self.warp_to_timestamp(intent.reward.deadline + 1);
+    }
+
+    fn warp_to_timestamp(&mut self, unix_timestamp: i64) {
+        let mut clock = self.get_sysvar::<Clock>();
+        clock.unix_timestamp = unix_timestamp;
+
+        self.set_sysvar(&clock);
     }
 }
 
@@ -336,6 +419,11 @@ pub fn token_amount(amount: f64) -> u64 {
     (amount * 1_000_000.0) as u64
 }
 
-fn rand_bytes32() -> [u8; 32] {
-    rand::random()
+pub fn is_eco_routes_error(expected: EcoRoutesError) -> impl Fn(FailedTransactionMetadata) -> bool {
+    move |actual: FailedTransactionMetadata| match actual.err {
+        TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
+            error_code == ERROR_CODE_OFFSET + expected as u32
+        }
+        _ => false,
+    }
 }
