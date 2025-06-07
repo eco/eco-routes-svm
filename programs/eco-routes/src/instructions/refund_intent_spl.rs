@@ -1,10 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::{
-    error::EcoRoutesError,
-    state::{Intent, IntentStatus},
-};
+use crate::{error::EcoRoutesError, state::Intent};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentSplArgs {
@@ -18,8 +15,6 @@ pub struct RefundIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = matches!(intent.status, IntentStatus::Funding(_, _) | IntentStatus::Funded) @ EcoRoutesError::NotFunded,
-        constraint = intent.is_expired(Clock::get()?) @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -33,6 +28,7 @@ pub struct RefundIntentSpl<'info> {
     pub vault: InterfaceAccount<'info, TokenAccount>,
 
     #[account(
+        mut,
         token::mint = mint,
         token::authority = refundee,
     )]

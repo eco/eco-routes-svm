@@ -1,4 +1,3 @@
-use anchor_lang::error::ERROR_CODE_OFFSET;
 use anchor_spl::{
     associated_token::get_associated_token_address_with_program_id, token::spl_token,
 };
@@ -33,7 +32,7 @@ fn setup() -> (common::Context, [u8; 32]) {
 fn fund_intent_spl_success_with_native_not_funded() {
     let (mut ctx, intent_hash) = setup();
     let intent_pda = Intent::pda(intent_hash).0;
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
 
     intent
         .reward
@@ -41,7 +40,7 @@ fn fund_intent_spl_success_with_native_not_funded() {
         .iter()
         .enumerate()
         .for_each(|(i, token)| {
-            let intent: Intent = ctx.account(&intent_pda);
+            let intent: Intent = ctx.account(&intent_pda).unwrap();
             assert_eq!(intent.status, IntentStatus::Funding(false, i as u8));
 
             let mint = Pubkey::new_from_array(token.token);
@@ -61,7 +60,7 @@ fn fund_intent_spl_success_with_native_not_funded() {
             assert_eq!(ctx.token_balance(&vault_pda), token.amount);
         });
 
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     assert_eq!(
         intent.status,
         IntentStatus::Funding(false, intent.reward.tokens.len() as u8)
@@ -72,7 +71,7 @@ fn fund_intent_spl_success_with_native_not_funded() {
 fn fund_intent_spl_success_with_native_funded() {
     let (mut ctx, intent_hash) = setup();
     let intent_pda = Intent::pda(intent_hash).0;
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
 
     ctx.fund_intent_native(intent_hash).unwrap();
 
@@ -82,7 +81,7 @@ fn fund_intent_spl_success_with_native_funded() {
         .iter()
         .enumerate()
         .for_each(|(i, token)| {
-            let intent: Intent = ctx.account(&intent_pda);
+            let intent: Intent = ctx.account(&intent_pda).unwrap();
             assert_eq!(intent.status, IntentStatus::Funding(true, i as u8));
 
             let mint = Pubkey::new_from_array(token.token);
@@ -102,7 +101,7 @@ fn fund_intent_spl_success_with_native_funded() {
             assert_eq!(ctx.token_balance(&vault_pda), token.amount);
         });
 
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     assert_eq!(intent.status, IntentStatus::Funded);
 }
 
@@ -125,7 +124,7 @@ fn fund_intent_spl_fails_with_nonexistent_intent() {
 fn fund_intent_spl_fails_when_token_already_funded() {
     let (mut ctx, intent_hash) = setup();
     let intent_pda = Intent::pda(intent_hash).0;
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     let token = intent.reward.tokens.first().unwrap();
     let mint = Pubkey::new_from_array(token.token);
 
@@ -144,7 +143,7 @@ fn fund_intent_spl_fails_when_token_already_funded() {
 fn fund_intent_spl_fails_with_insufficient_funds() {
     let (mut ctx, intent_hash) = setup();
     let intent_pda = Intent::pda(intent_hash).0;
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     let token = intent.reward.tokens.first().unwrap();
     let mint = Pubkey::new_from_array(token.token);
 
@@ -170,12 +169,5 @@ fn fund_intent_spl_fails_with_wrong_mint() {
     ctx.airdrop_token(&wrong_mint, &ctx.funder.pubkey(), 1_000_000);
 
     let result = ctx.fund_intent_spl(intent_hash, &wrong_mint);
-    assert!(result.is_err_and(|err| {
-        match err.err {
-            TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
-                error_code == ERROR_CODE_OFFSET + EcoRoutesError::InvalidToken as u32
-            }
-            _ => false,
-        }
-    }));
+    assert!(result.is_err_and(common::is_eco_routes_error(EcoRoutesError::InvalidToken)));
 }

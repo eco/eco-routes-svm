@@ -1,9 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::{
-    error::EcoRoutesError,
-    state::{Intent, IntentStatus},
-};
+use crate::{error::EcoRoutesError, state::Intent};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentNativeArgs {
@@ -17,8 +14,6 @@ pub struct RefundIntentNative<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = matches!(intent.status, IntentStatus::Funding(true, _) | IntentStatus::Funded) @ EcoRoutesError::NotFunded,
-        constraint = intent.is_expired(Clock::get()?) @ EcoRoutesError::IntentNotExpired,
     )]
     pub intent: Account<'info, Intent>,
 
@@ -40,8 +35,10 @@ pub fn refund_intent_native(
     let intent = &mut ctx.accounts.intent;
     let refundee = &ctx.accounts.refundee;
 
+    intent.refund_native(Clock::get()?)?;
+
     **intent.to_account_info().try_borrow_mut_lamports()? -= intent.reward.native_amount;
     **refundee.to_account_info().try_borrow_mut_lamports()? += intent.reward.native_amount;
 
-    intent.refund_native(Clock::get()?)
+    Ok(())
 }

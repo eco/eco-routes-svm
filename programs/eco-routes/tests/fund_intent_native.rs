@@ -1,4 +1,3 @@
-use anchor_lang::error::ERROR_CODE_OFFSET;
 use eco_routes::{
     error::EcoRoutesError,
     state::{Intent, IntentStatus},
@@ -29,7 +28,7 @@ fn fund_intent_native_success_with_tokens_not_funded() {
 
     ctx.fund_intent_native(intent_hash).unwrap();
 
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     assert_eq!(intent.status, IntentStatus::Funding(true, 0));
     assert!(payer_balance > ctx.balance(&ctx.payer.pubkey()));
     assert_eq!(
@@ -49,7 +48,7 @@ fn fund_intent_native_success_with_tokens_funded() {
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
     let funder_balance = ctx.balance(&ctx.funder.pubkey());
     let intent_balance = ctx.balance(&intent_pda);
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
 
     intent.reward.tokens.iter().for_each(|token| {
         let mint = Pubkey::new_from_array(token.token);
@@ -60,7 +59,7 @@ fn fund_intent_native_success_with_tokens_funded() {
 
     ctx.fund_intent_native(intent_hash).unwrap();
 
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     assert_eq!(intent.status, IntentStatus::Funded);
     assert!(payer_balance > ctx.balance(&ctx.payer.pubkey()));
     assert_eq!(
@@ -77,7 +76,7 @@ fn fund_intent_native_success_with_tokens_funded() {
 fn fund_intent_native_success_with_intent_partially_funded() {
     let (mut ctx, intent_hash) = setup();
     let intent_pda = Intent::pda(intent_hash).0;
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     let partial_amount = intent.reward.native_amount / 2;
     ctx.airdrop(&intent_pda, partial_amount).unwrap();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
@@ -86,7 +85,7 @@ fn fund_intent_native_success_with_intent_partially_funded() {
 
     ctx.fund_intent_native(intent_hash).unwrap();
 
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     assert_eq!(intent.status, IntentStatus::Funding(true, 0));
     assert!(payer_balance > ctx.balance(&ctx.payer.pubkey()));
     assert_eq!(
@@ -103,7 +102,7 @@ fn fund_intent_native_success_with_intent_partially_funded() {
 fn fund_intent_native_success_with_intent_fully_funded() {
     let (mut ctx, intent_hash) = setup();
     let intent_pda = Intent::pda(intent_hash).0;
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     ctx.airdrop(&intent_pda, intent.reward.native_amount)
         .unwrap();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
@@ -112,7 +111,7 @@ fn fund_intent_native_success_with_intent_fully_funded() {
 
     ctx.fund_intent_native(intent_hash).unwrap();
 
-    let intent: Intent = ctx.account(&intent_pda);
+    let intent: Intent = ctx.account(&intent_pda).unwrap();
     assert_eq!(intent.status, IntentStatus::Funding(true, 0));
     assert!(payer_balance > ctx.balance(&ctx.payer.pubkey()));
     assert_eq!(funder_balance, ctx.balance(&ctx.funder.pubkey()));
@@ -140,14 +139,9 @@ fn fund_intent_native_fails_when_already_funded() {
     ctx.fund_intent_native(intent_hash).unwrap();
 
     let result = ctx.fund_intent_native(intent_hash);
-    assert!(result.is_err_and(|err| {
-        match err.err {
-            TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
-                error_code == ERROR_CODE_OFFSET + EcoRoutesError::NotInFundingPhase as u32
-            }
-            _ => false,
-        }
-    }));
+    assert!(result.is_err_and(common::is_eco_routes_error(
+        EcoRoutesError::NotInFundingPhase
+    )));
 }
 
 #[test]
