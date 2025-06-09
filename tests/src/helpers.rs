@@ -9,7 +9,7 @@ pub fn sol_amount(amount: f64) -> u64 {
 }
 
 pub fn usdc_amount(amount: f64) -> u64 {
-    (amount * usdc_decimals() as f64 * 10.0) as u64
+    (amount * 10.0_f64.powf(usdc_decimals() as f64)) as u64
 }
 
 pub fn usdc_decimals() -> u8 {
