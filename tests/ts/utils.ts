@@ -24,7 +24,7 @@ const bn = (bigNumber: BN) => {
   return array;
 };
 
-const hex = (hex: string) => ethers.getBytes(hex); // 0x hex to Uint8Array
+const hexToBytes = (hex: string) => ethers.getBytes(hex); // 0x hex to Uint8Array
 
 // Concatenate buffers and hash with Keccak-256
 export function generateIntentHash(route: Route, reward: Reward): Uint8Array {
@@ -35,7 +35,7 @@ export function generateIntentHash(route: Route, reward: Reward): Uint8Array {
     route.inbox,
 
     ...route.tokens.flatMap((tokenAmount) => [
-      hex(tokenAmount.token),
+      hexToBytes(tokenAmount.token),
       bn(tokenAmount.amount),
     ]),
     ...route.calls,
@@ -43,7 +43,7 @@ export function generateIntentHash(route: Route, reward: Reward): Uint8Array {
     reward.creator,
     reward.prover,
     ...reward.tokens.flatMap((tokenAmount) => [
-      hex(tokenAmount.token),
+      hexToBytes(tokenAmount.token),
       bn(tokenAmount.amount),
     ]),
     bn(reward.nativeAmount),

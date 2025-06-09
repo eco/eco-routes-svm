@@ -7,8 +7,8 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "test:evm-to-svm": "mocha -r ts-node/register --timeout 60000 \"evm-to-svm.e2e.ts\"",
-    "test:svm-to-evm": "mocha -r ts-node/register --timeout 60000 \"svm-to-evm.e2e.ts\""
+    "test:evm-to-svm": "mocha -r ts-node/register --timeout 120000 \"evm-to-svm.e2e.ts\"",
+    "test:svm-to-evm": "mocha -r ts-node/register --timeout 120000 \"svm-to-evm.e2e.ts\""
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.31.1",
