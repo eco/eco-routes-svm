@@ -9,7 +9,11 @@ pub fn sol_amount(amount: f64) -> u64 {
 }
 
 pub fn usdc_amount(amount: f64) -> u64 {
-    (amount * 1_000_000.0) as u64
+    (amount * 10.0_f64.powf(usdc_decimals() as f64)) as u64
+}
+
+pub fn usdc_decimals() -> u8 {
+    6
 }
 
 pub fn write_account_no_data(svm: &mut LiteSVM, pubkey: Pubkey, lamports: u64) -> Result<()> {

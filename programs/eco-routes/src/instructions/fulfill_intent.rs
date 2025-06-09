@@ -197,10 +197,12 @@ fn transfer_route_tokens<'info>(
         route.tokens.iter().zip(token_accounts.iter())
     {
         let mint_key = Pubkey::new_from_array(token.token);
-        let expected_destination = spl_associated_token_account::get_associated_token_address(
-            &execution_authority.key(),
-            &mint_key,
-        );
+        let expected_destination =
+            spl_associated_token_account::get_associated_token_address_with_program_id(
+                &execution_authority.key(),
+                &mint_key,
+                destination_account.owner,
+            );
         let mint = Mint::try_deserialize(&mut &mint_account.data.borrow()[..])?;
         let source_token_account =
             TokenAccount::try_deserialize(&mut &source_account.data.borrow()[..])?;
