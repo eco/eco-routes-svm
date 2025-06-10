@@ -137,10 +137,12 @@ pub fn fulfill_intent<'info>(
     let route = args.route;
     let reward = args.reward;
 
-    let (token_accounts, route_calls_accounts) = ctx
-        .remaining_accounts
-        .split_at_checked(route.tokens.len() * ACCOUNTS_COUNT_PER_TOKEN)
-        .ok_or(EcoRoutesError::InvalidAccounts)?;
+    let split_index = route.tokens.len() * ACCOUNTS_COUNT_PER_TOKEN;
+    require!(
+        split_index <= ctx.remaining_accounts.len(),
+        EcoRoutesError::InvalidAccounts
+    );
+    let (token_accounts, route_calls_accounts) = ctx.remaining_accounts.split_at(split_index);
     let token_accounts = token_accounts
         .chunks_exact(ACCOUNTS_COUNT_PER_TOKEN)
         .map(TryInto::try_into)

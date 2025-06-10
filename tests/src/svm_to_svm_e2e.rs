@@ -192,7 +192,7 @@ struct Context<'a> {
     pub balances_snapshot: Option<BalancesSnapshot>,
 }
 
-impl<'a> Context<'a> {
+impl Context<'_> {
     // logs the intent state, each actors lamports and usdc, and deltas
 
     pub fn snapshot_and_log(&mut self) -> Result<()> {
@@ -209,15 +209,17 @@ impl<'a> Context<'a> {
                 let delta: i64 = (balance as i64).saturating_sub(pre_balance as i64);
                 let formatted_delta_text =
                     format!("{:.2}", delta.abs() as f64 / 10.0_f64.powi(decimals as i32));
-                if delta > 0 {
-                    style(format!("(+{})", formatted_delta_text)).green().bold()
-                } else if delta < 0 {
-                    style(format!("(-{})", formatted_delta_text)).red().bold()
-                } else {
-                    style(format!("(no change)")).dim().bold()
+                match delta.cmp(&0) {
+                    std::cmp::Ordering::Greater => {
+                        style(format!("(+{})", formatted_delta_text)).green().bold()
+                    }
+                    std::cmp::Ordering::Less => {
+                        style(format!("(-{})", formatted_delta_text)).red().bold()
+                    }
+                    std::cmp::Ordering::Equal => style("(no change)".to_string()).dim().bold(),
                 }
             } else {
-                style(format!("(no previous balance)")).dim().bold()
+                style("(no previous balance)".to_string()).dim().bold()
             };
 
             style(format!(
@@ -230,12 +232,11 @@ impl<'a> Context<'a> {
 
         fn get_token_balance(svm: &LiteSVM, token_address: Pubkey) -> u64 {
             svm.get_account(&token_address)
-                .map(|a| {
+                .and_then(|a| {
                     spl_token_2022::state::Account::unpack(&a.data)
                         .ok()
                         .map(|a| a.amount)
                 })
-                .flatten()
                 .unwrap_or(0)
         }
 
@@ -1029,7 +1030,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                 .route
                 .tokens
                 .iter()
-                .map(|t| {
+                .flat_map(|t| {
                     vec![
                         AccountMeta {
                             pubkey: Pubkey::new_from_array(t.token),
@@ -1056,7 +1057,6 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                         },
                     ]
                 })
-                .flatten()
         })
         // add the SVM-call account metas we stripped out earlier - they are needed in metas but not in data
         .chain({
@@ -1174,7 +1174,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         const SIG_LEN: usize = 65;
         let mut meta = Vec::with_capacity(32 + 32 + 4 + SIG_LEN);
 
-        meta.extend_from_slice(&MAILBOX_ID.as_ref()); // origin mailbox
+        meta.extend_from_slice(MAILBOX_ID.as_ref()); // origin mailbox
         meta.extend_from_slice(&[0u8; 32]); // merkle root = 0
         meta.extend_from_slice(&0u32.to_be_bytes()); // merkle index = 0
         meta.extend_from_slice(&[0u8; 64]); // r + s = 0
@@ -1391,7 +1391,6 @@ fn close_intent(context: &mut Context) -> Result<()> {
             owner: solana_system_interface::program::ID,
             executable: false,
             rent_epoch: 0,
-            ..Account::default()
         },
         "Intent account should be closed, hence have 0 lamports, no data, and system program as owner"
     );
