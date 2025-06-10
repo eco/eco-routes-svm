@@ -1,0 +1,2 @@
+[build]
+rustflags = ["-A", "unexpected_cfgs"]

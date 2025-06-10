@@ -54,10 +54,10 @@ pub fn init_svm() -> LiteSVM {
 
     svm.airdrop(&Keypair::new().pubkey(), 1).unwrap();
 
-    svm.add_program(eco_routes::ID, &ECO_ROUTES_BIN);
-    svm.add_program(eco_routes::hyperlane::MAILBOX_ID, &MAILBOX_BIN);
-    svm.add_program(eco_routes::hyperlane::MULTISIG_ISM_ID, &MULTISIG_ISM_BIN);
-    svm.add_program(spl_noop::ID, &SPL_NOOP_BIN);
+    svm.add_program(eco_routes::ID, ECO_ROUTES_BIN);
+    svm.add_program(eco_routes::hyperlane::MAILBOX_ID, MAILBOX_BIN);
+    svm.add_program(eco_routes::hyperlane::MULTISIG_ISM_ID, MULTISIG_ISM_BIN);
+    svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
 
     let inititializer = Keypair::new();
     helpers::write_account_no_data(&mut svm, inititializer.pubkey(), LAMPORTS_PER_SOL).unwrap();

@@ -1,4 +1,4 @@
-use std::u64;
+use std::ops::Deref;
 
 use anchor_lang::{error::ERROR_CODE_OFFSET, Event, InstructionData, ToAccountMetas};
 use anchor_spl::{
@@ -21,6 +21,7 @@ use litesvm::{
     types::{FailedTransactionMetadata, TransactionMetadata},
     LiteSVM,
 };
+
 use solana_sdk::{
     clock::Clock,
     instruction::{Instruction, InstructionError},
@@ -36,6 +37,8 @@ use solana_sdk::{
 
 const ECO_ROUTES_BIN: &[u8] = include_bytes!("../../../../target/deploy/eco_routes.so");
 
+type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
+
 #[derive(Deref, DerefMut)]
 pub struct Context {
     #[deref]
@@ -47,10 +50,16 @@ pub struct Context {
     pub funder: Keypair,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Context {
     pub fn new() -> Self {
         let mut svm = LiteSVM::new();
-        svm.add_program(eco_routes::ID, &ECO_ROUTES_BIN);
+        svm.add_program(eco_routes::ID, ECO_ROUTES_BIN);
 
         let mint_authority = Keypair::new();
         let creator = Keypair::new();
@@ -149,10 +158,7 @@ impl Context {
         Intent::new(intent_hash, route, reward, bump).unwrap()
     }
 
-    pub fn publish_intent(
-        &mut self,
-        intent: &Intent,
-    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+    pub fn publish_intent(&mut self, intent: &Intent) -> TransactionResult {
         let args = eco_routes::instructions::PublishIntentArgs {
             salt: intent.route.salt,
             intent_hash: intent.intent_hash,
@@ -186,10 +192,7 @@ impl Context {
         self.send_transaction(transaction)
     }
 
-    pub fn fund_intent_native(
-        &mut self,
-        intent_hash: [u8; 32],
-    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+    pub fn fund_intent_native(&mut self, intent_hash: [u8; 32]) -> TransactionResult {
         let args = eco_routes::instructions::FundIntentNativeArgs { intent_hash };
         let instruction = eco_routes::instruction::FundIntentNative { args };
         let account_metas = eco_routes::accounts::FundIntentNative {
@@ -212,11 +215,7 @@ impl Context {
         self.send_transaction(transaction)
     }
 
-    pub fn fund_intent_spl(
-        &mut self,
-        intent_hash: [u8; 32],
-        mint: &Pubkey,
-    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+    pub fn fund_intent_spl(&mut self, intent_hash: [u8; 32], mint: &Pubkey) -> TransactionResult {
         let args = eco_routes::instructions::FundIntentSplArgs { intent_hash };
         let instruction = eco_routes::instruction::FundIntentSpl { args };
 
@@ -254,10 +253,7 @@ impl Context {
         self.send_transaction(transaction)
     }
 
-    pub fn refund_intent_native(
-        &mut self,
-        intent_hash: [u8; 32],
-    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+    pub fn refund_intent_native(&mut self, intent_hash: [u8; 32]) -> TransactionResult {
         let args = eco_routes::instructions::RefundIntentNativeArgs { intent_hash };
         let instruction = eco_routes::instruction::RefundIntentNative { args };
         let account_metas = eco_routes::accounts::RefundIntentNative {
@@ -281,11 +277,7 @@ impl Context {
         self.send_transaction(transaction)
     }
 
-    pub fn refund_intent_spl(
-        &mut self,
-        intent_hash: [u8; 32],
-        mint: &Pubkey,
-    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+    pub fn refund_intent_spl(&mut self, intent_hash: [u8; 32], mint: &Pubkey) -> TransactionResult {
         let args = eco_routes::instructions::RefundIntentSplArgs { intent_hash };
         let instruction = eco_routes::instruction::RefundIntentSpl { args };
 
@@ -324,16 +316,13 @@ impl Context {
         self.send_transaction(transaction)
     }
 
-    fn send_transaction(
-        &mut self,
-        transaction: Transaction,
-    ) -> Result<TransactionMetadata, FailedTransactionMetadata> {
+    fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
         let result = self.svm.send_transaction(transaction);
         self.expire_blockhash();
         let slot = self.get_sysvar::<Clock>().slot;
         self.warp_to_slot(slot + 1);
 
-        result
+        result.map_err(Box::new)
     }
 
     pub fn set_mint_account(&mut self, mint: &Pubkey) {
@@ -432,8 +421,11 @@ pub fn token_amount(amount: f64) -> u64 {
     (amount * 1_000_000.0) as u64
 }
 
-pub fn is_eco_routes_error(expected: EcoRoutesError) -> impl Fn(FailedTransactionMetadata) -> bool {
-    move |actual: FailedTransactionMetadata| match actual.err {
+pub fn is_eco_routes_error<T>(expected: EcoRoutesError) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+{
+    move |actual: T| match actual.err {
         TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
             error_code == ERROR_CODE_OFFSET + expected as u32
         }
