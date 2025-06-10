@@ -73,7 +73,8 @@ pub fn dispatch_fulfillment_message<'info>(
 
     let outbox_dispatch = MailboxInstruction::OutboxDispatch(OutboxDispatch {
         sender: dispatch_authority.key(),
-        destination_domain: route.destination_domain_id,
+        // Domain id is flipped so the message sends back to the Intent's source chain, but hashes match
+        destination_domain: route.source_domain_id,
         recipient: reward.prover,
         message_body: encoding::FulfillMessages::new(
             vec![*intent_hash],
