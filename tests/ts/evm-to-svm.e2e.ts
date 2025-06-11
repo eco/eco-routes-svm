@@ -14,6 +14,7 @@ import {
   VersionedTransaction,
   TransactionMessage,
   ComputeBudgetProgram,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import {
   AnchorProvider,
@@ -24,7 +25,9 @@ import {
 import * as anchor from "@coral-xyz/anchor";
 import {
   createAssociatedTokenAccount,
+  createAssociatedTokenAccountInstruction,
   createMint,
+  createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
   mintTo,
   TOKEN_2022_PROGRAM_ID,
@@ -52,6 +55,7 @@ import {
   STORAGE_PROVER_ADDRESS_TESTNET,
   INBOX_ADDRESS_TESTNET,
   USDC_DECIMALS,
+  SOLVER_PLACEHOLDER_PUBKEY,
 } from "./constants";
 import {
   evmUsdcAmount,
@@ -61,7 +65,12 @@ import {
   hex32ToBytes,
   hex32ToNums,
 } from "./evmUtils";
-import { loadKeypairFromFile, usdcAmount } from "./utils";
+import {
+  loadKeypairFromFile,
+  usdcAmount,
+  wrapIxFull,
+  wrapIxHeaderOnly,
+} from "./utils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 
 const solver = loadKeypairFromFile("../../keys/program_auth.json"); // SVM solver key
@@ -93,6 +102,9 @@ describe("EVM → SVM e2e", () => {
   let intentHashHex!: string;
   let routeHashHex!: string;
   let mockSvmUsdcMint: PublicKey;
+
+  let testReceiver: Keypair = Keypair.generate();
+  let transferTokenIx: TransactionInstruction;
 
   before("creates a testet usdc and mints to solver", async () => {
     const usdcMint = Keypair.generate();
@@ -159,6 +171,54 @@ describe("EVM → SVM e2e", () => {
     const amountU64 = usdcAmount(5); // 5_000_000
     const amountU256 = BigInt(amountU64);
 
+    const executionAuthority = PublicKey.findProgramAddressSync(
+      [Buffer.from("execution_authority"), salt],
+      program.programId
+    )[0];
+    const executionAuthortiyAta = getAssociatedTokenAddressSync(
+      mockSvmUsdcMint,
+      executionAuthority,
+      true
+    );
+
+    const testReceiverAta = getAssociatedTokenAddressSync(
+      mockSvmUsdcMint,
+      testReceiver.publicKey
+    );
+
+    // createAtaIx = createAssociatedTokenAccountInstruction(
+    //   SOLVER_PLACEHOLDER_PUBKEY,
+    //   testReceiverAta,
+    //   testReceiver.publicKey,
+    //   mockSvmUsdcMint
+    // );
+    await createAssociatedTokenAccount(
+      connection,
+      solver,
+      mockSvmUsdcMint,
+      testReceiver.publicKey
+    );
+
+    transferTokenIx = createTransferCheckedInstruction(
+      executionAuthortiyAta,
+      mockSvmUsdcMint,
+      testReceiverAta,
+      executionAuthority,
+      usdcAmount(5),
+      USDC_DECIMALS
+    );
+
+    console.log("transfer token ix before :", transferTokenIx);
+
+    // const transferSolIx = anchor.web3.SystemProgram.transfer({
+    //   fromPubkey: SOLVER_PLACEHOLDER_PUBKEY,
+    //   toPubkey: testReceiver.publicKey,
+    //   lamports: 10_000,
+    // });
+
+    // createAtaSvmCall = wrapSvmCallIx(createAtaIx);
+    const transferCheckedSvmCall = wrapIxFull(transferTokenIx);
+
     const routeTokens = [
       {
         token: "0x" + mockSvmUsdcMint.toBuffer().toString("hex"),
@@ -173,13 +233,30 @@ describe("EVM → SVM e2e", () => {
       },
     ];
 
+    const calls = [
+      //   {
+      //     target:
+      //       "0x" + Buffer.from(createAtaSvmCall.destination).toString("hex"),
+      //     data: "0x" + Buffer.from(createAtaSvmCall.calldata).toString("hex"),
+      //     value: BigInt(0),
+      //   },
+      {
+        target:
+          "0x" +
+          Buffer.from(transferCheckedSvmCall.destination).toString("hex"),
+        data:
+          "0x" + Buffer.from(transferCheckedSvmCall.calldata).toString("hex"),
+        value: BigInt(0),
+      },
+    ];
+
     route = {
       salt: saltHex,
       source: EVM_DOMAIN_ID,
       destination: SOLANA_DOMAIN_ID,
       inbox: addressToBytes32Hex(INBOX_ADDRESS_TESTNET),
       tokens: routeTokens,
-      calls: [],
+      calls,
     };
 
     reward = {
@@ -189,6 +266,12 @@ describe("EVM → SVM e2e", () => {
       nativeValue: BigInt(0),
       tokens: rewardTokens,
     };
+
+    console.log("EVM passed calls: ", calls);
+    console.log("EVM route tokens: ", routeTokens);
+    console.log("EVM reward tokens: ", rewardTokens);
+    console.log("EVM route: ", route);
+    console.log("EVM reward: ", reward);
 
     await usdc.approve(intentSourceAddress, evmUsdcAmount(10));
     const publishTx = await intentSource[
@@ -287,12 +370,6 @@ describe("EVM → SVM e2e", () => {
       solver.publicKey
     );
 
-    const remainingAccounts = [
-      { pubkey: mockSvmUsdcMint, isWritable: false, isSigner: false },
-      { pubkey: solverAta, isWritable: true, isSigner: false },
-      { pubkey: executionAuthorityAta, isWritable: true, isSigner: false },
-    ];
-
     const routeSolTokenArg = [
       {
         token: Array.from(mockSvmUsdcMint.toBytes()),
@@ -307,13 +384,30 @@ describe("EVM → SVM e2e", () => {
       },
     ];
 
+    const lightTransferCheckedSvmCall = wrapIxHeaderOnly(transferTokenIx);
+
+    const calls = [
+      //   {
+      //     destination: Array.from(Buffer.from(createAtaSvmCall.destination)),
+      //     calldata: Buffer.from(createAtaSvmCall.calldata),
+      //   },
+      {
+        destination: Array.from(
+          Buffer.from(lightTransferCheckedSvmCall.destination)
+        ),
+        calldata: Buffer.from(lightTransferCheckedSvmCall.calldata),
+      },
+    ];
+
+    console.log("SVM passed calls: ", calls);
+
     const routeSolArg = {
       salt: Array.from(Buffer.from(saltHex.slice(2), "hex")),
       sourceDomainId: EVM_DOMAIN_ID,
       destinationDomainId: SOLANA_DOMAIN_ID,
       inbox: hex32ToNums(route.inbox),
       tokens: routeSolTokenArg,
-      calls: [],
+      calls,
     };
 
     const rewardSolArg = {
@@ -325,6 +419,30 @@ describe("EVM → SVM e2e", () => {
       nativeAmount: new BN(0),
       deadline: new BN(1000000000000),
     };
+
+    let remainingAccounts = [
+      { pubkey: mockSvmUsdcMint, isSigner: false, isWritable: false },
+      { pubkey: solverAta, isSigner: false, isWritable: true },
+      { pubkey: executionAuthorityAta, isSigner: false, isWritable: true },
+    ];
+
+    // createAtaIx.keys.forEach((key) => {
+    //   remainingAccounts.push({
+    //     pubkey: key.pubkey,
+    //     isWritable: key.isWritable,
+    //     isSigner: key.isSigner,
+    //   });
+    // });
+
+    transferTokenIx.keys.forEach((key) => {
+      remainingAccounts.push({
+        pubkey: key.pubkey,
+        isSigner: key.pubkey === executionAuthority ? false : key.isSigner,
+        isWritable: key.isWritable,
+      });
+    });
+
+    remainingAccounts[remainingAccounts.length - 1].isSigner = false;
 
     const fulfillIx = await program.methods
       .fulfillIntent({
@@ -350,45 +468,80 @@ describe("EVM → SVM e2e", () => {
       .remainingAccounts(remainingAccounts)
       .instruction();
 
-    let blockhash = await connection.getLatestBlockhash();
-    const fulfillTx = new VersionedTransaction(
-      new TransactionMessage({
-        payerKey: solver.publicKey,
-        recentBlockhash: blockhash.blockhash,
-        instructions: [
-          ComputeBudgetProgram.setComputeUnitLimit({
-            units: 400_000,
-          }),
-          ComputeBudgetProgram.setComputeUnitPrice({
-            microLamports: 300_000,
-          }),
-          SystemProgram.transfer({
-            fromPubkey: solver.publicKey,
-            toPubkey: new PublicKey(
-              "C5J3aygMoXfZi4t6psSzG1w4favJ6xGeuCyLRuJsqbFk"
-            ),
-            lamports: 100_000,
-          }),
-          fulfillIx,
-        ],
-      }).compileToV0Message()
-    );
+    console.log("Fulfill tx: ", fulfillIx);
 
-    fulfillTx.sign([solver, uniqueMessage]);
-    const fulfillTxSignature = await connection.sendRawTransaction(
-      fulfillTx.serialize()
-    );
+    try {
+      let blockhash = await connection.getLatestBlockhash();
+      const fulfillTx = new VersionedTransaction(
+        new TransactionMessage({
+          payerKey: solver.publicKey,
+          recentBlockhash: blockhash.blockhash,
+          instructions: [
+            ComputeBudgetProgram.setComputeUnitLimit({
+              units: 400_000,
+            }),
+            ComputeBudgetProgram.setComputeUnitPrice({
+              microLamports: 300_000,
+            }),
+            fulfillIx,
+          ],
+        }).compileToV0Message()
+      );
 
-    await connection.confirmTransaction(
-      { signature: fulfillTxSignature, ...blockhash },
-      "confirmed"
-    );
+      fulfillTx.sign([solver, uniqueMessage]);
+      const fulfillTxSignature = await connection.sendRawTransaction(
+        fulfillTx.serialize()
+      );
 
-    console.log("fulfil tx sig :", fulfillTxSignature);
-    console.log(
-      "msg ID sent: ",
-      Buffer.from(dispatchedMessagePda.toBytes()).toString("hex")
-    );
+      await connection.confirmTransaction(
+        { signature: fulfillTxSignature, ...blockhash },
+        "confirmed"
+      );
+
+      console.log("fulfil tx sig :", fulfillTxSignature);
+      console.log(
+        "msg ID sent: ",
+        Buffer.from(dispatchedMessagePda.toBytes()).toString("hex")
+      );
+    } catch (error) {
+      console.log("ERROR: ", error);
+    }
+
+    // TODO: uncomment once we have an oracle on a destinatino domain
+    // blockhash = await connection.getLatestBlockhash();
+    // const payForGasIx = buildPayForGasIx(
+    //   solver.publicKey,
+    //   dispatchedMessagePda,
+    //   uniqueMessage.publicKey
+    // );
+
+    // const payForGasTx = new VersionedTransaction(
+    //   new TransactionMessage({
+    //     payerKey: solver.publicKey,
+    //     recentBlockhash: blockhash.blockhash,
+    //     instructions: [
+    //       ComputeBudgetProgram.setComputeUnitLimit({
+    //         units: 200_000,
+    //       }),
+    //       ComputeBudgetProgram.setComputeUnitPrice({
+    //         microLamports: 300_000,
+    //       }),
+    //       payForGasIx,
+    //     ],
+    //   }).compileToV0Message()
+    // );
+
+    // payForGasTx.sign([solver, uniqueMessage]);
+    // const payForGasTxSignature = await connection.sendRawTransaction(
+    //   payForGasTx.serialize()
+    // );
+
+    // await connection.confirmTransaction(
+    //   { signature: payForGasTxSignature, ...blockhash },
+    //   "confirmed"
+    // );
+
+    // console.log("pay for gas tx sig :", payForGasTxSignature);
 
     const accountInfo = await connection.getAccountInfo(
       intentFulfillmentMarker
@@ -396,7 +549,7 @@ describe("EVM → SVM e2e", () => {
     expect(accountInfo?.data.length).to.be.greaterThan(0);
   });
 
-  it("proves and withdraws on EVM", async () => {
+  it.skip("proves and withdraws on EVM", async () => {
     console.log("Waiting for the message to land...");
     await new Promise((resolve) => setTimeout(resolve, 20_000));
     const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);

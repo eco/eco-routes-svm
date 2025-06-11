@@ -63,18 +63,60 @@ pub fn hash_route(route: &Route) -> [u8; 32] {
     // Tail: start with tokens_tail
     let mut tail = tokens_tail;
 
-    // Now build “calls_tail.” Even if calls.len() == 0, we must emit the 32-byte length = 0.
-    let mut calls_tail = Vec::new();
-    calls_tail.extend_from_slice(&u256_be(route.calls.len() as u64)); // calls length
-
-    // If there were any calls, each call would be encoded as a tuple:
-    //    [destination (bytes32)]
-    //    [offset_to_dynamic_bytes (uint256) : always "32" within the tuple]
-    //    [value (uint256)]
-    //    [ dynamic_bytes: length + padded data ]
+    // ---------------------------------------------------------------
+    // Build “calls_tail”.
     //
-    // Since our fixture’s calls == empty, we’ll never actually push bytes here. But
-    // we still wrote calls_tail.extend_from_slice(&u256_be(0)) above for length.
+    // ABI layout for (bytes32,bytes,uint256)[]:
+    //   calls_tail :=
+    //     [ length ]                         -- 32 bytes
+    //     [ offset_0 ] … [ offset_{n-1} ]    -- n * 32
+    //     tuple_0 | tuple_1 | … | tuple_{n-1}
+    //
+    //   tuple_i :=
+    //     [ destination ]                    -- bytes32
+    //     [ 0x60 ]                           -- offset to calldata inside tuple (= 96)
+    //     [ value ]                          -- uint256 (always 0)
+    //     [ calldata_len ]                   -- uint256
+    //     [ calldata bytes ] + padding
+    // ---------------------------------------------------------------
+    let mut calls_tail = Vec::new();
+    let n_calls = route.calls.len();
+    calls_tail.extend_from_slice(&u256_be(n_calls as u64)); // array length
+
+    if n_calls > 0 {
+        // first collect each tuple’s encoded bytes so we know their sizes
+        let mut tuples = Vec::new();
+        for call in &route.calls {
+            // head (destination, offset-to-bytes, value)
+            let mut tup = Vec::with_capacity(96);
+            tup.extend_from_slice(&call.destination); // bytes32
+            tup.extend_from_slice(&u256_be(96)); // offset to bytes
+            tup.extend_from_slice(&u256_be(0)); // value == 0
+
+            // dynamic bytes
+            let len = call.calldata.len();
+            tup.extend_from_slice(&u256_be(len as u64)); // bytes length
+            tup.extend_from_slice(&call.calldata); // bytes payload
+            let pad = (32 - (len % 32)) % 32; // right-pad to 32-byte boundary
+            tup.extend(std::iter::repeat(0u8).take(pad));
+
+            tuples.push(tup);
+        }
+
+        // compute offsets
+        let head_size = n_calls * 32;
+        let mut running_size = 0usize;
+        for tup in &tuples {
+            let offset = head_size + running_size;
+            calls_tail.extend_from_slice(&u256_be(offset as u64)); // offset_i
+            running_size += tup.len();
+        }
+
+        // append the tuples themselves
+        for tup in tuples {
+            calls_tail.extend_from_slice(&tup);
+        }
+    }
 
     // Append calls_tail (which is just the 32-byte zero length) to tail.
     tail.extend_from_slice(&calls_tail);

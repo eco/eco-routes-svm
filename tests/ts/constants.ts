@@ -9,9 +9,6 @@ export const MAILBOX_ID_MAINNET = new PublicKey(
 export const MAILBOX_ID_TESTNET = new PublicKey(
   "75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSXS5aR"
 );
-export const MAILBOX_FEE_RECEIVER_TESTNET = new PublicKey(
-  "C5J3aygMoXfZi4t6psSzG1w4favJ6xGeuCyLRuJsqbFk"
-);
 export const SPL_NOOP_ID = new PublicKey(
   "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"
 );
@@ -23,6 +20,9 @@ export const USDC_MINT = new PublicKey(
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 );
 export const USDC_DECIMALS = 6;
+export const SOLVER_PLACEHOLDER_PUBKEY = new PublicKey(
+  "So1ver1111111111111111111111111111111111111"
+);
 
 // EVM testnet contracts on Sepolia
 export const INTENT_SOURCE_ADDRESS_TESTNET =
@@ -33,3 +33,10 @@ export const STORAGE_PROVER_ADDRESS_TESTNET =
   "0x1947e422b769e0568b692096B06fd9C39E25150d".toLowerCase();
 export const TEST_USDC_ADDRESS_TESTNET =
   "0x72A0CE0Da1E62BAF7FBB48ea347EB038836D091a".toLowerCase();
+
+export const IGP_FEE_RECEIVER_TESTNET = new PublicKey(
+  "9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy"
+);
+export const IGP_PROGRAM_ID_TESTNET = new PublicKey(
+  "5p7Hii6CJL4xGBYYTGEQmH9LnUSZteFJUu9AVLDExZX2"
+);
