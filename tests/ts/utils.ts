@@ -294,7 +294,7 @@ class SvmCallDataWithAccountMetas {
   }
 }
 
-const svmSchema = new Map<any, any>([
+export const svmSchema = new Map<any, any>([
   [
     SerializableAccountMeta,
     {
@@ -347,6 +347,7 @@ export function wrapIxFull(ix: TransactionInstruction) {
   );
 
   const full = new SvmCallDataWithAccountMetas(header, metas);
+  // serialize with the modified schema (Vec<SerializableAccountMeta>)
   const calldata = serialize(svmSchema, full);
 
   return { destination: dest, calldata };
@@ -354,7 +355,7 @@ export function wrapIxFull(ix: TransactionInstruction) {
 
 // calldata only (for Solana fulfil call)
 export function wrapIxHeaderOnly(ix: TransactionInstruction) {
-  const dest = ix.programId.toBytes();
+  const destination = ix.programId.toBytes();
 
   const header = new SvmCallData({
     instruction_data: ix.data,
@@ -363,5 +364,5 @@ export function wrapIxHeaderOnly(ix: TransactionInstruction) {
 
   const calldata = serialize(svmSchema, header);
 
-  return { destination: dest, calldata };
+  return { destination, calldata };
 }

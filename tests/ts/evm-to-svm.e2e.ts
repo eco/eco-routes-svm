@@ -1,9 +1,7 @@
-/* tests/evm-to-svm.e2e.ts
- *
- * Scenario EVM → SVM → EVM
- *   1. publish&fund intent on EVM (Hardhat chain)
- *   2. fulfill on Solana dev/test-net
- *   3. prove + withdraw on EVM
+/*
+ *     1. Publish + Fund intent on EVM
+ *     2. Fulfil intent on SVM
+ *     3. Claim on EVM
  */
 import "dotenv/config";
 import {
@@ -25,7 +23,6 @@ import {
 import * as anchor from "@coral-xyz/anchor";
 import {
   createAssociatedTokenAccount,
-  createAssociatedTokenAccountInstruction,
   createMint,
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
@@ -55,7 +52,6 @@ import {
   STORAGE_PROVER_ADDRESS_TESTNET,
   INBOX_ADDRESS_TESTNET,
   USDC_DECIMALS,
-  SOLVER_PLACEHOLDER_PUBKEY,
 } from "./constants";
 import {
   evmUsdcAmount,
@@ -67,6 +63,7 @@ import {
 } from "./evmUtils";
 import {
   loadKeypairFromFile,
+  svmAddressToHex,
   usdcAmount,
   wrapIxFull,
   wrapIxHeaderOnly,
@@ -107,16 +104,17 @@ describe("EVM → SVM e2e", () => {
   let transferTokenIx: TransactionInstruction;
 
   before("creates a testet usdc and mints to solver", async () => {
+    // Route token mint
     const usdcMint = Keypair.generate();
     mockSvmUsdcMint = usdcMint.publicKey;
 
     await createMint(
       connection,
-      solver, // payer
-      solver.publicKey, // mint authority
-      null, // freeze authority
-      USDC_DECIMALS, // decimals
-      usdcMint, // mint keypair
+      solver,
+      solver.publicKey,
+      null,
+      USDC_DECIMALS,
+      usdcMint,
       {
         commitment: "confirmed",
       }
@@ -138,7 +136,7 @@ describe("EVM → SVM e2e", () => {
       mockSvmUsdcMint,
       ata,
       solver,
-      usdcAmount(1000), // amount to mint
+      usdcAmount(1000),
       [],
       {
         commitment: "confirmed",
@@ -186,12 +184,6 @@ describe("EVM → SVM e2e", () => {
       testReceiver.publicKey
     );
 
-    // createAtaIx = createAssociatedTokenAccountInstruction(
-    //   SOLVER_PLACEHOLDER_PUBKEY,
-    //   testReceiverAta,
-    //   testReceiver.publicKey,
-    //   mockSvmUsdcMint
-    // );
     await createAssociatedTokenAccount(
       connection,
       solver,
@@ -208,20 +200,27 @@ describe("EVM → SVM e2e", () => {
       USDC_DECIMALS
     );
 
-    console.log("transfer token ix before :", transferTokenIx);
+    transferTokenIx.keys.forEach((k) => {
+      if (k.pubkey.equals(executionAuthority)) {
+        k.isSigner = true;
+        k.isWritable = true; // must be writable – the program mutates it
+      }
+    });
 
-    // const transferSolIx = anchor.web3.SystemProgram.transfer({
-    //   fromPubkey: SOLVER_PLACEHOLDER_PUBKEY,
-    //   toPubkey: testReceiver.publicKey,
-    //   lamports: 10_000,
-    // });
+    console.log("transfer token ix before :", transferTokenIx);
 
     // createAtaSvmCall = wrapSvmCallIx(createAtaIx);
     const transferCheckedSvmCall = wrapIxFull(transferTokenIx);
+    transferTokenIx.keys.forEach((k) => {
+      if (k.pubkey.equals(executionAuthority)) {
+        // remove it for SVM ix so that we don't have to sign the tx with this pda
+        k.isSigner = false;
+      }
+    });
 
     const routeTokens = [
       {
-        token: "0x" + mockSvmUsdcMint.toBuffer().toString("hex"),
+        token: svmAddressToHex(mockSvmUsdcMint),
         amount: amountU256,
       },
     ];
@@ -234,12 +233,6 @@ describe("EVM → SVM e2e", () => {
     ];
 
     const calls = [
-      //   {
-      //     target:
-      //       "0x" + Buffer.from(createAtaSvmCall.destination).toString("hex"),
-      //     data: "0x" + Buffer.from(createAtaSvmCall.calldata).toString("hex"),
-      //     value: BigInt(0),
-      //   },
       {
         target:
           "0x" +
@@ -285,7 +278,6 @@ describe("EVM → SVM e2e", () => {
       ]({ route, reward })
     );
 
-    // const intentHashEvm = hashIntent(encodeRoute(route), encodeReward(reward));
     const { intentHash, routeHash, rewardHash } = await intentSource[
       "getIntentHash(((bytes32,uint256,uint256,bytes32,(bytes32,uint256)[],(bytes32,bytes,uint256)[]),(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[])))"
     ]({
@@ -387,10 +379,6 @@ describe("EVM → SVM e2e", () => {
     const lightTransferCheckedSvmCall = wrapIxHeaderOnly(transferTokenIx);
 
     const calls = [
-      //   {
-      //     destination: Array.from(Buffer.from(createAtaSvmCall.destination)),
-      //     calldata: Buffer.from(createAtaSvmCall.calldata),
-      //   },
       {
         destination: Array.from(
           Buffer.from(lightTransferCheckedSvmCall.destination)
@@ -420,19 +408,17 @@ describe("EVM → SVM e2e", () => {
       deadline: new BN(1000000000000),
     };
 
+    console.log("SVM passed call: ", calls);
+    console.log("SVM route tokens: ", routeSolTokenArg);
+    console.log("SVM reward tokens: ", rewardSolTokenArg);
+    console.log("SVM route: ", routeSolArg);
+    console.log("SVM reward: ", rewardSolArg);
+
     let remainingAccounts = [
       { pubkey: mockSvmUsdcMint, isSigner: false, isWritable: false },
       { pubkey: solverAta, isSigner: false, isWritable: true },
       { pubkey: executionAuthorityAta, isSigner: false, isWritable: true },
     ];
-
-    // createAtaIx.keys.forEach((key) => {
-    //   remainingAccounts.push({
-    //     pubkey: key.pubkey,
-    //     isWritable: key.isWritable,
-    //     isSigner: key.isSigner,
-    //   });
-    // });
 
     transferTokenIx.keys.forEach((key) => {
       remainingAccounts.push({
@@ -478,7 +464,7 @@ describe("EVM → SVM e2e", () => {
           recentBlockhash: blockhash.blockhash,
           instructions: [
             ComputeBudgetProgram.setComputeUnitLimit({
-              units: 400_000,
+              units: 1_000_000,
             }),
             ComputeBudgetProgram.setComputeUnitPrice({
               microLamports: 300_000,

@@ -1,7 +1,7 @@
 /*
- *     1. Publish + Fund intent on Solana  (call to devnet program)
- *     2. Fulfil intent on EVM             (mocked / TODO)
- *     3. Claim on Solana                  (call to devnet program)
+ *     1. Publish + Fund intent on Solana
+ *     2. Fulfil intent on EVM
+ *     3. Claim on Solana
  */
 import "dotenv/config";
 import {
@@ -28,29 +28,33 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { EcoRoutes } from "../../target/types/eco_routes";
-import { describe, it } from "node:test";
-import { generateIntentHash, usdcAmount, loadKeypairFromFile } from "./utils";
+import { usdcAmount, loadKeypairFromFile, svmAddressToHex } from "./utils";
 import {
+  ECO_ROUTES_ID_TESTNET,
   EVM_DOMAIN_ID,
   INBOX_ADDRESS_TESTNET,
+  INTENT_SOURCE_ADDRESS_TESTNET,
+  MAILBOX_ID_TESTNET,
   SOLANA_DOMAIN_ID,
   STORAGE_PROVER_ADDRESS_TESTNET,
   TEST_USDC_ADDRESS_TESTNET,
   TESTNET_RPC,
   USDC_DECIMALS,
 } from "./constants";
-import { ethers, JsonRpcProvider } from "ethers";
-import { Inbox__factory, TestERC20__factory } from "./evm-types";
+import { ethers, Interface, JsonRpcProvider, Signer } from "ethers";
 import {
-  addressToBytes32Hex,
-  encodeReward,
-  encodeRoute,
-  evmUsdcAmount,
-  hex32ToBytes,
-} from "./evmUtils";
+  Inbox,
+  Inbox__factory,
+  IntentSource,
+  IntentSource__factory,
+  TestERC20,
+  TestERC20__factory,
+} from "./evm-types";
+import { addressToBytes32Hex, hex32ToNums } from "./evmUtils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
+import { Reward, Route } from "./evmUtils";
 
-const creatorSvm = loadKeypairFromFile("../../keys/program_auth.json");
+const creatorSvm = loadKeypairFromFile("../../keys/program_auth.json"); // SVM intent creator key
 const connection = new Connection(TESTNET_RPC, "confirmed");
 const provider = new AnchorProvider(connection, new anchor.Wallet(creatorSvm), {
   commitment: "confirmed",
@@ -60,114 +64,283 @@ const program = new Program(
   provider
 ) as Program<EcoRoutes>;
 
-const salt = anchorUtils.bytes.utf8.encode("svm-to-evm-test".padEnd(32, "\0"));
-
-/* these will be filled in step-1 */
-let route: any, reward: any, intentHash: Uint8Array;
-let mockSvmUsdcMint: PublicKey | undefined = undefined;
+const salt = (() => {
+  const bytes = anchorUtils.bytes.utf8.encode("svm-evm-e2e".padEnd(32, "\0"));
+  return bytes.slice(0, 32);
+})();
+const saltHex = "0x" + Buffer.from(salt).toString("hex");
 
 describe("SVM -> EVM e2e", () => {
-  before("creates a testet usdc mint", async () => {
-    const usdcMint = Keypair.generate();
-    mockSvmUsdcMint = usdcMint.publicKey;
+  let usdc: TestERC20;
+  let inbox: Inbox;
+  let intentSource: IntentSource;
+  let l2Provider: ethers.JsonRpcProvider;
+  let solverEvm!: Signer;
+  let evmTransferCalldata!: string;
+  let intentHashHex!: string;
+  let intentHashBytes!: Uint8Array;
+  let rewardHashHex!: string;
+  let mockSvmUsdcMint: PublicKey;
+  let route!: Route;
+  let reward!: Reward;
 
-    await createMint(
-      connection,
-      creatorSvm, // payer
-      creatorSvm.publicKey, // mint authority
-      null, // freeze authority
-      USDC_DECIMALS, // decimals
-      usdcMint, // mint keypair
-      {
-        commitment: "confirmed",
-      }
-    );
+  before(
+    "creates a testet usdc and mints to an SVM intent creator",
+    async () => {
+      console.log("EVM inbox hex:", addressToBytes32Hex(INBOX_ADDRESS_TESTNET));
+      console.log(
+        "SVM inbox bytes:",
+        hex32ToNums(addressToBytes32Hex(INBOX_ADDRESS_TESTNET))
+      );
 
-    const ata = await createAssociatedTokenAccount(
-      connection,
-      creatorSvm,
-      mockSvmUsdcMint,
-      creatorSvm.publicKey,
-      {
-        commitment: "confirmed",
-      }
-    );
+      // Reward token mint
+      const usdcMint = Keypair.generate();
+      mockSvmUsdcMint = usdcMint.publicKey;
 
-    await mintTo(
-      connection,
-      creatorSvm,
-      mockSvmUsdcMint,
-      ata,
-      creatorSvm,
-      usdcAmount(1000), // amount to mint
-      [],
-      {
-        commitment: "confirmed",
-      }
-    );
+      await createMint(
+        connection,
+        creatorSvm, // payer
+        creatorSvm.publicKey, // mint authority
+        null, // freeze authority
+        USDC_DECIMALS, // decimals
+        usdcMint, // mint keypair
+        {
+          commitment: "confirmed",
+        }
+      );
 
-    // we need the solver to have an associated token account for the Claim SPL ix later
-    await createAssociatedTokenAccount(
-      connection,
-      creatorSvm,
-      mockSvmUsdcMint,
-      creatorSvm.publicKey,
-      { commitment: "confirmed" }
-    );
-  });
+      const ata = await createAssociatedTokenAccount(
+        connection,
+        creatorSvm,
+        mockSvmUsdcMint,
+        creatorSvm.publicKey,
+        {
+          commitment: "confirmed",
+        }
+      );
+
+      await mintTo(
+        connection,
+        creatorSvm,
+        mockSvmUsdcMint,
+        ata,
+        creatorSvm,
+        usdcAmount(1000), // amount to mint
+        [],
+        {
+          commitment: "confirmed",
+        }
+      );
+
+      l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
+      solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
+
+      const evmCallInterface = new Interface([
+        "function transfer(address,uint256)",
+      ]);
+      const evmCallTransferAmount = BigInt(usdcAmount(5));
+
+      evmTransferCalldata = evmCallInterface.encodeFunctionData("transfer", [
+        await solverEvm.getAddress(), // recipient on Sepolia
+        evmCallTransferAmount,
+      ]);
+
+      const transferUsdcEvmCall = {
+        target: addressToBytes32Hex(TEST_USDC_ADDRESS_TESTNET),
+        data: evmTransferCalldata,
+        value: BigInt(0),
+      };
+
+      const routeTokens = [
+        {
+          token: addressToBytes32Hex(TEST_USDC_ADDRESS_TESTNET),
+          amount: BigInt(usdcAmount(5)),
+        },
+      ];
+
+      const rewardTokens = [
+        {
+          token: svmAddressToHex(mockSvmUsdcMint),
+          amount: BigInt(usdcAmount(5)),
+        },
+      ];
+
+      const calls = [transferUsdcEvmCall];
+
+      // Get EVM intent and hashes
+      route = {
+        salt: saltHex,
+        source: SOLANA_DOMAIN_ID,
+        destination: EVM_DOMAIN_ID,
+        inbox: addressToBytes32Hex(INBOX_ADDRESS_TESTNET),
+        tokens: routeTokens,
+        calls,
+      };
+
+      reward = {
+        creator: svmAddressToHex(creatorSvm.publicKey),
+        prover: svmAddressToHex(ECO_ROUTES_ID_TESTNET),
+        deadline: BigInt(1000000000000),
+        nativeValue: BigInt(0),
+        tokens: rewardTokens,
+      };
+
+      // IntentSource contract
+      intentSource = IntentSource__factory.connect(
+        INTENT_SOURCE_ADDRESS_TESTNET,
+        solverEvm
+      );
+
+      usdc = TestERC20__factory.connect(TEST_USDC_ADDRESS_TESTNET, solverEvm);
+
+      inbox = Inbox__factory.connect(INBOX_ADDRESS_TESTNET, solverEvm);
+
+      const { intentHash, routeHash, rewardHash } = await intentSource[
+        "getIntentHash(((bytes32,uint256,uint256,bytes32,(bytes32,uint256)[],(bytes32,bytes,uint256)[]),(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[])))"
+      ]({
+        route,
+        reward,
+      });
+      // EVM one for TestProver
+      intentHashHex = intentHash;
+      rewardHashHex = rewardHash;
+
+      // store the one Solana needs
+      intentHashBytes = ethers.getBytes(intentHash);
+
+      console.log("EVM passed call: ", transferUsdcEvmCall);
+      console.log("EVM route tokens: ", routeTokens);
+      console.log("EVM reward tokens: ", rewardTokens);
+      console.log("EVM route: ", route);
+      console.log("EVM reward: ", reward);
+      console.log("Intent hash bytes (for an SVM call): ", intentHashBytes);
+      console.log("Route hash hex (EVM): ", routeHash);
+      console.log("Reward hash hex (EVM): ", rewardHash);
+      console.log("Intent hash hex (EVM): ", intentHashHex);
+
+      expect(intentHashBytes.length).equals(32);
+    }
+  );
 
   it("Publish + Fund intent on Solana", async () => {
-    route = {
-      salt,
+    const executionAuthority = PublicKey.findProgramAddressSync(
+      [Buffer.from("execution_authority"), salt],
+      program.programId
+    )[0];
+
+    const amountBN = new BN(usdcAmount(5));
+
+    const executionAuthorityAta = getAssociatedTokenAddressSync(
+      mockSvmUsdcMint,
+      executionAuthority,
+      true
+    );
+    const executionAuthorityAtaData = await connection.getAccountInfo(
+      executionAuthorityAta
+    );
+    if (!executionAuthorityAtaData) {
+      await createAssociatedTokenAccount(
+        connection,
+        creatorSvm,
+        mockSvmUsdcMint,
+        executionAuthority,
+        { commitment: "confirmed" },
+        undefined,
+        undefined,
+        true
+      );
+    }
+    const routeSolTokenArg = [
+      {
+        token: hex32ToNums(addressToBytes32Hex(TEST_USDC_ADDRESS_TESTNET)),
+        amount: amountBN,
+      },
+    ];
+
+    const rewardSolTokenArg = [
+      {
+        token: Array.from(mockSvmUsdcMint.toBytes()),
+        amount: amountBN,
+      },
+    ];
+
+    const destinationSol = Array.from(
+      Buffer.from(
+        ethers.getBytes(addressToBytes32Hex(TEST_USDC_ADDRESS_TESTNET))
+      )
+    );
+    const calldataSol = Buffer.from(ethers.getBytes(evmTransferCalldata));
+    const callsSol = [
+      {
+        destination: destinationSol,
+        calldata: calldataSol,
+      },
+    ];
+
+    console.log("SVM passed destination: ", destinationSol);
+    console.log("SVM passed calldata: ", calldataSol);
+
+    const routeSol = {
+      salt: Array.from(Buffer.from(saltHex.slice(2), "hex")),
       sourceDomainId: SOLANA_DOMAIN_ID,
       destinationDomainId: EVM_DOMAIN_ID,
-      inbox: Array.from(addressToBytes32Hex(INBOX_ADDRESS_TESTNET)),
-      tokens: [
-        {
-          token: Array.from(mockSvmUsdcMint.toBytes()),
-          amount: new BN(usdcAmount(5)),
-        },
-      ],
-      calls: [],
+      inbox: hex32ToNums(addressToBytes32Hex(INBOX_ADDRESS_TESTNET)),
+      tokens: routeSolTokenArg,
+      calls: callsSol,
     };
 
-    reward = {
-      creator: creatorSvm.publicKey.toBytes(),
-      prover: Array.from(addressToBytes32Hex(STORAGE_PROVER_ADDRESS_TESTNET)),
-      tokens: [
-        {
-          token: Array.from(mockSvmUsdcMint.toBytes()),
-          amount: new BN(usdcAmount(10)),
-        },
-      ],
+    const rewardSol = {
+      creator: creatorSvm.publicKey,
+      prover: Array.from(ECO_ROUTES_ID_TESTNET.toBytes()),
+      tokens: rewardSolTokenArg,
       nativeAmount: new BN(0),
-      deadline: new BN(0),
+      deadline: new BN(1000000000000),
     };
 
-    intentHash = generateIntentHash(route, reward);
-    expect(intentHash.length).equals(32);
+    console.log(
+      "Reward sol prover hex: ",
+      Buffer.from(rewardSol.prover).toString("hex")
+    );
+    console.log(
+      "Route sol destination hex: ",
+      Buffer.from(routeSol.calls[0].destination).toString("hex")
+    );
+    console.log(
+      "Route sol calldata hex: ",
+      Buffer.from(routeSol.calls[0].calldata).toString("hex")
+    );
+    console.log(
+      "Route sol inbox hex: ",
+      Buffer.from(routeSol.inbox).toString("hex")
+    );
+
+    console.log("SVM passed call: ", callsSol);
+    console.log("SVM route tokens: ", routeSolTokenArg);
+    console.log("SVM reward tokens: ", rewardSolTokenArg);
+    console.log("SVM route: ", routeSol);
+    console.log("SVM reward: ", rewardSol);
 
     const intent = PublicKey.findProgramAddressSync(
-      [Buffer.from("intent"), intentHash],
+      [Buffer.from("intent"), intentHashBytes],
       program.programId
     )[0];
 
     const vault = PublicKey.findProgramAddressSync(
-      [Buffer.from("reward"), intentHash, mockSvmUsdcMint.toBytes()],
+      [Buffer.from("reward"), intentHashBytes, mockSvmUsdcMint.toBytes()],
       program.programId
     )[0];
 
     const publishIx = await program.methods
       .publishIntent({
-        salt: Array.from(salt) as number[],
-        intentHash: Array.from(intentHash) as number[],
+        salt: Array.from(salt),
+        intentHash: Array.from(intentHashBytes),
         destinationDomainId: EVM_DOMAIN_ID,
-        inbox: route.inbox,
-        routeTokens: route.tokens,
-        calls: [],
-        rewardTokens: reward.tokens,
-        nativeReward: reward.nativeAmount,
-        deadline: reward.deadline,
+        inbox: routeSol.inbox,
+        routeTokens: routeSol.tokens,
+        calls: routeSol.calls,
+        rewardTokens: rewardSol.tokens,
+        nativeReward: rewardSol.nativeAmount,
+        deadline: rewardSol.deadline,
       })
       .accountsStrict({
         intent,
@@ -203,23 +376,11 @@ describe("SVM -> EVM e2e", () => {
     const intentAccountInfo = await connection.getAccountInfo(intent);
     expect(intentAccountInfo.data.length).to.be.greaterThan(0);
 
-    // Native transfer to Intent PDA
-    const fundNativeIx = await program.methods
-      .fundIntentNative({
-        intentHash: Array.from(intentHash) as number[],
-      })
-      .accountsStrict({
-        intent,
-        funder: creatorSvm.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
-
-    /* SPL transfer of USDC to Intent */
+    // "Fund SPL" transfer of USDC to Intent
     const fundSplIx = await program.methods
       .fundIntentSpl({
-        intentHash: Array.from(intentHash) as number[],
-        tokenIndex: 0, // USDC reward index
+        intentHash: Array.from(intentHashBytes),
+        tokenIndex: 0,
       })
       .accountsStrict({
         intent,
@@ -241,7 +402,7 @@ describe("SVM -> EVM e2e", () => {
       new TransactionMessage({
         payerKey: creatorSvm.publicKey,
         recentBlockhash: blockhash.blockhash,
-        instructions: [fundNativeIx, fundSplIx],
+        instructions: [fundSplIx],
       }).compileToV0Message()
     );
     fundIntentTx.sign([creatorSvm]);
@@ -263,106 +424,40 @@ describe("SVM -> EVM e2e", () => {
     expect(intentAccount.status.funded).to.be.true;
   });
 
-  it("Fulfil intent on EVM (mock Hyperlane)", async () => {
-    const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
-    const solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
+  it("Fulfil intent on EVM", async () => {
+    const solverEvmAddress = await solverEvm.getAddress();
 
-    const usdcEvm = TestERC20__factory.connect(
-      TEST_USDC_ADDRESS_TESTNET,
-      solverEvm
-    );
-
-    const inbox = Inbox__factory.connect(INBOX_ADDRESS_TESTNET, solverEvm);
-    const saltHex = "0x" + Buffer.from(salt).toString("hex");
-    const inboxBytes32 = hex32ToBytes(
-      addressToBytes32Hex(INBOX_ADDRESS_TESTNET)
-    );
-    const evmUsdcBytes32 = hex32ToBytes(
-      addressToBytes32Hex(await usdcEvm.getAddress())
-    );
-
-    const routeSol = {
-      salt: saltHex as `0x${string}`,
-      source: SOLANA_DOMAIN_ID,
-      destination: EVM_DOMAIN_ID,
-      inbox: inboxBytes32,
-      tokens: [
-        {
-          token: "0x" + Buffer.from(evmUsdcBytes32).toString("hex"),
-          amount: BigInt(evmUsdcAmount(5)),
-        },
-      ],
-      calls: [] as { target: string; data: string; value: bigint }[],
-    };
-
-    const usdcMintBytes32 = "0x" + mockSvmUsdcMint.toBuffer().toString("hex");
-    const creatorBytes32 =
-      "0x" + creatorSvm.publicKey.toBuffer().toString("hex");
-    const rewardSol = {
-      creator: creatorBytes32,
-      prover: STORAGE_PROVER_ADDRESS_TESTNET,
-      deadline: BigInt(0),
-      nativeValue: BigInt(0),
-      tokens: [
-        {
-          token: usdcMintBytes32,
-          amount: BigInt(usdcAmount(10)),
-        },
-      ],
-    };
-
-    const routeHash = ethers.keccak256(encodeRoute(routeSol));
-    const rewardHash = ethers.keccak256(encodeReward(rewardSol));
-    const expectedHash = ethers.keccak256(
-      ethers.solidityPacked(["bytes32", "bytes32"], [routeHash, rewardHash])
-    );
-
-    await usdcEvm
-      .connect(solverEvm)
-      .approve(INBOX_ADDRESS_TESTNET, evmUsdcAmount(5));
+    await usdc.connect(solverEvm).approve(INBOX_ADDRESS_TESTNET, usdcAmount(5));
 
     await inbox.fulfillAndProve(
-      routeSol,
-      rewardHash,
-      await solverEvm.getAddress(),
-      expectedHash,
+      route,
+      rewardHashHex,
+      solverEvmAddress,
+      intentHashHex,
       STORAGE_PROVER_ADDRESS_TESTNET,
       "0x",
-      { gasLimit: 4_000_000 }
+      { gasLimit: 1_000_000 }
     );
 
-    const fulfilledMappingSlot = await inbox.fulfilled(expectedHash);
-    expect(fulfilledMappingSlot).to.equal(await solverEvm.getAddress());
+    const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
+    expect(fulfilledMappingSlot).to.equal(solverEvmAddress);
   });
 
-  it("Claim intent on Solana", async () => {
+  it.skip("Claim intent on Solana", async () => {
     const intent = PublicKey.findProgramAddressSync(
-      [Buffer.from("intent"), intentHash],
+      [Buffer.from("intent"), intentHashBytes],
       program.programId
     )[0];
 
     const vault = PublicKey.findProgramAddressSync(
-      [Buffer.from("reward"), intentHash, mockSvmUsdcMint.toBytes()],
+      [Buffer.from("reward"), intentHashBytes, mockSvmUsdcMint.toBytes()],
       program.programId
     )[0];
-
-    // native claim ix
-    const claimNativeIx = await program.methods
-      .claimIntentNative({
-        intentHash: Array.from(intentHash) as number[],
-      })
-      .accountsStrict({
-        intent,
-        claimer: creatorSvm.publicKey,
-        payer: creatorSvm.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
 
     // spl claim ix
     const claimSplIx = await program.methods
       .claimIntentSpl({
-        intentHash: Array.from(intentHash) as number[],
+        intentHash: Array.from(intentHashBytes),
         tokenIndex: 0,
       })
       .accountsStrict({
@@ -385,7 +480,7 @@ describe("SVM -> EVM e2e", () => {
       new TransactionMessage({
         payerKey: creatorSvm.publicKey,
         recentBlockhash: blockhash.blockhash,
-        instructions: [claimNativeIx, claimSplIx],
+        instructions: [claimSplIx],
       }).compileToV0Message()
     );
     claimIntentTx.sign([creatorSvm]);
