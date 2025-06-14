@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 
-use crate::{encoding, error::EcoRoutesError, events, state::Intent};
+use crate::error::EcoRoutesError;
+use crate::state::Intent;
+use crate::{encoding, events};
 
 #[derive(Accounts)]
 pub struct Handle<'info> {

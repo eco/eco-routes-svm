@@ -1,6 +1,8 @@
 use anchor_lang::prelude::*;
 
-use crate::{error::EcoRoutesError, events, state::Intent};
+use crate::error::EcoRoutesError;
+use crate::events;
+use crate::state::Intent;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RefundIntentNativeArgs {

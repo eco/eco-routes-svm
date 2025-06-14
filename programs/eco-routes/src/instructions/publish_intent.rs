@@ -1,9 +1,7 @@
 use anchor_lang::prelude::*;
 
-use crate::{
-    events,
-    state::{Call, Intent, Reward, Route, TokenAmount},
-};
+use crate::events;
+use crate::state::{Call, Intent, Reward, Route, TokenAmount};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct PublishIntentArgs {

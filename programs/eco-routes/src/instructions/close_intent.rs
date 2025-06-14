@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 
 use crate::error::EcoRoutesError;
-
 use crate::events;
 use crate::state::{Intent, IntentStatus};
 

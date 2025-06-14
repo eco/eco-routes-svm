@@ -1,6 +1,8 @@
-use anchor_lang::{prelude::*, system_program};
+use anchor_lang::prelude::*;
+use anchor_lang::system_program;
 
-use crate::{events, state::Intent};
+use crate::events;
+use crate::state::Intent;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct FundIntentNativeArgs {
