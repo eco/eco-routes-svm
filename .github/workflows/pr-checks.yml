@@ -40,7 +40,10 @@ jobs:
           cache-key-suffix: import-sort
 
       - name: Install cargo-sort
-        run: cargo install cargo-sort
+        run: |
+          if ! command -v cargo-sort &> /dev/null; then
+            cargo install cargo-sort
+          fi
 
       - name: Check import sorting
         run: cargo sort --workspace --check

@@ -1,0 +1,31 @@
+[package]
+name = "portal"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "portal"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"
+derive-new = "0.7.0"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+[dev-dependencies]
+base64 = "0.22.1"
+derive_more = { version = "2.0.1", features = ["deref", "deref_mut"] }
+goldie = "0.5.0"
+litesvm = "0.6.1"
+rand = "0.9.1"
+solana-sdk = "2.2.1"
+
