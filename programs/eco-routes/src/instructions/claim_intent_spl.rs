@@ -1,11 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::{
-    error::EcoRoutesError,
-    events,
-    state::{Intent, IntentStatus},
-};
+use crate::error::EcoRoutesError;
+use crate::events;
+use crate::state::{Intent, IntentStatus};
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug)]
 pub struct ClaimIntentSplArgs {

@@ -3,10 +3,8 @@ use derive_more::Deref;
 use ethabi::{decode, encode, ParamType, Token};
 use tiny_keccak::{Hasher, Keccak};
 
-use crate::{
-    error::EcoRoutesError,
-    state::{Reward, Route, TokenAmount},
-};
+use crate::error::EcoRoutesError;
+use crate::state::{Reward, Route, TokenAmount};
 
 #[inline(always)]
 fn as_bytes32(token: &Token) -> Option<[u8; 32]> {

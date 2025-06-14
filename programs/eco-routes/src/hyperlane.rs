@@ -1,17 +1,12 @@
-use anchor_lang::{
-    prelude::{
-        borsh::{BorshDeserialize, BorshSerialize},
-        *,
-    },
-    solana_program::{instruction::Instruction, program::invoke_signed},
-    system_program,
-};
+use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program;
 
-use crate::{
-    encoding,
-    instructions::FulfillIntent,
-    state::{Reward, Route},
-};
+use crate::encoding;
+use crate::instructions::FulfillIntent;
+use crate::state::{Reward, Route};
 
 pub const DOMAIN_ID: u32 = 1;
 

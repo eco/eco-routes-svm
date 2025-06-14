@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use anchor_lang::prelude::*;
 
-use crate::{encoding, error::EcoRoutesError};
+use crate::encoding;
+use crate::error::EcoRoutesError;
 
 pub const MAX_ROUTE_TOKENS: usize = 3;
 pub const MAX_REWARD_TOKENS: usize = 3;

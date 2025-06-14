@@ -2,7 +2,9 @@ use anchor_lang::{AnchorDeserialize, AnchorSerialize, Discriminator};
 use anyhow::Result;
 use litesvm::LiteSVM;
 use rand::Rng;
-use solana_sdk::{account::Account, clock::Clock, pubkey::Pubkey};
+use solana_sdk::account::Account;
+use solana_sdk::clock::Clock;
+use solana_sdk::pubkey::Pubkey;
 
 pub fn sol_amount(amount: f64) -> u64 {
     (amount * 1_000_000_000.0) as u64

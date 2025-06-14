@@ -1,10 +1,12 @@
-use anchor_lang::{prelude::*, solana_program::program::set_return_data};
-use borsh::BorshSerialize;
 use std::iter;
 
-use crate::{encoding, state::Intent};
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::set_return_data;
+use borsh::BorshSerialize;
 
 use super::expected_process_authority;
+use crate::encoding;
+use crate::state::Intent;
 
 #[derive(Debug, AnchorDeserialize, AnchorSerialize, Clone)]
 pub struct SerializableAccountMeta {

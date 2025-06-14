@@ -1,4 +1,5 @@
-use anchor_lang::{prelude::*, solana_program::program::set_return_data};
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::set_return_data;
 
 use crate::hyperlane;
 
