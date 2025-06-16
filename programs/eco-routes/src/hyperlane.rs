@@ -12,7 +12,7 @@ use crate::{
     state::{Reward, Route},
 };
 
-pub const DOMAIN_ID: u32 = 1;
+pub const DOMAIN_ID: u32 = 1399811149;
 
 pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
 pub const MULTISIG_ISM_ID: Pubkey = pubkey!("TrustedRe1ayer1sm11111111111111111111111111");
@@ -57,7 +57,7 @@ pub fn dispatch_fulfillment_message<'info>(
     route: &Route,
     reward: &Reward,
     intent_hash: &[u8; 32],
-    solver: &Signer<'info>,
+    claimant: [u8; 32],
     mailbox_program: &UncheckedAccount<'info>,
     outbox_pda: &UncheckedAccount<'info>,
     dispatch_authority: &UncheckedAccount<'info>,
@@ -73,10 +73,7 @@ pub fn dispatch_fulfillment_message<'info>(
         // Domain id is flipped so the message sends back to the Intent's source chain, but hashes match
         destination_domain: route.source_domain_id,
         recipient: reward.prover,
-        message_body: encoding::encode_fulfillment_message(
-            &[*intent_hash],
-            &[solver.key().to_bytes()],
-        ),
+        message_body: encoding::encode_fulfillment_message(&[*intent_hash], &[claimant]),
     });
 
     let ix = Instruction {

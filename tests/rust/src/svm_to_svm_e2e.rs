@@ -1085,6 +1085,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         data: eco_routes::instruction::FulfillIntent {
             args: FulfillIntentArgs {
                 intent_hash: context.intent_hash,
+                claimant: context.solver.pubkey().to_bytes(),
                 route: route_without_metas,
                 reward: context.reward.clone(),
             },

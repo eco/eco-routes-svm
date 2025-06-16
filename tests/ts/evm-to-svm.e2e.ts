@@ -23,38 +23,34 @@ import {
 import * as anchor from "@coral-xyz/anchor";
 import {
   createAssociatedTokenAccount,
-  createMint,
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
-  mintTo,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { expect } from "chai";
-import { ethers, JsonRpcProvider, Signer } from "ethers";
+import { ethers, getBytes, JsonRpcProvider, keccak256, Signer } from "ethers";
 import {
-  TestERC20__factory,
   TestProver__factory,
-  TestERC20,
   TestProver,
   IntentSource__factory,
   IntentSource,
 } from "./evm-types";
 import { EcoRoutes } from "../../target/types/eco_routes";
 import {
-  TESTNET_RPC,
-  MAILBOX_ID_TESTNET,
+  MAINNET_RPC,
+  MAILBOX_ID_MAINNET,
   SPL_NOOP_ID,
   SOLANA_DOMAIN_ID,
   EVM_DOMAIN_ID,
-  TEST_USDC_ADDRESS_TESTNET,
-  INTENT_SOURCE_ADDRESS_TESTNET,
-  STORAGE_PROVER_ADDRESS_TESTNET,
-  INBOX_ADDRESS_TESTNET,
+  INTENT_SOURCE_ADDRESS,
+  HYPER_PROVER_ADDRESS,
+  INBOX_ADDRESS,
   USDC_DECIMALS,
+  USDC_MINT,
+  DISPATCHED_MSG_PDA_HEADER_LEN,
 } from "./constants";
 import {
-  evmUsdcAmount,
   Route,
   Reward,
   addressToBytes32Hex,
@@ -62,6 +58,7 @@ import {
   hex32ToNums,
 } from "./evmUtils";
 import {
+  buildPayForGasIx,
   loadKeypairFromFile,
   svmAddressToHex,
   usdcAmount,
@@ -70,8 +67,8 @@ import {
 } from "./utils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 
-const solver = loadKeypairFromFile("../../keys/program_auth.json"); // SVM solver key
-const connection = new Connection(TESTNET_RPC, "confirmed");
+const solver = loadKeypairFromFile("../../keys/program_auth_mainnet.json"); // SVM solver key
+const connection = new Connection(MAINNET_RPC, "confirmed");
 const provider = new AnchorProvider(connection, new anchor.Wallet(solver), {
   commitment: "confirmed",
 });
@@ -91,82 +88,39 @@ const salt = (() => {
 const saltHex = "0x" + Buffer.from(salt).toString("hex");
 
 describe("EVM → SVM e2e", () => {
-  let usdc: TestERC20;
   let intentSource: IntentSource;
-  let testProver: TestProver;
+  let hyperProver: TestProver;
   let creatorEvm!: Signer;
   let solverEvm!: Signer;
   let intentHashHex!: string;
   let routeHashHex!: string;
-  let mockSvmUsdcMint: PublicKey;
+  let svmUsdcMint: PublicKey = USDC_MINT;
 
-  let testReceiver: Keypair = Keypair.generate();
+  let testReceiver: PublicKey = new PublicKey(
+    "SDCcPraNtvK4XPk5XASqYExWyEPrH9YAnEwm6Hcuz3U"
+  );
   let transferTokenIx: TransactionInstruction;
+  const deadline = 211160000;
 
-  before("creates a testet usdc and mints to solver", async () => {
-    // Route token mint
-    const usdcMint = Keypair.generate();
-    mockSvmUsdcMint = usdcMint.publicKey;
-
-    await createMint(
-      connection,
-      solver,
-      solver.publicKey,
-      null,
-      USDC_DECIMALS,
-      usdcMint,
-      {
-        commitment: "confirmed",
-      }
-    );
-
-    const ata = await createAssociatedTokenAccount(
-      connection,
-      solver,
-      mockSvmUsdcMint,
-      solver.publicKey,
-      {
-        commitment: "confirmed",
-      }
-    );
-
-    await mintTo(
-      connection,
-      solver,
-      mockSvmUsdcMint,
-      ata,
-      solver,
-      usdcAmount(1000),
-      [],
-      {
-        commitment: "confirmed",
-      }
-    );
-  });
+  before("_", async () => {});
 
   it("publishes & funds an intent on EVM", async () => {
-    const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
+    const l2Provider = new JsonRpcProvider(process.env.EVM_RPC);
     creatorEvm = new ethers.Wallet(process.env.PK_CREATOR!, l2Provider);
     solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
 
-    // mock USDC
-    usdc = TestERC20__factory.connect(TEST_USDC_ADDRESS_TESTNET, creatorEvm);
-
     // IntentSource contract
     intentSource = IntentSource__factory.connect(
-      INTENT_SOURCE_ADDRESS_TESTNET,
+      INTENT_SOURCE_ADDRESS,
       creatorEvm
     );
 
-    // TestProver and give its address to reward.prover
-    testProver = TestProver__factory.connect(
-      STORAGE_PROVER_ADDRESS_TESTNET,
-      creatorEvm
-    );
+    // HyperProver and give its address to reward.prover
+    hyperProver = TestProver__factory.connect(HYPER_PROVER_ADDRESS, creatorEvm);
 
     const intentSourceAddress = await intentSource.getAddress();
 
-    const amountU64 = usdcAmount(5); // 5_000_000
+    const amountU64 = usdcAmount(1); // 1_000_000 = 1 USDC
     const amountU256 = BigInt(amountU64);
 
     const executionAuthority = PublicKey.findProgramAddressSync(
@@ -174,29 +128,22 @@ describe("EVM → SVM e2e", () => {
       program.programId
     )[0];
     const executionAuthortiyAta = getAssociatedTokenAddressSync(
-      mockSvmUsdcMint,
+      svmUsdcMint,
       executionAuthority,
       true
     );
 
     const testReceiverAta = getAssociatedTokenAddressSync(
-      mockSvmUsdcMint,
-      testReceiver.publicKey
-    );
-
-    await createAssociatedTokenAccount(
-      connection,
-      solver,
-      mockSvmUsdcMint,
-      testReceiver.publicKey
+      svmUsdcMint,
+      testReceiver
     );
 
     transferTokenIx = createTransferCheckedInstruction(
       executionAuthortiyAta,
-      mockSvmUsdcMint,
+      svmUsdcMint,
       testReceiverAta,
       executionAuthority,
-      usdcAmount(5),
+      usdcAmount(1),
       USDC_DECIMALS
     );
 
@@ -220,14 +167,7 @@ describe("EVM → SVM e2e", () => {
 
     const routeTokens = [
       {
-        token: svmAddressToHex(mockSvmUsdcMint),
-        amount: amountU256,
-      },
-    ];
-
-    const rewardTokens = [
-      {
-        token: addressToBytes32Hex(TEST_USDC_ADDRESS_TESTNET),
+        token: svmAddressToHex(svmUsdcMint),
         amount: amountU256,
       },
     ];
@@ -247,26 +187,24 @@ describe("EVM → SVM e2e", () => {
       salt: saltHex,
       source: EVM_DOMAIN_ID,
       destination: SOLANA_DOMAIN_ID,
-      inbox: addressToBytes32Hex(INBOX_ADDRESS_TESTNET),
+      inbox: addressToBytes32Hex(INBOX_ADDRESS),
       tokens: routeTokens,
       calls,
     };
 
     reward = {
       creator: addressToBytes32Hex(await creatorEvm.getAddress()),
-      prover: addressToBytes32Hex(STORAGE_PROVER_ADDRESS_TESTNET),
-      deadline: BigInt(1000000000000),
-      nativeValue: BigInt(0),
-      tokens: rewardTokens,
+      prover: addressToBytes32Hex(HYPER_PROVER_ADDRESS),
+      deadline: BigInt(deadline),
+      nativeValue: BigInt(100_000), // 0.0001 ETH
+      tokens: [],
     };
 
     console.log("EVM passed calls: ", calls);
     console.log("EVM route tokens: ", routeTokens);
-    console.log("EVM reward tokens: ", rewardTokens);
     console.log("EVM route: ", route);
     console.log("EVM reward: ", reward);
 
-    await usdc.approve(intentSourceAddress, evmUsdcAmount(10));
     const publishTx = await intentSource[
       "publishAndFund(((bytes32,uint256,uint256,bytes32,(bytes32,uint256)[],(bytes32,bytes,uint256)[]),(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[])),bool)"
     ]({ route, reward }, true);
@@ -317,7 +255,7 @@ describe("EVM → SVM e2e", () => {
 
     const outboxPda = PublicKey.findProgramAddressSync(
       [Buffer.from("hyperlane"), Buffer.from("-"), Buffer.from("outbox")],
-      MAILBOX_ID_TESTNET
+      MAILBOX_ID_MAINNET
     )[0];
 
     const uniqueMessage = Keypair.generate();
@@ -330,14 +268,13 @@ describe("EVM → SVM e2e", () => {
         Buffer.from("-"),
         uniqueMessage.publicKey.toBuffer(),
       ],
-      MAILBOX_ID_TESTNET
+      MAILBOX_ID_MAINNET
     )[0];
 
-    const amountBN = new BN(usdcAmount(5));
-    const evmUsdcAddress = await usdc.getAddress();
+    const amountBN = new BN(usdcAmount(1));
 
     const executionAuthorityAta = getAssociatedTokenAddressSync(
-      mockSvmUsdcMint,
+      svmUsdcMint,
       executionAuthority,
       true
     );
@@ -348,7 +285,7 @@ describe("EVM → SVM e2e", () => {
       await createAssociatedTokenAccount(
         connection,
         solver,
-        mockSvmUsdcMint,
+        svmUsdcMint,
         executionAuthority,
         { commitment: "confirmed" },
         undefined,
@@ -358,20 +295,13 @@ describe("EVM → SVM e2e", () => {
     }
 
     const solverAta = getAssociatedTokenAddressSync(
-      mockSvmUsdcMint,
+      svmUsdcMint,
       solver.publicKey
     );
 
     const routeSolTokenArg = [
       {
-        token: Array.from(mockSvmUsdcMint.toBytes()),
-        amount: amountBN,
-      },
-    ];
-
-    const rewardSolTokenArg = [
-      {
-        token: hex32ToNums(addressToBytes32Hex(evmUsdcAddress)),
+        token: Array.from(svmUsdcMint.toBytes()),
         amount: amountBN,
       },
     ];
@@ -402,20 +332,19 @@ describe("EVM → SVM e2e", () => {
       creator: new PublicKey(
         hex32ToBytes(addressToBytes32Hex(await creatorEvm.getAddress()))
       ),
-      prover: hex32ToNums(addressToBytes32Hex(STORAGE_PROVER_ADDRESS_TESTNET)),
-      tokens: rewardSolTokenArg,
-      nativeAmount: new BN(0),
-      deadline: new BN(1000000000000),
+      prover: hex32ToNums(addressToBytes32Hex(HYPER_PROVER_ADDRESS)),
+      tokens: [],
+      nativeAmount: new BN(100_000), // 0.0001 ETH
+      deadline: new BN(deadline),
     };
 
     console.log("SVM passed call: ", calls);
     console.log("SVM route tokens: ", routeSolTokenArg);
-    console.log("SVM reward tokens: ", rewardSolTokenArg);
     console.log("SVM route: ", routeSolArg);
     console.log("SVM reward: ", rewardSolArg);
 
     let remainingAccounts = [
-      { pubkey: mockSvmUsdcMint, isSigner: false, isWritable: false },
+      { pubkey: svmUsdcMint, isSigner: false, isWritable: false },
       { pubkey: solverAta, isSigner: false, isWritable: true },
       { pubkey: executionAuthorityAta, isSigner: false, isWritable: true },
     ];
@@ -433,6 +362,9 @@ describe("EVM → SVM e2e", () => {
     const fulfillIx = await program.methods
       .fulfillIntent({
         intentHash: Array.from(intentHashBytes),
+        claimant: Array.from(
+          getBytes(addressToBytes32Hex(await solverEvm.getAddress()))
+        ),
         route: routeSolArg,
         reward: rewardSolArg,
       })
@@ -441,7 +373,7 @@ describe("EVM → SVM e2e", () => {
         solver: solver.publicKey,
         executionAuthority,
         dispatchAuthority,
-        mailboxProgram: MAILBOX_ID_TESTNET,
+        mailboxProgram: MAILBOX_ID_MAINNET,
         outboxPda,
         splNoopProgram: SPL_NOOP_ID,
         uniqueMessage: uniqueMessage.publicKey,
@@ -456,8 +388,9 @@ describe("EVM → SVM e2e", () => {
 
     console.log("Fulfill tx: ", fulfillIx);
 
+    let blockhash = await connection.getLatestBlockhash();
+
     try {
-      let blockhash = await connection.getLatestBlockhash();
       const fulfillTx = new VersionedTransaction(
         new TransactionMessage({
           payerKey: solver.publicKey,
@@ -467,7 +400,7 @@ describe("EVM → SVM e2e", () => {
               units: 1_000_000,
             }),
             ComputeBudgetProgram.setComputeUnitPrice({
-              microLamports: 300_000,
+              microLamports: 150_000,
             }),
             fulfillIx,
           ],
@@ -490,44 +423,77 @@ describe("EVM → SVM e2e", () => {
         Buffer.from(dispatchedMessagePda.toBytes()).toString("hex")
       );
     } catch (error) {
-      console.log("ERROR: ", error);
+      console.log("Error during fulfillment:", error);
+      throw error;
     }
 
-    // TODO: uncomment once we have an oracle on a destinatino domain
-    // blockhash = await connection.getLatestBlockhash();
-    // const payForGasIx = buildPayForGasIx(
-    //   solver.publicKey,
-    //   dispatchedMessagePda,
-    //   uniqueMessage.publicKey
-    // );
+    blockhash = await connection.getLatestBlockhash();
 
-    // const payForGasTx = new VersionedTransaction(
-    //   new TransactionMessage({
-    //     payerKey: solver.publicKey,
-    //     recentBlockhash: blockhash.blockhash,
-    //     instructions: [
-    //       ComputeBudgetProgram.setComputeUnitLimit({
-    //         units: 200_000,
-    //       }),
-    //       ComputeBudgetProgram.setComputeUnitPrice({
-    //         microLamports: 300_000,
-    //       }),
-    //       payForGasIx,
-    //     ],
-    //   }).compileToV0Message()
-    // );
+    try {
+      const dispatchedMsgAccountInfo = await connection.getAccountInfo(
+        dispatchedMessagePda
+      );
 
-    // payForGasTx.sign([solver, uniqueMessage]);
-    // const payForGasTxSignature = await connection.sendRawTransaction(
-    //   payForGasTx.serialize()
-    // );
+      if (dispatchedMsgAccountInfo.data.length === 0) {
+        throw new Error("Dispatched Msg PDA account not found.");
+      }
 
-    // await connection.confirmTransaction(
-    //   { signature: payForGasTxSignature, ...blockhash },
-    //   "confirmed"
-    // );
+      console.log(
+        "Dispatched message account data length:",
+        dispatchedMsgAccountInfo.data.length
+      );
 
-    // console.log("pay for gas tx sig :", payForGasTxSignature);
+      const dispatchedMsgBytes = dispatchedMsgAccountInfo.data.slice(
+        DISPATCHED_MSG_PDA_HEADER_LEN + 1
+      );
+
+      console.log(
+        "enc[0..9] =",
+        Buffer.from(dispatchedMsgBytes.slice(0, 9)).toString("hex")
+      );
+
+      const messageIdHex = keccak256(dispatchedMsgBytes);
+
+      console.log("Dispatched message ID (hex):", messageIdHex);
+      const messageIdBytes = getBytes(messageIdHex);
+
+      const payForGasIx = buildPayForGasIx(
+        solver.publicKey,
+        Buffer.from(messageIdBytes),
+        uniqueMessage.publicKey
+      );
+
+      const payForGasTx = new VersionedTransaction(
+        new TransactionMessage({
+          payerKey: solver.publicKey,
+          recentBlockhash: blockhash.blockhash,
+          instructions: [
+            ComputeBudgetProgram.setComputeUnitLimit({
+              units: 200_000,
+            }),
+            ComputeBudgetProgram.setComputeUnitPrice({
+              microLamports: 300_000,
+            }),
+            payForGasIx,
+          ],
+        }).compileToV0Message()
+      );
+
+      payForGasTx.sign([solver, uniqueMessage]);
+      const payForGasTxSignature = await connection.sendRawTransaction(
+        payForGasTx.serialize()
+      );
+
+      await connection.confirmTransaction(
+        { signature: payForGasTxSignature, ...blockhash },
+        "confirmed"
+      );
+
+      console.log("pay for gas tx sig :", payForGasTxSignature);
+    } catch (error) {
+      console.error("Error during gas payment:", error);
+      throw error;
+    }
 
     const accountInfo = await connection.getAccountInfo(
       intentFulfillmentMarker
@@ -535,10 +501,11 @@ describe("EVM → SVM e2e", () => {
     expect(accountInfo?.data.length).to.be.greaterThan(0);
   });
 
+  // Un-skip when a message passes
   it.skip("proves and withdraws on EVM", async () => {
     console.log("Waiting for the message to land...");
     await new Promise((resolve) => setTimeout(resolve, 20_000));
-    const l2Provider = new JsonRpcProvider(process.env.RPC_SEPOLIA);
+    const l2Provider = new JsonRpcProvider(process.env.EVM_RPC);
     const solverEvmAddress = await solverEvm.getAddress();
     const intentSourceAddress = await intentSource.getAddress();
 
@@ -549,7 +516,7 @@ describe("EVM → SVM e2e", () => {
     ).to.be.true;
 
     // simulate prover writing the mapping
-    let addProvenIntentCall = await testProver
+    let addProvenIntentCall = await hyperProver
       .connect(creatorEvm)
       .addProvenIntent(intentHashHex, solverEvmAddress);
     await addProvenIntentCall.wait();
@@ -568,7 +535,7 @@ describe("EVM → SVM e2e", () => {
 
     console.log(
       "prover mapping :",
-      await testProver.provenIntents(intentHashHex)
+      await hyperProver.provenIntents(intentHashHex)
     );
 
     // vault address
@@ -585,10 +552,6 @@ describe("EVM → SVM e2e", () => {
       [
         "withdrawRewards(bytes32,(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[]))"
       ](routeHashHex, reward);
-
-    // after balances
-    const solverBalanceAfter = await usdc.balanceOf(solverEvmAddress);
-    expect(solverBalanceAfter).to.equal(evmUsdcAmount(5));
 
     // vault should be self-destructed, hence balance 0
     expect(await l2Provider.provider.getCode(vaultAddress)).to.equal("0x");

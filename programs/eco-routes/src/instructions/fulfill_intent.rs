@@ -54,6 +54,7 @@ impl SvmCallDataWithAccountMetas {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct FulfillIntentArgs {
     pub intent_hash: [u8; 32],
+    pub claimant: [u8; 32],
     pub route: Route,
     pub reward: Reward,
 }
@@ -172,7 +173,7 @@ pub fn fulfill_intent<'info>(
         &route,
         &reward,
         &intent_hash,
-        solver,
+        args.claimant,
         &ctx.accounts.mailbox_program,
         &ctx.accounts.outbox_pda,
         &ctx.accounts.dispatch_authority,

@@ -14,7 +14,7 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: { chainId: 11155111 },
     sepolia: {
-      url: process.env.RPC_SEPOLIA!,
+      url: process.env.EVM_RPC!,
       accounts: [process.env.PK_CREATOR!, process.env.PK_SOLVER!],
       chainId: 11155111,
     },

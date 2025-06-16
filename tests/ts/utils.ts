@@ -14,7 +14,9 @@ import { homedir } from "os";
 import * as anchor from "@coral-xyz/anchor";
 import {
   EVM_DOMAIN_ID,
-  IGP_PROGRAM_ID_TESTNET,
+  IGP_PDA,
+  IGP_PROGRAM_ID,
+  OVERHEAD_IGP,
   USDC_DECIMALS,
 } from "./constants";
 import { ethers } from "ethers";
@@ -201,7 +203,7 @@ export function encodePayForGasData(
 
 export const buildPayForGasIx = (
   solverPubkey: PublicKey,
-  dispatchedMessagePda: PublicKey,
+  dispatchedMessageBytes: Buffer,
   uniqueMessage: PublicKey
 ): TransactionInstruction => {
   const gasPaymentSeeds = (uniqueMessage: PublicKey) => [
@@ -218,22 +220,18 @@ export const buildPayForGasIx = (
       anchor.utils.bytes.utf8.encode("-"),
       anchor.utils.bytes.utf8.encode("program_data"),
     ],
-    IGP_PROGRAM_ID_TESTNET
-  );
-  const igpPda = new PublicKey("9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy");
-  const overheadIgp = new PublicKey(
-    "hBHAApi5ZoeCYHqDdCKkCzVKmBdwywdT3hMqe327eZB"
+    IGP_PROGRAM_ID
   );
   const [gasPaymentPda] = PublicKey.findProgramAddressSync(
     gasPaymentSeeds(uniqueMessage),
-    IGP_PROGRAM_ID_TESTNET
+    IGP_PROGRAM_ID
   );
 
-  // 300k should be sufficient for the test for gas amount,
-  const GAS_AMOUNT = BigInt(300_000);
+  // 600k should be sufficient for the test for gas amount,
+  const GAS_AMOUNT = BigInt(600_000);
 
   const data = encodePayForGasData(
-    dispatchedMessagePda.toBuffer(),
+    dispatchedMessageBytes,
     EVM_DOMAIN_ID,
     GAS_AMOUNT
   );
@@ -246,14 +244,14 @@ export const buildPayForGasIx = (
     { pubkey: programDataPda, isSigner: false, isWritable: true },
     { pubkey: uniqueMessage, isSigner: true, isWritable: false },
     { pubkey: gasPaymentPda, isSigner: false, isWritable: true },
-    { pubkey: igpPda, isSigner: false, isWritable: true },
-    { pubkey: overheadIgp, isSigner: false, isWritable: false },
+    { pubkey: IGP_PDA, isSigner: false, isWritable: true },
+    { pubkey: OVERHEAD_IGP, isSigner: false, isWritable: false },
   ];
 
   console.log("Accounts meta: ", accountsMeta);
 
   const ix = new TransactionInstruction({
-    programId: IGP_PROGRAM_ID_TESTNET,
+    programId: IGP_PROGRAM_ID,
     keys: accountsMeta,
     data,
   });

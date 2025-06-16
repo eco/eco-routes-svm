@@ -3,6 +3,9 @@ import { PublicKey } from "@solana/web3.js";
 export const ECO_ROUTES_ID_TESTNET = new PublicKey(
   "aEGzbWJhZ7RX8uCmeG4jVfskQe6eoP7zcdoHmY2PWys"
 );
+export const ECO_ROUTES_ID_MAINNET = new PublicKey(
+  "a6BKzp2ixm6ogEJ268UT4UGFMLnsgPWnVm93vsjupc3"
+);
 export const MAILBOX_ID_MAINNET = new PublicKey(
   "E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi"
 );
@@ -12,9 +15,10 @@ export const MAILBOX_ID_TESTNET = new PublicKey(
 export const SPL_NOOP_ID = new PublicKey(
   "noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV"
 );
-export const EVM_DOMAIN_ID = 11155111;
-export const SOLANA_DOMAIN_ID = 1399811150;
+export const EVM_DOMAIN_ID = 10; // optimism mainnet domaind id
+export const SOLANA_DOMAIN_ID = 1399811149; // solana mainnet domaind id
 export const DEVNET_RPC = "https://api.devnet.solana.com";
+export const MAINNET_RPC = "https://api.mainnet-beta.solana.com";
 export const TESTNET_RPC = "https://api.testnet.solana.com";
 export const USDC_MINT = new PublicKey(
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -40,3 +44,25 @@ export const IGP_FEE_RECEIVER_TESTNET = new PublicKey(
 export const IGP_PROGRAM_ID_TESTNET = new PublicKey(
   "5p7Hii6CJL4xGBYYTGEQmH9LnUSZteFJUu9AVLDExZX2"
 );
+
+// Solana mainnet IGP addresses
+export const IGP_PROGRAM_ID = new PublicKey(
+  "BhNcatUDC2D5JTyeaqrdSukiVFsEHK7e3hVmKMztwefv"
+);
+export const IGP_PDA = new PublicKey(
+  "JAvHW21tYXE9dtdG83DReqU2b4LUexFuCbtJT5tF8X6M"
+);
+export const OVERHEAD_IGP = new PublicKey(
+  "AkeHBbE5JkwVppujCQQ6WuxsVsJtruBAjUo6fDCFp6fF"
+);
+export const DISPATCHED_MSG_PDA_HEADER_LEN: number = 52;
+
+// EVM Optimism Addresses
+export const INTENT_SOURCE_ADDRESS =
+  "0xe6D9fF6947D610A99dc45616a4f61Ab1Bcca7E32".toLowerCase();
+export const INBOX_ADDRESS =
+  "0xb5670A91Ab60c14231316b59f3c311A7Fd342eE8".toLowerCase();
+export const HYPER_PROVER_ADDRESS =
+  "0x08ACBb9133Dd3FeEA037b3221A3ea13C500e53D0".toLowerCase();
+export const USDC_ADDRESS_MAINNET =
+  "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85".toLowerCase();

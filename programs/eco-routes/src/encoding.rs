@@ -203,20 +203,20 @@ pub fn get_intent_hash(route: &Route, reward: &Reward) -> [u8; 32] {
     out
 }
 
-pub fn encode_fulfillment_message(intent_hashes: &[[u8; 32]], solvers: &[[u8; 32]]) -> Vec<u8> {
-    assert_eq!(intent_hashes.len(), solvers.len(), "length mismatch");
+pub fn encode_fulfillment_message(intent_hashes: &[[u8; 32]], claimants: &[[u8; 32]]) -> Vec<u8> {
+    assert_eq!(intent_hashes.len(), claimants.len(), "length mismatch");
 
     let mut hash_tokens = Vec::with_capacity(intent_hashes.len());
     for hash in intent_hashes {
         hash_tokens.push(Token::FixedBytes(hash[..].into()));
     }
 
-    let mut solver_tokens = Vec::with_capacity(solvers.len());
-    for solver in solvers {
-        solver_tokens.push(Token::FixedBytes(solver[..].into()));
+    let mut claimant_tokens = Vec::with_capacity(claimants.len());
+    for claimant in claimants {
+        claimant_tokens.push(Token::FixedBytes(claimant[..].into()));
     }
 
-    encode(&[Token::Array(hash_tokens), Token::Array(solver_tokens)])
+    encode(&[Token::Array(hash_tokens), Token::Array(claimant_tokens)])
 }
 
 pub fn decode_fulfillment_message(

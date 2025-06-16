@@ -5,7 +5,7 @@ import { TestERC20__factory } from "../evm-types";
 const INITIAL_MINT_UI = "1000";
 
 (async () => {
-  const provider = new JsonRpcProvider(process.env.RPC_SEPOLIA!);
+  const provider = new JsonRpcProvider(process.env.EVM_RPC!);
 
   const owner = new ethers.Wallet(process.env.PK_CREATOR!, provider);
   console.log("Deployer (owner):", owner.address);
