@@ -74,6 +74,13 @@ export const addressToBytes32Hex = (addr: string): string => {
   return ethers.zeroPadValue(addr, 32);
 };
 
+export function encodeTransfer(to: string, value: number): string {
+  const erc20ABI = ["function transfer(address to, uint256 value)"];
+  const abiInterface = new ethers.Interface(erc20ABI);
+  const callData = abiInterface.encodeFunctionData("transfer", [to, value]);
+  return callData;
+}
+
 export const hex32ToBytes = (hex: string): Uint8Array => {
   return ethers.getBytes(hex);
 };

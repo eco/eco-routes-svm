@@ -13,7 +13,6 @@ import {
 import * as anchor from "@coral-xyz/anchor";
 import {
   Connection,
-  Keypair,
   PublicKey,
   SystemProgram,
   VersionedTransaction,
@@ -22,9 +21,7 @@ import {
 import {
   TOKEN_PROGRAM_ID,
   createAssociatedTokenAccount,
-  createMint,
   getAssociatedTokenAddressSync,
-  mintTo,
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { EcoRoutes } from "../../target/types/eco_routes";
@@ -34,16 +31,13 @@ import {
   EVM_DOMAIN_ID,
   INBOX_ADDRESS,
   INTENT_SOURCE_ADDRESS,
-  MAILBOX_ID_MAINNET,
   SOLANA_DOMAIN_ID,
-  TESTNET_RPC,
   MAINNET_RPC,
-  USDC_DECIMALS,
   USDC_ADDRESS_MAINNET,
   USDC_MINT,
   HYPER_PROVER_ADDRESS,
 } from "./constants";
-import { ethers, Interface, JsonRpcProvider, Signer } from "ethers";
+import { ethers, JsonRpcProvider, Signer } from "ethers";
 import {
   Inbox,
   Inbox__factory,
@@ -52,7 +46,7 @@ import {
   TestERC20,
   TestERC20__factory,
 } from "./evm-types";
-import { addressToBytes32Hex, hex32ToNums } from "./evmUtils";
+import { addressToBytes32Hex, encodeTransfer, hex32ToNums } from "./evmUtils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 import { Reward, Route } from "./evmUtils";
 
@@ -65,9 +59,12 @@ const program = new Program(
   ecoRoutesIdl as anchor.Idl,
   provider
 ) as Program<EcoRoutes>;
+const abiCoder = ethers.AbiCoder.defaultAbiCoder();
 
 const salt = (() => {
-  const bytes = anchorUtils.bytes.utf8.encode("svm-evm-e2e1".padEnd(32, "\0"));
+  const bytes = anchorUtils.bytes.utf8.encode(
+    "svm-evm-e2e174".padEnd(32, "\0")
+  );
   return bytes.slice(0, 32);
 })();
 const saltHex = "0x" + Buffer.from(salt).toString("hex");
@@ -85,6 +82,7 @@ describe("SVM -> EVM e2e", () => {
   let svmUsdcMint: PublicKey = USDC_MINT;
   let route!: Route;
   let reward!: Reward;
+  let routeForHash!: any;
 
   before("prepares intent data", async () => {
     console.log("EVM inbox hex:", addressToBytes32Hex(INBOX_ADDRESS));
@@ -96,15 +94,12 @@ describe("SVM -> EVM e2e", () => {
     l2Provider = new JsonRpcProvider(process.env.EVM_RPC);
     solverEvm = new ethers.Wallet(process.env.PK_SOLVER!, l2Provider);
 
-    const evmCallInterface = new Interface([
-      "function transfer(address,uint256)",
-    ]);
     const evmCallTransferAmount = BigInt(usdcAmount(5));
 
-    evmTransferCalldata = evmCallInterface.encodeFunctionData("transfer", [
+    evmTransferCalldata = encodeTransfer(
       await solverEvm.getAddress(),
-      evmCallTransferAmount,
-    ]);
+      Number(evmCallTransferAmount)
+    );
 
     const transferUsdcEvmCall = {
       target: USDC_ADDRESS_MAINNET,
@@ -122,7 +117,7 @@ describe("SVM -> EVM e2e", () => {
     const rewardTokens = [
       {
         token: svmAddressToHex(svmUsdcMint),
-        amount: BigInt(usdcAmount(5)),
+        amount: BigInt(usdcAmount(1)),
       },
     ];
 
@@ -139,7 +134,7 @@ describe("SVM -> EVM e2e", () => {
     };
 
     // Create route for getIntentHash (with bytes32 addresses)
-    const routeForHash = {
+    routeForHash = {
       salt: saltHex,
       source: SOLANA_DOMAIN_ID,
       destination: EVM_DOMAIN_ID,
@@ -241,7 +236,7 @@ describe("SVM -> EVM e2e", () => {
     const rewardSolTokenArg = [
       {
         token: Array.from(svmUsdcMint.toBytes()),
-        amount: amountBN,
+        amount: new BN(usdcAmount(1)),
       },
     ];
 
@@ -279,31 +274,6 @@ describe("SVM -> EVM e2e", () => {
     console.log("routeSol", routeSol);
     console.log("rewardSol", rewardSol);
     console.log("rewardSol.deadline", rewardSol.deadline.toString());
-
-    // console.log(
-    //   "Reward sol prover hex: ",
-    //   Buffer.from(rewardSol.prover).toString("hex")
-    // );
-    // console.log(
-    //   "Route sol destination hex: ",
-    //   Buffer.from(routeSol.calls[0].destination).toString("hex")
-    // );
-    // console.log(
-    //   "Route sol calldata hex: ",
-    //   Buffer.from(routeSol.calls[0].calldata).toString("hex")
-    // );
-    // console.log(
-    //   "Route sol inbox hex: ",
-    //   Buffer.from(routeSol.inbox).toString("hex")
-    // );
-
-    // console.log("SVM passed call: ", callsSol);
-    // console.log("SVM route tokens: ", routeSolTokenArg);
-    // console.log("SVM reward tokens: ", rewardSolTokenArg);
-    // console.log("SVM route: ", routeSol);
-    // console.log("SVM reward: ", rewardSol);
-    // console.log("intentHashBytes", intentHashBytes);
-    // console.log("Intent hash bytes (Solana):", "0x" + Buffer.from(intentHashBytes).toString("hex"));
 
     const intent = PublicKey.findProgramAddressSync(
       [Buffer.from("intent"), intentHashBytes],
@@ -420,45 +390,21 @@ describe("SVM -> EVM e2e", () => {
       ethers.formatUnits(solverUsdcBalance, 6)
     );
 
-    if (solverUsdcBalance < BigInt(usdcAmount(5))) {
-      console.log(
-        "Solver doesn't have enough USDC. This test requires the solver to have USDC tokens."
-      );
-
-      try {
-        await inbox.fulfillAndProve.staticCall(
-          route,
-          rewardHashHex,
-          solverEvmAddress,
-          intentHashHex,
-          HYPER_PROVER_ADDRESS,
-          ethers.getBytes("0x")
-        );
-        console.log(
-          "Static call succeeded - the transaction would work if solver had tokens"
-        );
-      } catch (error) {
-        console.log("Static call failed:", error.message);
-      }
-
-      // Skip the actual transaction since we don't have tokens
-      console.log("Skipping actual transaction due to insufficient tokens");
-      return;
-    }
-
     // The solver needs to have enough USDC to fulfill the intent
     // In a real scenario, this would be handled by the solver's own logic
     const usdcApproveTx = await usdc
       .connect(solverEvm)
-      .approve(INBOX_ADDRESS, usdcAmount(5));
+      .approve(INBOX_ADDRESS, usdcAmount(10));
     await usdcApproveTx.wait(10);
 
     const allowance = await usdc.allowance(solverEvmAddress, INBOX_ADDRESS);
     console.log("USDC allowance:", ethers.formatUnits(allowance, 6));
     console.log("hyper prover address", HYPER_PROVER_ADDRESS);
 
-    // hash
-    const data = ethers.getBytes("0x");
+    const data = abiCoder.encode(
+      ["bytes32", "bytes", "address"],
+      [ethers.zeroPadValue(HYPER_PROVER_ADDRESS, 32), "0x", ethers.ZeroAddress]
+    );
 
     console.log("About to call fulfillAndProve with:");
     console.log("route:", route);
@@ -467,20 +413,31 @@ describe("SVM -> EVM e2e", () => {
     console.log("intentHashHex:", intentHashHex);
     console.log("HYPER_PROVER_ADDRESS_MAINNET:", HYPER_PROVER_ADDRESS);
 
-    const tx = await inbox.fulfillAndProve(
+    const feeBuffer = ethers.parseEther("0.0015");
+
+    // const tx = await inbox.fulfillAndProve(
+    //   route,
+    //   rewardHash,
+    //   solverEvmAddress,
+    //   intentHash,
+    //   HYPER_PROVER_ADDRESS,
+    //   data,
+    //   { gasLimit: 900_000, value: feeBuffer }
+    // );
+
+    const tx = await inbox.fulfill(
       route,
       rewardHashHex,
       solverEvmAddress,
       intentHashHex,
       HYPER_PROVER_ADDRESS,
-      data,
       {
         gasLimit: 800_000,
       }
     );
 
     console.log("Transaction hash:", tx.hash);
-    const receipt = await tx.wait();
+    const receipt = await tx.wait(3);
     console.log("Transaction receipt:", receipt);
     console.log("Transaction status:", receipt.status);
 
