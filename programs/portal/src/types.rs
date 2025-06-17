@@ -1,11 +1,72 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{transfer_checked, Mint, TokenAccount};
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::PortalError;
 
 pub type Bytes32 = [u8; 32];
+
+pub struct TokenTransferAccounts<'info> {
+    pub from: AccountInfo<'info>,
+    pub to: AccountInfo<'info>,
+    pub mint: AccountInfo<'info>,
+}
+
+impl<'info> TryFrom<Vec<&AccountInfo<'info>>> for TokenTransferAccounts<'info> {
+    type Error = anchor_lang::error::Error;
+
+    fn try_from(accounts: Vec<&AccountInfo<'info>>) -> Result<Self> {
+        match accounts.as_slice() {
+            [from, to, mint] => Ok(Self {
+                from: from.to_account_info(),
+                to: to.to_account_info(),
+                mint: mint.to_account_info(),
+            }),
+            _ => Err(PortalError::InvalidTokenTransferAccounts.into()),
+        }
+    }
+}
+
+impl<'info> TokenTransferAccounts<'info> {
+    pub fn transfer(
+        &self,
+        token_program: &AccountInfo<'info>,
+        authority: &AccountInfo<'info>,
+        amount: u64,
+    ) -> Result<()> {
+        transfer_checked(
+            CpiContext::new(
+                token_program.to_account_info(),
+                anchor_spl::token_interface::TransferChecked {
+                    from: self.from.to_account_info(),
+                    to: self.to.to_account_info(),
+                    mint: self.mint.to_account_info(),
+                    authority: authority.to_account_info(),
+                },
+            ),
+            amount,
+            self.mint_data()?.decimals,
+        )
+    }
+
+    pub fn program_id(&self) -> &Pubkey {
+        self.from.owner
+    }
+
+    pub fn mint_data(&self) -> Result<Mint> {
+        Mint::try_deserialize(&mut &self.mint.try_borrow_data()?[..])
+    }
+
+    pub fn from_data(&self) -> Result<TokenAccount> {
+        TokenAccount::try_deserialize(&mut &self.from.try_borrow_data()?[..])
+    }
+
+    pub fn to_data(&self) -> Result<TokenAccount> {
+        TokenAccount::try_deserialize(&mut &self.to.try_borrow_data()?[..])
+    }
+}
 
 pub fn intent_hash(route_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> Bytes32 {
     let mut hasher = Keccak::v256();
@@ -41,7 +102,7 @@ fn validate_token_amounts(tokens: &[TokenAmount]) -> Result<()> {
         tokens
             .iter()
             .map(|token_amount| token_amount.token)
-            .collect::<HashSet<_>>()
+            .collect::<BTreeSet<_>>()
             .len()
             == tokens.len(),
         PortalError::DuplicateTokens
@@ -98,6 +159,13 @@ impl Reward {
         hasher.finalize(&mut hash);
 
         hash
+    }
+
+    pub fn token_amounts(&self) -> BTreeMap<Bytes32, u64> {
+        self.tokens
+            .iter()
+            .map(|token_amount| (token_amount.token, token_amount.amount))
+            .collect()
     }
 }
 
@@ -394,5 +462,31 @@ mod tests {
         assert!(intent
             .validate(clock)
             .is_err_and(|err| err.to_string().contains("InvalidTokenAmount")));
+    }
+
+    #[test]
+    fn reward_token_amounts() {
+        let reward = Reward {
+            deadline: 1640995200,
+            creator: Pubkey::new_from_array([1u8; 32]),
+            prover: [2u8; 32],
+            native_amount: 1_000_000_000,
+            tokens: vec![
+                TokenAmount {
+                    token: [3u8; 32],
+                    amount: 100,
+                },
+                TokenAmount {
+                    token: [4u8; 32],
+                    amount: 200,
+                },
+                TokenAmount {
+                    token: [5u8; 32],
+                    amount: 300,
+                },
+            ],
+        };
+
+        goldie::assert_debug!(reward.token_amounts());
     }
 }

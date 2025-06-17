@@ -10,3 +10,11 @@ pub struct IntentPublished {
     route: Route,
     reward: Reward,
 }
+
+#[event]
+#[derive(new)]
+pub struct IntentFunded {
+    intent_hash: Bytes32,
+    funder: Pubkey,
+    complete: bool,
+}
