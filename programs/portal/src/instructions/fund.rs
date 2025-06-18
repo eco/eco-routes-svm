@@ -77,7 +77,8 @@ fn fund_vault_native<'info>(
     reward
         .native_amount
         .checked_add(min_balance)
-        .and_then(|amount| amount.checked_sub(ctx.accounts.vault.to_account_info().lamports()))
+        .ok_or(PortalError::RewardAmountOverflow)?
+        .checked_sub(ctx.accounts.vault.to_account_info().lamports())
         .map(|amount| amount.min(ctx.accounts.funder.to_account_info().lamports()))
         .filter(|&amount| amount > 0)
         .map(|amount| {

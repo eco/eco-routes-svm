@@ -19,4 +19,5 @@ pub enum PortalError {
     InvalidTokenProgram,
     InsufficientFunds,
     InvalidTokenTransferAccounts,
+    RewardAmountOverflow,
 }

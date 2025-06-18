@@ -508,3 +508,16 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
         PortalError::InvalidTokenTransferAccounts
     )));
 }
+
+#[test]
+fn fund_intent_native_reward_amount_overflow_fails() {
+    let mut ctx = common::Context::default();
+    let mut intent = ctx.rand_intent();
+    intent.reward.native_amount =
+        u64::MAX - state::Vault::min_balance(ctx.get_sysvar::<Rent>()) + 1;
+    let route_hash = random();
+    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+
+    let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
+    assert!(result.is_err_and(common::is_portal_error(PortalError::RewardAmountOverflow)));
+}
