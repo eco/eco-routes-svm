@@ -5,7 +5,10 @@ import { config as dotenvConfig } from "dotenv";
 dotenvConfig();
 
 const config: HardhatUserConfig = {
-  solidity: "0.8.26",
+  solidity: {
+    version: "0.8.26",
+    settings: { viaIR: true, optimizer: { enabled: true, runs: 200 } },
+  },
   paths: {
     sources: "./evm-contracts",
     artifacts: "./evm-artifacts",

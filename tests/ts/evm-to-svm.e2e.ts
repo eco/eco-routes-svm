@@ -31,8 +31,8 @@ import {
 import { expect } from "chai";
 import { ethers, getBytes, JsonRpcProvider, keccak256, Signer } from "ethers";
 import {
-  TestProver__factory,
-  TestProver,
+  HyperProver__factory,
+  HyperProver,
   IntentSource__factory,
   IntentSource,
 } from "./evm-types";
@@ -89,7 +89,7 @@ const saltHex = "0x" + Buffer.from(salt).toString("hex");
 
 describe("EVM → SVM e2e", () => {
   let intentSource: IntentSource;
-  let hyperProver: TestProver;
+  let hyperProver: HyperProver;
   let creatorEvm!: Signer;
   let solverEvm!: Signer;
   let intentHashHex!: string;
@@ -116,7 +116,10 @@ describe("EVM → SVM e2e", () => {
     );
 
     // HyperProver and give its address to reward.prover
-    hyperProver = TestProver__factory.connect(HYPER_PROVER_ADDRESS, creatorEvm);
+    hyperProver = HyperProver__factory.connect(
+      HYPER_PROVER_ADDRESS,
+      creatorEvm
+    );
 
     const intentSourceAddress = await intentSource.getAddress();
 
@@ -515,23 +518,17 @@ describe("EVM → SVM e2e", () => {
       ]({ route, reward })
     ).to.be.true;
 
-    // simulate prover writing the mapping
-    let addProvenIntentCall = await hyperProver
+    let proveIntentCall = await hyperProver
       .connect(creatorEvm)
-      .addProvenIntent(intentHashHex, solverEvmAddress);
-    await addProvenIntentCall.wait();
-
-    // let proveIntentCall = await testProver
-    //   .connect(creatorEvm)
-    //   .prove(
-    //     solverEvmAddress,
-    //     SOLANA_DOMAIN_ID,
-    //     [intentHashHex],
-    //     [solverEvmAddress],
-    //     "0x",
-    //     { value: BigInt(100000000) }
-    //   );
-    // await proveIntentCall.wait();
+      .prove(
+        solverEvmAddress,
+        SOLANA_DOMAIN_ID,
+        [intentHashHex],
+        [solverEvmAddress],
+        "0x",
+        { value: BigInt(100000000) }
+      );
+    await proveIntentCall.wait();
 
     console.log(
       "prover mapping :",

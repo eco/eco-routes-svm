@@ -39,6 +39,8 @@ import {
 } from "./constants";
 import { ethers, JsonRpcProvider, Signer } from "ethers";
 import {
+  HyperProver,
+  HyperProver__factory,
   Inbox,
   Inbox__factory,
   IntentSource,
@@ -59,19 +61,39 @@ const program = new Program(
   ecoRoutesIdl as anchor.Idl,
   provider
 ) as Program<EcoRoutes>;
-const abiCoder = ethers.AbiCoder.defaultAbiCoder();
 
 const salt = (() => {
   const bytes = anchorUtils.bytes.utf8.encode(
-    "svm-evm-e2e174".padEnd(32, "\0")
+    "svm-evm-e2e31248".padEnd(32, "\0")
   );
   return bytes.slice(0, 32);
 })();
 const saltHex = "0x" + Buffer.from(salt).toString("hex");
 
+const inboxErrorInterface = new ethers.Interface([
+  "error InsufficientFee(uint256 _requiredFee)",
+  "error NativeTransferFailed()",
+  "error ChainIdTooLarge(uint256 _chainId)",
+  "error UnauthorizedHandle(address _sender)",
+  "error UnauthorizedProve(address _sender)",
+  "error UnauthorizedIncomingProof(address _sender)",
+  "error MailboxCannotBeZeroAddress()",
+  "error RouterCannotBeZeroAddress()",
+  "error InboxCannotBeZeroAddress()",
+  "error ProverCannotBeZeroAddress()",
+  "error InvalidOriginChainId()",
+  "error NotFulfilled(bytes32)",
+  "error AlreadyProven(bytes32)",
+  "error InsufficientFee(uint256)",
+  "error ArrayLengthMismatch()",
+  "error ChainIdTooLarge(uint256)",
+  "error SenderCannotBeZeroAddress()",
+]);
+
 describe("SVM -> EVM e2e", () => {
   let usdc: TestERC20;
   let inbox: Inbox;
+  let hyperProver: HyperProver;
   let intentSource: IntentSource;
   let l2Provider: ethers.JsonRpcProvider;
   let solverEvm!: Signer;
@@ -167,15 +189,16 @@ describe("SVM -> EVM e2e", () => {
     usdc = TestERC20__factory.connect(USDC_ADDRESS_MAINNET, solverEvm);
 
     inbox = Inbox__factory.connect(INBOX_ADDRESS, solverEvm);
+    hyperProver = HyperProver__factory.connect(HYPER_PROVER_ADDRESS, solverEvm);
 
-    const { intentHash, routeHash, rewardHash } = await intentSource[
+    const { intentHash, rewardHash } = await intentSource[
       "getIntentHash(((bytes32,uint256,uint256,bytes32,(bytes32,uint256)[],(bytes32,bytes,uint256)[]),(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[])))"
     ]({
       route: routeForHash,
       reward,
     });
 
-    // EVM one for TestProver
+    // EVM one for HyperProver
     intentHashHex = intentHash;
     rewardHashHex = rewardHash;
 
@@ -401,9 +424,13 @@ describe("SVM -> EVM e2e", () => {
     console.log("USDC allowance:", ethers.formatUnits(allowance, 6));
     console.log("hyper prover address", HYPER_PROVER_ADDRESS);
 
-    const data = abiCoder.encode(
+    const sourceChainProver = ethers.zeroPadValue(
+      svmAddressToHex(ECO_ROUTES_ID_MAINNET),
+      32
+    );
+    const data = ethers.AbiCoder.defaultAbiCoder().encode(
       ["bytes32", "bytes", "address"],
-      [ethers.zeroPadValue(HYPER_PROVER_ADDRESS, 32), "0x", ethers.ZeroAddress]
+      [sourceChainProver, "0x", ethers.ZeroAddress]
     );
 
     console.log("About to call fulfillAndProve with:");
@@ -413,36 +440,67 @@ describe("SVM -> EVM e2e", () => {
     console.log("intentHashHex:", intentHashHex);
     console.log("HYPER_PROVER_ADDRESS_MAINNET:", HYPER_PROVER_ADDRESS);
 
-    const feeBuffer = ethers.parseEther("0.0015");
+    const requiredFee = await hyperProver.fetchFee(
+      SOLANA_DOMAIN_ID,
+      [intentHashHex],
+      [solverEvmAddress], // claimant on Solana (32-byte address later)
+      data
+    );
 
-    // const tx = await inbox.fulfillAndProve(
-    //   route,
-    //   rewardHash,
-    //   solverEvmAddress,
-    //   intentHash,
-    //   HYPER_PROVER_ADDRESS,
-    //   data,
-    //   { gasLimit: 900_000, value: feeBuffer }
-    // );
+    console.log("Required fee:", requiredFee.toString());
 
-    const tx = await inbox.fulfill(
+    // add 5% to the fee (to be safe)
+    const buffer =
+      requiredFee / BigInt(20) > ethers.parseEther("0.0005")
+        ? requiredFee / BigInt(20)
+        : ethers.parseEther("0.0005");
+
+    async function diagnosePotentialRevert() {
+      try {
+        await inbox.fulfillAndProve.staticCall(
+          route,
+          rewardHashHex,
+          solverEvmAddress,
+          intentHashHex,
+          HYPER_PROVER_ADDRESS,
+          data,
+          { value: requiredFee + buffer, gasLimit: 900_000 }
+        );
+        console.log(
+          "callStatic succeeded (on-chain revert is gas/fee related)"
+        );
+      } catch (err: any) {
+        const revertData: string = err.data ?? err.error?.data ?? "";
+        const desc = inboxErrorInterface.parseError(revertData);
+
+        console.log("name:", desc.name);
+        console.log("selector:", desc.selector);
+        console.log("signature:", desc.signature);
+        console.log("args:", desc.args);
+        throw err;
+      }
+    }
+    await diagnosePotentialRevert();
+
+    const fulfillTx = await inbox.fulfillAndProve(
       route,
       rewardHashHex,
+      // TODO: figure out how to pass an SVM 32-byte address
+      // (should the Inbox contract be updated?)
       solverEvmAddress,
       intentHashHex,
       HYPER_PROVER_ADDRESS,
-      {
-        gasLimit: 800_000,
-      }
+      data,
+      { value: requiredFee + buffer, gasLimit: 900_000 }
     );
 
-    console.log("Transaction hash:", tx.hash);
-    const receipt = await tx.wait(3);
-    console.log("Transaction receipt:", receipt);
-    console.log("Transaction status:", receipt.status);
+    console.log("Fulfill ransaction hash:", fulfillTx.hash);
+    const fulfillTxReceipt = await fulfillTx.wait(3);
+    console.log("Fulfill transaction receipt:", fulfillTxReceipt);
+    console.log("Fulfill transaction status:", fulfillTxReceipt.status);
 
     const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
-    console.log("fulfilled mapping result:", fulfilledMappingSlot);
+    console.log("Fulfilled mapping result:", fulfilledMappingSlot);
     expect(fulfilledMappingSlot).to.equal(solverEvmAddress);
   });
 
