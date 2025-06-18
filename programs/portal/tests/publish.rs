@@ -1,8 +1,6 @@
 use portal::events::IntentPublished;
-use portal::instructions::PortalError;
 use portal::types::intent_hash;
 use rand::random;
-use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 
 pub mod common;
@@ -25,15 +23,4 @@ fn publish_intent_success() {
     );
     assert_eq!(ctx.balance(&ctx.creator.pubkey()), creator_balance);
     assert!(ctx.balance(&ctx.payer.pubkey()) < payer_balance);
-}
-
-#[test]
-fn publish_intent_fail_with_wrong_creator() {
-    let mut ctx = common::Context::default();
-    let mut intent = ctx.rand_intent();
-    intent.reward.creator = Pubkey::new_unique();
-    let route_hash = [8u8; 32];
-
-    let result = ctx.publish_intent(&intent, route_hash);
-    assert!(result.is_err_and(common::is_portal_error(PortalError::InvalidIntentCreator)));
 }

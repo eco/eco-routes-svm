@@ -101,7 +101,7 @@ fn fund_vault_native<'info>(
 fn fund_vault_tokens<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
     fund_token_accounts: Vec<TokenTransferAccounts<'info>>,
-    reward_token_amounts: &BTreeMap<Bytes32, u64>,
+    reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<usize> {
     let funded_token = fund_token_accounts
         .into_iter()
@@ -119,7 +119,7 @@ fn fund_vault_tokens<'info>(
 fn fund_vault_token<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
     accounts: TokenTransferAccounts<'info>,
-    reward_token_amounts: &BTreeMap<Bytes32, u64>,
+    reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<Option<Pubkey>> {
     let mint_key = accounts.mint.key();
     let vault_ata = get_associated_token_address_with_program_id(
@@ -132,7 +132,7 @@ fn fund_vault_token<'info>(
 
     let token_program = token_program_account_info(ctx, accounts.program_id())?;
     let reward_token_amount = reward_token_amounts
-        .get(mint_key.as_array())
+        .get(&mint_key)
         .ok_or(PortalError::InvalidMint)?;
     let to_data = ensure_initialized(ctx, &accounts.mint, &accounts.to, &token_program)?;
     let from_data = accounts.from_data()?;

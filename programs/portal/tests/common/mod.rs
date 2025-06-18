@@ -53,7 +53,6 @@ impl Default for Context {
 
         svm.airdrop(&mint_authority.pubkey(), sol_amount(100.0))
             .unwrap();
-        svm.airdrop(&creator.pubkey(), sol_amount(10.0)).unwrap();
         svm.airdrop(&payer.pubkey(), sol_amount(10.0)).unwrap();
 
         Self {
@@ -82,13 +81,13 @@ impl Context {
     pub fn rand_intent(&mut self) -> Intent {
         let reward_tokens: Vec<_> = (0..2)
             .map(|_| TokenAmount {
-                token: random(),
+                token: Pubkey::new_unique(),
                 amount: random(),
             })
             .collect();
 
         reward_tokens.iter().for_each(|token| {
-            self.set_mint_account(&Pubkey::new_from_array(token.token));
+            self.set_mint_account(&token.token);
         });
 
         Intent {
@@ -98,7 +97,7 @@ impl Context {
                 route_chain_portal: random(),
                 tokens: (0..3)
                     .map(|_| TokenAmount {
-                        token: random(),
+                        token: Pubkey::new_unique(),
                         amount: random(),
                     })
                     .collect(),
@@ -231,10 +230,7 @@ impl Context {
             route_hash,
         };
         let instruction = portal::instruction::Publish { args };
-        let accounts: Vec<_> = portal::accounts::Publish {
-            creator: self.creator.pubkey(),
-        }
-        .to_account_metas(None);
+        let accounts: Vec<_> = portal::accounts::Publish {}.to_account_metas(None);
         let instruction = Instruction {
             program_id: portal::ID,
             accounts,
@@ -242,7 +238,7 @@ impl Context {
         };
 
         let transaction = Transaction::new(
-            &[&self.payer, &self.creator],
+            &[&self.payer],
             Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
         );

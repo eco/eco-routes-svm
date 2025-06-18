@@ -117,10 +117,10 @@ impl Reward {
         hash
     }
 
-    pub fn token_amounts(&self) -> Result<BTreeMap<Bytes32, u64>> {
+    pub fn token_amounts(&self) -> Result<BTreeMap<Pubkey, u64>> {
         self.tokens
             .iter()
-            .try_fold(BTreeMap::<Bytes32, u64>::new(), |mut result, token| {
+            .try_fold(BTreeMap::<Pubkey, u64>::new(), |mut result, token| {
                 let entry = result.entry(token.token).or_default();
                 *entry = entry
                     .checked_add(token.amount)
@@ -133,7 +133,7 @@ impl Reward {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct TokenAmount {
-    pub token: Bytes32,
+    pub token: Pubkey,
     pub amount: u64,
 }
 
@@ -158,11 +158,11 @@ mod tests {
             native_amount: 250,
             tokens: vec![
                 TokenAmount {
-                    token: [40u8; 32],
+                    token: Pubkey::new_from_array([40u8; 32]),
                     amount: 1000,
                 },
                 TokenAmount {
-                    token: [50u8; 32],
+                    token: Pubkey::new_from_array([50u8; 32]),
                     amount: 2000,
                 },
             ],
@@ -184,16 +184,24 @@ mod tests {
             native_amount: 1_000_000_000,
             tokens: vec![
                 TokenAmount {
-                    token: [3u8; 32],
+                    token: Pubkey::new_from_array([3u8; 32]),
                     amount: 100,
                 },
                 TokenAmount {
-                    token: [4u8; 32],
+                    token: Pubkey::new_from_array([4u8; 32]),
                     amount: 200,
                 },
                 TokenAmount {
-                    token: [5u8; 32],
+                    token: Pubkey::new_from_array([5u8; 32]),
                     amount: 300,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([3u8; 32]),
+                    amount: 500,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([4u8; 32]),
+                    amount: 0,
                 },
             ],
         };
