@@ -20,16 +20,10 @@ impl Vault {
             &crate::ID,
         )
     }
-
-    pub fn min_balance(rent: Rent) -> u64 {
-        rent.minimum_balance(8 + Self::INIT_SPACE)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use solana_sdk::rent::Rent;
-
     use super::*;
     use crate::types::TokenAmount;
 
@@ -55,16 +49,5 @@ mod tests {
         };
 
         goldie::assert_json!(Vault::pda(route_chain, route_hash, &reward));
-    }
-
-    #[test]
-    fn vault_min_balance() {
-        let rent = Rent {
-            lamports_per_byte_year: 3480,
-            exemption_threshold: 2.0,
-            burn_percent: 50,
-        };
-
-        goldie::assert_json!(Vault::min_balance(rent));
     }
 }

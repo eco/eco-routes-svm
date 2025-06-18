@@ -72,14 +72,10 @@ fn fund_vault_native<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
     reward: &Reward,
 ) -> Result<bool> {
-    let min_balance = state::Vault::min_balance(Rent::get()?);
-
     reward
         .native_amount
-        .checked_add(min_balance)
-        .ok_or(PortalError::RewardAmountOverflow)?
-        .checked_sub(ctx.accounts.vault.to_account_info().lamports())
-        .map(|amount| amount.min(ctx.accounts.funder.to_account_info().lamports()))
+        .checked_sub(ctx.accounts.vault.lamports())
+        .map(|amount| amount.min(ctx.accounts.funder.lamports()))
         .filter(|&amount| amount > 0)
         .map(|amount| {
             system_program::transfer(
@@ -94,14 +90,7 @@ fn fund_vault_native<'info>(
             )
         })
         .transpose()
-        .map(|_| {
-            ctx.accounts
-                .vault
-                .to_account_info()
-                .lamports()
-                .checked_sub(min_balance)
-                .is_some_and(|spendable_balance| spendable_balance >= reward.native_amount)
-        })
+        .map(|_| ctx.accounts.vault.lamports() >= reward.native_amount)
 }
 
 fn fund_vault_tokens<'info>(

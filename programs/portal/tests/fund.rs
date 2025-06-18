@@ -8,7 +8,6 @@ use portal::state;
 use portal::types::intent_hash;
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::rent::Rent;
 use solana_sdk::signer::Signer;
 
 pub mod common;
@@ -21,8 +20,7 @@ fn fund_intent_native_success() {
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
     let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
     let vault_balance = ctx.balance(&vault_pda);
-    let fund_amount =
-        intent.reward.native_amount + state::Vault::min_balance(ctx.get_sysvar::<Rent>());
+    let fund_amount = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
 
     ctx.airdrop(&funder, fund_amount).unwrap();
@@ -140,8 +138,7 @@ fn fund_intent_native_and_token_success() {
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
     let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
     let vault_balance = ctx.balance(&vault_pda);
-    let fund_amount_native =
-        intent.reward.native_amount + state::Vault::min_balance(ctx.get_sysvar::<Rent>());
+    let fund_amount_native = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -193,9 +190,7 @@ fn fund_intent_with_existing_vault_funds_success() {
     let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
-    let fund_amount_native = intent.reward.native_amount
-        + state::Vault::min_balance(ctx.get_sysvar::<Rent>())
-        - intent.reward.native_amount / 3;
+    let fund_amount_native = intent.reward.native_amount - intent.reward.native_amount / 3;
 
     ctx.airdrop(&vault_pda, intent.reward.native_amount / 3)
         .unwrap();
@@ -232,10 +227,7 @@ fn fund_intent_with_existing_vault_funds_success() {
         ctx.funder.pubkey(),
         true,
     ))));
-    assert_eq!(
-        ctx.balance(&vault_pda),
-        intent.reward.native_amount + state::Vault::min_balance(ctx.get_sysvar::<Rent>())
-    );
+    assert_eq!(ctx.balance(&vault_pda), intent.reward.native_amount);
     intent.reward.tokens.iter().for_each(|token| {
         let mint = Pubkey::new_from_array(token.token);
 
@@ -251,8 +243,7 @@ fn fund_intent_already_funded_success() {
     let route_hash = random();
     let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
-    let fund_amount_native =
-        intent.reward.native_amount + state::Vault::min_balance(ctx.get_sysvar::<Rent>());
+    let fund_amount_native = intent.reward.native_amount;
 
     ctx.airdrop(&vault_pda, fund_amount_native).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
@@ -285,8 +276,7 @@ fn fund_intent_insufficient_funds_partial_allowed_success() {
     let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
-    let partial_native_amount =
-        intent.reward.native_amount / 2 + state::Vault::min_balance(ctx.get_sysvar::<Rent>());
+    let partial_native_amount = intent.reward.native_amount / 2;
 
     ctx.airdrop(&funder, partial_native_amount).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
@@ -334,8 +324,7 @@ fn fund_intent_invalid_vault_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let fund_amount =
-        intent.reward.native_amount + state::Vault::min_balance(ctx.get_sysvar::<Rent>());
+    let fund_amount = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
 
     ctx.airdrop(&funder, fund_amount).unwrap();
@@ -367,8 +356,7 @@ fn fund_intent_insufficient_token_funds_fails() {
     let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
-    let fund_amount_native =
-        intent.reward.native_amount + state::Vault::min_balance(ctx.get_sysvar::<Rent>());
+    let fund_amount_native = intent.reward.native_amount;
 
     ctx.airdrop(&funder, fund_amount_native).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
@@ -507,17 +495,4 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
     assert!(result.is_err_and(common::is_portal_error(
         PortalError::InvalidTokenTransferAccounts
     )));
-}
-
-#[test]
-fn fund_intent_native_reward_amount_overflow_fails() {
-    let mut ctx = common::Context::default();
-    let mut intent = ctx.rand_intent();
-    intent.reward.native_amount =
-        u64::MAX - state::Vault::min_balance(ctx.get_sysvar::<Rent>()) + 1;
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
-
-    let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
-    assert!(result.is_err_and(common::is_portal_error(PortalError::RewardAmountOverflow)));
 }
