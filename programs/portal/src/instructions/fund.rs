@@ -47,20 +47,25 @@ pub fn fund_intent<'info>(
     } = args;
 
     let native_funded = fund_vault_native(&ctx, &reward)?;
-    let token_funded_count =
-        fund_vault_tokens(&ctx, mint_token_vault_ata_accounts(&ctx)?, &reward)?;
+
+    let reward_token_amounts = reward.token_amounts()?;
+    let token_funded_count = fund_vault_tokens(
+        &ctx,
+        mint_token_vault_ata_accounts(&ctx)?,
+        &reward_token_amounts,
+    )?;
 
     let funded_count = native_funded as usize + token_funded_count;
 
     match (allow_partial, funded_count) {
-        (false, funded_count) if funded_count < reward.token_amounts().len() + 1 => {
+        (false, funded_count) if funded_count < reward_token_amounts.len() + 1 => {
             Err(PortalError::InsufficientFunds.into())
         }
         (_, funded_count) => {
             emit!(IntentFunded::new(
                 types::intent_hash(route_chain, route_hash, &reward),
                 ctx.accounts.funder.key(),
-                funded_count == reward.token_amounts().len() + 1,
+                funded_count == reward_token_amounts.len() + 1,
             ));
 
             Ok(())
@@ -96,14 +101,11 @@ fn fund_vault_native<'info>(
 fn fund_vault_tokens<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
     fund_token_accounts: Vec<TokenTransferAccounts<'info>>,
-    reward: &Reward,
+    reward_token_amounts: &BTreeMap<Bytes32, u64>,
 ) -> Result<usize> {
-    let reward_token_amounts = reward.token_amounts();
     let funded_token = fund_token_accounts
         .into_iter()
-        .map(|fund_token_accounts| {
-            fund_vault_token(ctx, fund_token_accounts, &reward_token_amounts)
-        })
+        .map(|fund_token_accounts| fund_vault_token(ctx, fund_token_accounts, reward_token_amounts))
         .filter_map(|result| match result {
             Ok(Some(mint_key)) => Some(Ok(mint_key)),
             Ok(None) => None,
@@ -130,7 +132,7 @@ fn fund_vault_token<'info>(
 
     let token_program = token_program_account_info(ctx, accounts.program_id())?;
     let reward_token_amount = reward_token_amounts
-        .get(mint_key.as_ref())
+        .get(mint_key.as_array())
         .ok_or(PortalError::InvalidMint)?;
     let to_data = ensure_initialized(ctx, &accounts.mint, &accounts.to, &token_program)?;
     let from_data = accounts.from_data()?;

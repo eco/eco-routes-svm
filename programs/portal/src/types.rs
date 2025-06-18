@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{transfer_checked, Mint, TokenAccount};
@@ -88,46 +88,12 @@ pub struct Intent {
     pub reward: Reward,
 }
 
-impl Intent {
-    pub fn validate(&self, clock: Clock) -> Result<()> {
-        self.route.validate()?;
-        self.reward.validate(clock)?;
-
-        Ok(())
-    }
-}
-
-fn validate_token_amounts(tokens: &[TokenAmount]) -> Result<()> {
-    require!(
-        tokens
-            .iter()
-            .map(|token_amount| token_amount.token)
-            .collect::<BTreeSet<_>>()
-            .len()
-            == tokens.len(),
-        PortalError::DuplicateTokens
-    );
-
-    tokens.iter().try_for_each(TokenAmount::validate)?;
-
-    Ok(())
-}
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Route {
     pub salt: Bytes32,
     pub route_chain_portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
-}
-
-impl Route {
-    fn validate(&self) -> Result<()> {
-        validate_token_amounts(&self.tokens)?;
-        require!(!self.calls.is_empty(), PortalError::EmptyCalls);
-
-        Ok(())
-    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -140,16 +106,6 @@ pub struct Reward {
 }
 
 impl Reward {
-    fn validate(&self, clock: Clock) -> Result<()> {
-        require!(
-            self.deadline > clock.unix_timestamp,
-            PortalError::InvalidIntentDeadline
-        );
-        validate_token_amounts(&self.tokens)?;
-
-        Ok(())
-    }
-
     fn hash(&self) -> Bytes32 {
         let encoded = self.try_to_vec().expect("Failed to serialize Reward");
         let mut hasher = Keccak::v256();
@@ -161,11 +117,17 @@ impl Reward {
         hash
     }
 
-    pub fn token_amounts(&self) -> BTreeMap<Bytes32, u64> {
+    pub fn token_amounts(&self) -> Result<BTreeMap<Bytes32, u64>> {
         self.tokens
             .iter()
-            .map(|token_amount| (token_amount.token, token_amount.amount))
-            .collect()
+            .try_fold(BTreeMap::<Bytes32, u64>::new(), |mut result, token| {
+                let entry = result.entry(token.token).or_default();
+                *entry = entry
+                    .checked_add(token.amount)
+                    .ok_or(PortalError::RewardAmountOverflow)?;
+
+                Ok(result)
+            })
     }
 }
 
@@ -173,14 +135,6 @@ impl Reward {
 pub struct TokenAmount {
     pub token: Bytes32,
     pub amount: u64,
-}
-
-impl TokenAmount {
-    fn validate(&self) -> Result<()> {
-        require!(self.amount > 0, PortalError::InvalidTokenAmount);
-
-        Ok(())
-    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -219,249 +173,6 @@ mod tests {
 
         assert_eq!(hash_1, hash_2);
         goldie::assert_json!(hash_1);
-    }
-
-    #[test]
-    fn intent_validate_success() {
-        let clock = Clock {
-            unix_timestamp: 1000000,
-            slot: 100,
-            epoch: 10,
-            leader_schedule_epoch: 10,
-            epoch_start_timestamp: 900000,
-        };
-
-        let intent = Intent {
-            route_chain: [1u8; 32],
-            route: Route {
-                salt: [2u8; 32],
-                route_chain_portal: [3u8; 32],
-                tokens: vec![TokenAmount {
-                    token: [4u8; 32],
-                    amount: 100,
-                }],
-                calls: vec![Call {
-                    target: [5u8; 32],
-                    data: vec![1, 2, 3],
-                }],
-            },
-            reward: Reward {
-                deadline: 2000000,
-                creator: Pubkey::new_unique(),
-                prover: [6u8; 32],
-                native_amount: 50,
-                tokens: vec![TokenAmount {
-                    token: [7u8; 32],
-                    amount: 200,
-                }],
-            },
-        };
-
-        assert!(intent.validate(clock).is_ok());
-    }
-
-    #[test]
-    fn intent_validate_expired_deadline() {
-        let clock = Clock {
-            unix_timestamp: 2000000,
-            slot: 200,
-            epoch: 20,
-            leader_schedule_epoch: 20,
-            epoch_start_timestamp: 1900000,
-        };
-
-        let intent = Intent {
-            route_chain: [1u8; 32],
-            route: Route {
-                salt: [2u8; 32],
-                route_chain_portal: [3u8; 32],
-                tokens: vec![TokenAmount {
-                    token: [4u8; 32],
-                    amount: 100,
-                }],
-                calls: vec![Call {
-                    target: [5u8; 32],
-                    data: vec![1, 2, 3],
-                }],
-            },
-            reward: Reward {
-                deadline: 1500000,
-                creator: Pubkey::new_unique(),
-                prover: [6u8; 32],
-                native_amount: 50,
-                tokens: vec![],
-            },
-        };
-
-        assert!(intent
-            .validate(clock)
-            .is_err_and(|err| err.to_string().contains("InvalidIntentDeadline")));
-    }
-
-    #[test]
-    fn intent_validate_empty_calls() {
-        let clock = Clock {
-            unix_timestamp: 1000000,
-            slot: 100,
-            epoch: 10,
-            leader_schedule_epoch: 10,
-            epoch_start_timestamp: 900000,
-        };
-
-        let intent = Intent {
-            route_chain: [1u8; 32],
-            route: Route {
-                salt: [2u8; 32],
-                route_chain_portal: [3u8; 32],
-                tokens: vec![TokenAmount {
-                    token: [4u8; 32],
-                    amount: 100,
-                }],
-                calls: vec![],
-            },
-            reward: Reward {
-                deadline: 2000000,
-                creator: Pubkey::new_unique(),
-                prover: [6u8; 32],
-                native_amount: 50,
-                tokens: vec![],
-            },
-        };
-
-        assert!(intent
-            .validate(clock)
-            .is_err_and(|err| err.to_string().contains("EmptyCalls")));
-    }
-
-    #[test]
-    fn intent_validate_duplicate_route_tokens() {
-        let clock = Clock {
-            unix_timestamp: 1000000,
-            slot: 100,
-            epoch: 10,
-            leader_schedule_epoch: 10,
-            epoch_start_timestamp: 900000,
-        };
-
-        let duplicate_token = [4u8; 32];
-        let intent = Intent {
-            route_chain: [1u8; 32],
-            route: Route {
-                salt: [2u8; 32],
-                route_chain_portal: [3u8; 32],
-                tokens: vec![
-                    TokenAmount {
-                        token: duplicate_token,
-                        amount: 100,
-                    },
-                    TokenAmount {
-                        token: duplicate_token,
-                        amount: 200,
-                    },
-                ],
-                calls: vec![Call {
-                    target: [5u8; 32],
-                    data: vec![1, 2, 3],
-                }],
-            },
-            reward: Reward {
-                deadline: 2000000,
-                creator: Pubkey::new_unique(),
-                prover: [6u8; 32],
-                native_amount: 50,
-                tokens: vec![],
-            },
-        };
-
-        assert!(intent
-            .validate(clock)
-            .is_err_and(|err| err.to_string().contains("DuplicateTokens")));
-    }
-
-    #[test]
-    fn intent_validate_duplicate_reward_tokens() {
-        let clock = Clock {
-            unix_timestamp: 1000000,
-            slot: 100,
-            epoch: 10,
-            leader_schedule_epoch: 10,
-            epoch_start_timestamp: 900000,
-        };
-
-        let duplicate_token = [7u8; 32];
-        let intent = Intent {
-            route_chain: [1u8; 32],
-            route: Route {
-                salt: [2u8; 32],
-                route_chain_portal: [3u8; 32],
-                tokens: vec![TokenAmount {
-                    token: [4u8; 32],
-                    amount: 100,
-                }],
-                calls: vec![Call {
-                    target: [5u8; 32],
-                    data: vec![1, 2, 3],
-                }],
-            },
-            reward: Reward {
-                deadline: 2000000,
-                creator: Pubkey::new_unique(),
-                prover: [6u8; 32],
-                native_amount: 50,
-                tokens: vec![
-                    TokenAmount {
-                        token: duplicate_token,
-                        amount: 100,
-                    },
-                    TokenAmount {
-                        token: duplicate_token,
-                        amount: 200,
-                    },
-                ],
-            },
-        };
-
-        assert!(intent
-            .validate(clock)
-            .is_err_and(|err| err.to_string().contains("DuplicateTokens")));
-    }
-
-    #[test]
-    fn intent_validate_zero_token_amount() {
-        let clock = Clock {
-            unix_timestamp: 1000000,
-            slot: 100,
-            epoch: 10,
-            leader_schedule_epoch: 10,
-            epoch_start_timestamp: 900000,
-        };
-
-        let intent = Intent {
-            route_chain: [1u8; 32],
-            route: Route {
-                salt: [2u8; 32],
-                route_chain_portal: [3u8; 32],
-                tokens: vec![TokenAmount {
-                    token: [4u8; 32],
-                    amount: 0,
-                }],
-                calls: vec![Call {
-                    target: [5u8; 32],
-                    data: vec![1, 2, 3],
-                }],
-            },
-            reward: Reward {
-                deadline: 2000000,
-                creator: Pubkey::new_unique(),
-                prover: [6u8; 32],
-                native_amount: 50,
-                tokens: vec![],
-            },
-        };
-
-        assert!(intent
-            .validate(clock)
-            .is_err_and(|err| err.to_string().contains("InvalidTokenAmount")));
     }
 
     #[test]
