@@ -8,11 +8,6 @@ pub use publish::*;
 
 #[error_code]
 pub enum PortalError {
-    InvalidIntentCreator,
-    DuplicateTokens,
-    EmptyCalls,
-    InvalidIntentDeadline,
-    InvalidTokenAmount,
     InvalidVault,
     InvalidVaultAta,
     InvalidMint,

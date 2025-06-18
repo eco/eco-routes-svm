@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 
 use crate::events::IntentPublished;
-use crate::instructions::PortalError;
 use crate::types::{intent_hash, Bytes32, Intent};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -12,10 +11,7 @@ pub struct PublishArgs {
 
 #[derive(Accounts)]
 #[instruction(args: PublishArgs)]
-pub struct Publish<'info> {
-    #[account(address = args.intent.reward.creator @ PortalError::InvalidIntentCreator)]
-    pub creator: Signer<'info>,
-}
+pub struct Publish {}
 
 pub fn publish_intent(_: Context<Publish>, args: PublishArgs) -> Result<()> {
     let PublishArgs { intent, route_hash } = args;

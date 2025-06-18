@@ -38,11 +38,11 @@ mod tests {
             native_amount: 1_000_000_000,
             tokens: vec![
                 TokenAmount {
-                    token: [3u8; 32],
+                    token: Pubkey::new_from_array([3u8; 32]),
                     amount: 100,
                 },
                 TokenAmount {
-                    token: [4u8; 32],
+                    token: Pubkey::new_from_array([4u8; 32]),
                     amount: 200,
                 },
             ],

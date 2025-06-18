@@ -36,23 +36,35 @@ runs:
         path: |
           ~/.avm
           ~/.cargo/bin/anchor
+          ~/.cargo/bin/avm
         key: anchor-${{ inputs.anchor-version }}-${{ runner.os }}
+
+    - name: Install AVM (Anchor Version Manager)
+      if: steps.cache-anchor.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+        cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
 
     - name: Install Anchor CLI
       if: steps.cache-anchor.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-        source $HOME/.bashrc || true
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
         avm install ${{ inputs.anchor-version }}
         avm use ${{ inputs.anchor-version }}
 
-    - name: Set Anchor version
-      if: steps.cache-anchor.outputs.cache-hit == 'true'
+    - name: Add Anchor to PATH
       shell: bash
       run: |
         echo "$HOME/.avm/bin" >> $GITHUB_PATH
-        export PATH="$HOME/.avm/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Set Anchor version (cached)
+      if: steps.cache-anchor.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        export PATH="$HOME/.avm/bin:$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
         avm use ${{ inputs.anchor-version }}
 
     - name: Generate keypair for testing
