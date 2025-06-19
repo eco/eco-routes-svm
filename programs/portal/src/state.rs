@@ -11,11 +11,11 @@ pub struct Vault {
 }
 
 impl Vault {
-    pub fn pda(route_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> (Pubkey, u8) {
+    pub fn pda(destination_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> (Pubkey, u8) {
         Pubkey::find_program_address(
             &[
                 VAULT_SEED,
-                types::intent_hash(route_chain, route_hash, reward).as_ref(),
+                types::intent_hash(destination_chain, route_hash, reward).as_ref(),
             ],
             &crate::ID,
         )
@@ -29,7 +29,7 @@ mod tests {
 
     #[test]
     fn vault_pda() {
-        let route_chain = [5u8; 32];
+        let destination_chain = [5u8; 32];
         let route_hash = [6u8; 32];
         let reward = Reward {
             deadline: 1640995200,
@@ -48,6 +48,6 @@ mod tests {
             ],
         };
 
-        goldie::assert_json!(Vault::pda(route_chain, route_hash, &reward));
+        goldie::assert_json!(Vault::pda(destination_chain, route_hash, &reward));
     }
 }

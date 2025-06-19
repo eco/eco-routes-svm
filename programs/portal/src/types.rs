@@ -68,11 +68,11 @@ impl<'info> TokenTransferAccounts<'info> {
     }
 }
 
-pub fn intent_hash(route_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> Bytes32 {
+pub fn intent_hash(destination_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> Bytes32 {
     let mut hasher = Keccak::v256();
     let mut hash = [0u8; 32];
 
-    hasher.update(&route_chain);
+    hasher.update(&destination_chain);
     hasher.update(&route_hash);
     hasher.update(&reward.hash());
 
@@ -83,7 +83,7 @@ pub fn intent_hash(route_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Intent {
-    pub route_chain: Bytes32,
+    pub destination_chain: Bytes32,
     pub route: Route,
     pub reward: Reward,
 }
@@ -91,7 +91,7 @@ pub struct Intent {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Route {
     pub salt: Bytes32,
-    pub route_chain_portal: Bytes32,
+    pub destination_chain_portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
 }
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn intent_hash_deterministic() {
-        let route_chain = [5u8; 32];
+        let destination_chain = [5u8; 32];
         let route_hash = [6u8; 32];
         let reward = Reward {
             deadline: 1500000,
@@ -168,8 +168,8 @@ mod tests {
             ],
         };
 
-        let hash_1 = intent_hash(route_chain, route_hash, &reward);
-        let hash_2 = intent_hash(route_chain, route_hash, &reward);
+        let hash_1 = intent_hash(destination_chain, route_hash, &reward);
+        let hash_2 = intent_hash(destination_chain, route_hash, &reward);
 
         assert_eq!(hash_1, hash_2);
         goldie::assert_json!(hash_1);
