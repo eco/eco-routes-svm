@@ -19,6 +19,24 @@ pub mod eco_routes {
         instructions::publish_intent(ctx, args)
     }
 
+    pub fn initialize_eco_routes(
+        ctx: Context<InitializeEcoRoutes>,
+        args: InitializeEcoRoutesArgs,
+    ) -> Result<()> {
+        instructions::initialize_eco_routes(ctx, args)
+    }
+
+    pub fn set_authority(ctx: Context<SetAuthority>) -> Result<()> {
+        instructions::set_authority(ctx)
+    }
+
+    pub fn set_authorized_prover(
+        ctx: Context<SetAuthorizedProver>,
+        args: SetAuthorizedProverArgs,
+    ) -> Result<()> {
+        instructions::set_authorized_prover(ctx, args)
+    }
+
     pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> Result<()> {
         instructions::fund_intent_spl(ctx, args)
     }

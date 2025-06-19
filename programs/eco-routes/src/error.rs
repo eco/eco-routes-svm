@@ -43,4 +43,5 @@ pub enum EcoRoutesError {
     EmptyCalls,
     ZeroTokenAmount,
     InvalidAccounts,
+    InvalidEcoRoutes,
 }

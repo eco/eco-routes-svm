@@ -1,7 +1,11 @@
 use anchor_lang::{prelude::*, solana_program::program::set_return_data};
 use borsh::BorshSerialize;
 
-use crate::{encoding, error::EcoRoutesError, state::Intent};
+use crate::{
+    encoding,
+    error::EcoRoutesError,
+    state::{EcoRoutes, Intent},
+};
 
 use super::expected_process_authority;
 
@@ -51,10 +55,13 @@ pub fn handle_account_metas(
     let (intent_hashes, _solvers) = encoding::decode_fulfillment_message(&payload)
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
 
-    let mut metas = vec![SerializableAccountMeta::from(AccountMeta::new_readonly(
-        expected_process_authority(),
-        true,
-    ))];
+    let mut metas = vec![
+        SerializableAccountMeta::from(AccountMeta::new_readonly(
+            expected_process_authority(),
+            true,
+        )),
+        SerializableAccountMeta::from(AccountMeta::new_readonly(EcoRoutes::pda().0, false)),
+    ];
 
     for intent_hash in intent_hashes {
         metas.push(SerializableAccountMeta::from(AccountMeta::new(

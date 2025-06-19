@@ -2,7 +2,7 @@ use anchor_lang::{AnchorDeserialize, AnchorSerialize, InstructionData, ToAccount
 use anyhow::Result;
 use console::{style, Emoji};
 use eco_routes::{
-    hyperlane::MAILBOX_ID,
+    hyperlane::{self, MAILBOX_ID},
     instructions::{
         dispatch_authority_key, execution_authority_key, ClaimIntentNativeArgs, ClaimIntentSplArgs,
         FulfillIntentArgs, FundIntentNativeArgs, FundIntentSplArgs, PublishIntentArgs,
@@ -697,8 +697,15 @@ fn initialize_context<'a>(
         solver_destination_usdc_token_data.to_vec(),
     )?;
 
-    // Intent parameters
+    let inbox_bytes = Pubkey::find_program_address(&[b"dispatch_authority"], &eco_routes::ID)
+        .0
+        .to_bytes();
 
+    // Create EcoRoutes PDAs on both SVMs
+    helpers::write_eco_routes_pda(source_svm, source_user.pubkey(), inbox_bytes)?;
+    helpers::write_eco_routes_pda(destination_svm, destination_user.pubkey(), inbox_bytes)?;
+
+    // Intent parameters
     let salt = helpers::generate_salt();
 
     let execution_authority_pubkey = execution_authority_key(&salt).0;
@@ -738,11 +745,9 @@ fn initialize_context<'a>(
 
     let route = Route {
         salt,
-        source_domain_id: 1,
-        destination_domain_id: 1,
-        inbox: Pubkey::find_program_address(&[b"dispatch_authority"], &eco_routes::ID)
-            .0
-            .to_bytes(),
+        source_domain_id: hyperlane::DOMAIN_ID,
+        destination_domain_id: hyperlane::DOMAIN_ID,
+        inbox: inbox_bytes,
         tokens: vec![TokenAmount {
             token: destination_usdc_mint.pubkey().to_bytes(),
             amount: usdc_amount(5.0),
@@ -1167,6 +1172,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         ],
         &eco_routes::hyperlane::MAILBOX_ID,
     );
+    let (eco_routes_pda, _) = Pubkey::find_program_address(&[b"eco_routes"], &eco_routes::ID);
 
     fn build_multisig_metadata() -> Vec<u8> {
         const SIG_LEN: usize = 65;
@@ -1196,49 +1202,51 @@ fn solve_intent(context: &mut Context) -> Result<()> {
 
     let mut ix_data = vec![1u8]; // enum tag: InboxProcess
     ix_data.extend_from_slice(borsh::to_vec(&inbox_process)?.as_slice());
+    let accounts = vec![
+        // 0-4 – core mailbox accounts
+        AccountMeta::new(context.hyperlane_relayer_source.pubkey(), true),
+        AccountMeta::new_readonly(solana_system_interface::program::ID, false),
+        AccountMeta::new(inbox_pda, false),
+        AccountMeta::new_readonly(process_authority_pda, false),
+        AccountMeta::new(processed_message_pda, false),
+        // 5..N – recipient’s ISM-meta account(s)
+        AccountMeta::new(
+            Pubkey::find_program_address(
+                &[
+                    b"hyperlane_message_recipient",
+                    b"-",
+                    b"interchain_security_module",
+                    b"-",
+                    b"account_metas",
+                ],
+                &eco_routes::ID,
+            )
+            .0,
+            false,
+        ),
+        // N+1 – SPL-noop
+        AccountMeta::new_readonly(spl_noop::id(), false),
+        // N+2 – ISM program id
+        AccountMeta::new_readonly(eco_routes::hyperlane::MULTISIG_ISM_ID, false),
+        // N+3..M – ISM::verify accounts (for Multisig ISM it’s just DomainData)
+        AccountMeta::new(
+            Pubkey::find_program_address(
+                &[b"test_ism", b"-", b"storage"],
+                &eco_routes::hyperlane::MULTISIG_ISM_ID,
+            )
+            .0,
+            false,
+        ),
+        // M+1 – recipient program id
+        AccountMeta::new_readonly(eco_routes::ID, false),
+        // M+2..K – recipient::handle accounts
+        AccountMeta::new_readonly(eco_routes_pda, false),
+        AccountMeta::new(Intent::pda(context.intent_hash).0, false),
+    ];
 
     let inbox_process_ix = Instruction {
         program_id: eco_routes::hyperlane::MAILBOX_ID,
-        accounts: vec![
-            // 0-4 – core mailbox accounts
-            AccountMeta::new(context.hyperlane_relayer_source.pubkey(), true),
-            AccountMeta::new_readonly(solana_system_interface::program::ID, false),
-            AccountMeta::new(inbox_pda, false),
-            AccountMeta::new_readonly(process_authority_pda, false),
-            AccountMeta::new(processed_message_pda, false),
-            // 5..N – recipient’s ISM-meta account(s)
-            AccountMeta::new(
-                Pubkey::find_program_address(
-                    &[
-                        b"hyperlane_message_recipient",
-                        b"-",
-                        b"interchain_security_module",
-                        b"-",
-                        b"account_metas",
-                    ],
-                    &eco_routes::ID,
-                )
-                .0,
-                false,
-            ),
-            // N+1 – SPL-noop
-            AccountMeta::new_readonly(spl_noop::id(), false),
-            // N+2 – ISM program id
-            AccountMeta::new_readonly(eco_routes::hyperlane::MULTISIG_ISM_ID, false),
-            // N+3..M – ISM::verify accounts (for Multisig ISM it’s just DomainData)
-            AccountMeta::new(
-                Pubkey::find_program_address(
-                    &[b"test_ism", b"-", b"storage"],
-                    &eco_routes::hyperlane::MULTISIG_ISM_ID,
-                )
-                .0,
-                false,
-            ),
-            // M+1 – recipient program id
-            AccountMeta::new_readonly(eco_routes::ID, false),
-            // M+2..K – recipient::handle accounts
-            AccountMeta::new(Intent::pda(context.intent_hash).0, false),
-        ],
+        accounts,
         data: ix_data,
     };
 

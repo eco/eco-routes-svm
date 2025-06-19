@@ -8,6 +8,7 @@ pub const MAX_ROUTE_TOKENS: usize = 3;
 pub const MAX_REWARD_TOKENS: usize = 3;
 pub const MAX_CALLS: usize = 3;
 pub const MAX_CALLDATA_SIZE: usize = 256;
+pub const ECO_ROUTES_AUTHORITY: &str = "aEGzbWJhZ7RX8uCmeG4jVfskQe6eoP7zcdoHmY2PWys";
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 #[repr(u8)]
@@ -307,5 +308,39 @@ impl IntentFulfillmentMarker {
             &[b"intent_fulfillment_marker", intent_hash.as_ref()],
             &crate::ID,
         )
+    }
+}
+
+#[account]
+#[derive(PartialEq, Eq, Debug, InitSpace)]
+pub struct EcoRoutes {
+    pub authority: Pubkey,
+    pub prover: [u8; 32],
+    pub bump: u8,
+}
+
+impl EcoRoutes {
+    pub fn new(authority: Pubkey, prover: [u8; 32], bump: u8) -> Self {
+        Self {
+            authority,
+            prover,
+            bump,
+        }
+    }
+
+    pub fn set_authority(&mut self, new_authority: Pubkey) -> Result<()> {
+        self.authority = new_authority;
+
+        Ok(())
+    }
+
+    pub fn set_authorized_prover(&mut self, new_prover: [u8; 32]) -> Result<()> {
+        self.prover = new_prover;
+
+        Ok(())
+    }
+
+    pub fn pda() -> (Pubkey, u8) {
+        Pubkey::find_program_address(&[b"eco_routes"], &crate::ID)
     }
 }

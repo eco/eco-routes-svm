@@ -92,7 +92,7 @@ pub fn init_svm() -> LiteSVM {
             &[Instruction::new_with_borsh(
                 eco_routes::hyperlane::MAILBOX_ID,
                 &MailboxInstruction::Init(Init {
-                    local_domain: 1,
+                    local_domain: eco_routes::hyperlane::DOMAIN_ID,
                     default_ism: eco_routes::hyperlane::MULTISIG_ISM_ID,
                     max_protocol_fee: 0,
                     protocol_fee: ProtocolFee {

@@ -1,7 +1,11 @@
 use anchor_lang::prelude::*;
 use itertools::izip;
 
-use crate::{encoding, error::EcoRoutesError, state::Intent};
+use crate::{
+    encoding,
+    error::EcoRoutesError,
+    state::{EcoRoutes, Intent},
+};
 
 #[derive(Accounts)]
 pub struct Handle<'info> {
@@ -31,18 +35,33 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
 ) -> Result<()> {
     let (intent_hashes, solvers) = encoding::decode_fulfillment_message(&payload)
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
-    let accounts: Vec<_> = ctx.remaining_accounts.iter().collect();
+
+    let (eco_routes_account_info, intent_account_infos) = ctx
+        .remaining_accounts
+        .split_first()
+        .ok_or(error!(EcoRoutesError::InvalidAccounts))?;
+
+    require!(
+        eco_routes_account_info.key == &EcoRoutes::pda().0,
+        EcoRoutesError::InvalidEcoRoutes
+    );
+
+    let eco_routes_account: Account<EcoRoutes> = Account::try_from(eco_routes_account_info)?;
+    require!(
+        eco_routes_account.prover == sender,
+        EcoRoutesError::InvalidSender
+    );
 
     require!(
         intent_hashes.len() == solvers.len(),
         EcoRoutesError::InvalidHandlePayload
     );
     require!(
-        intent_hashes.len() == accounts.len(),
+        intent_hashes.len() == intent_account_infos.len(),
         EcoRoutesError::InvalidHandlePayload
     );
 
-    for (intent_hash, solver, account) in izip!(intent_hashes, solvers, accounts) {
+    for (intent_hash, solver, account) in izip!(intent_hashes, solvers, intent_account_infos) {
         require_keys_eq!(
             account.key(),
             Intent::pda(intent_hash).0,
@@ -52,7 +71,6 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
 
         let mut intent: Account<Intent> = Account::try_from(account)?;
 
-        require!(intent.route.inbox == sender, EcoRoutesError::InvalidSender);
         require!(
             intent.route.destination_domain_id == origin,
             EcoRoutesError::InvalidOrigin
