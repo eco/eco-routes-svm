@@ -14,7 +14,7 @@ use crate::types::{self, Bytes32, Reward, TokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FundArgs {
-    pub route_chain: Bytes32,
+    pub destination_chain: Bytes32,
     pub route_hash: Bytes32,
     pub reward: Reward,
     pub allow_partial: bool,
@@ -27,7 +27,7 @@ pub struct Fund<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
     /// CHECK: address is validated
-    #[account(mut, address = state::Vault::pda(args.route_chain, args.route_hash, &args.reward).0 @ PortalError::InvalidVault)]
+    #[account(mut, address = state::Vault::pda(args.destination_chain, args.route_hash, &args.reward).0 @ PortalError::InvalidVault)]
     pub vault: UncheckedAccount<'info>,
     pub token_program: Program<'info, token::Token>,
     pub token_2022_program: Program<'info, token_2022::Token2022>,
@@ -40,7 +40,7 @@ pub fn fund_intent<'info>(
     args: FundArgs,
 ) -> Result<()> {
     let FundArgs {
-        route_chain,
+        destination_chain,
         route_hash,
         reward,
         allow_partial,
@@ -63,7 +63,7 @@ pub fn fund_intent<'info>(
         }
         (_, funded_count) => {
             emit!(IntentFunded::new(
-                types::intent_hash(route_chain, route_hash, &reward),
+                types::intent_hash(destination_chain, route_hash, &reward),
                 ctx.accounts.funder.key(),
                 funded_count == reward_token_amounts.len() + 1,
             ));

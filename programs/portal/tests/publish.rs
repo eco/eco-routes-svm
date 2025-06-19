@@ -16,7 +16,7 @@ fn publish_intent_success() {
     let result = ctx.publish_intent(&intent, route_hash);
     assert!(
         result.is_ok_and(common::contains_event(IntentPublished::new(
-            intent_hash(intent.route_chain, route_hash, &intent.reward),
+            intent_hash(intent.destination_chain, route_hash, &intent.reward),
             intent.route,
             intent.reward,
         )))

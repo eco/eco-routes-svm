@@ -16,12 +16,12 @@ pub struct Publish {}
 pub fn publish_intent(_: Context<Publish>, args: PublishArgs) -> Result<()> {
     let PublishArgs { intent, route_hash } = args;
     let Intent {
-        route_chain,
+        destination_chain,
         route,
         reward,
     } = intent;
 
-    let intent_hash = intent_hash(route_chain, route_hash, &reward);
+    let intent_hash = intent_hash(destination_chain, route_hash, &reward);
     emit!(IntentPublished::new(intent_hash, route, reward));
 
     Ok(())

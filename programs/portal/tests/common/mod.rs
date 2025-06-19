@@ -91,10 +91,10 @@ impl Context {
         });
 
         Intent {
-            route_chain: random(),
+            destination_chain: random(),
             route: Route {
                 salt: random(),
-                route_chain_portal: random(),
+                destination_chain_portal: random(),
                 tokens: (0..3)
                     .map(|_| TokenAmount {
                         token: Pubkey::new_unique(),
@@ -255,7 +255,7 @@ impl Context {
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::FundArgs {
-            route_chain: intent.route_chain,
+            destination_chain: intent.destination_chain,
             route_hash,
             reward: intent.reward.clone(),
             allow_partial,
