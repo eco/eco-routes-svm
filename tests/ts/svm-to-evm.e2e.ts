@@ -64,31 +64,11 @@ const program = new Program(
 
 const salt = (() => {
   const bytes = anchorUtils.bytes.utf8.encode(
-    "svm-evm-e2e31248".padEnd(32, "\0")
+    "svm-evm-e2etest3".padEnd(32, "\0")
   );
   return bytes.slice(0, 32);
 })();
 const saltHex = "0x" + Buffer.from(salt).toString("hex");
-
-const inboxErrorInterface = new ethers.Interface([
-  "error InsufficientFee(uint256 _requiredFee)",
-  "error NativeTransferFailed()",
-  "error ChainIdTooLarge(uint256 _chainId)",
-  "error UnauthorizedHandle(address _sender)",
-  "error UnauthorizedProve(address _sender)",
-  "error UnauthorizedIncomingProof(address _sender)",
-  "error MailboxCannotBeZeroAddress()",
-  "error RouterCannotBeZeroAddress()",
-  "error InboxCannotBeZeroAddress()",
-  "error ProverCannotBeZeroAddress()",
-  "error InvalidOriginChainId()",
-  "error NotFulfilled(bytes32)",
-  "error AlreadyProven(bytes32)",
-  "error InsufficientFee(uint256)",
-  "error ArrayLengthMismatch()",
-  "error ChainIdTooLarge(uint256)",
-  "error SenderCannotBeZeroAddress()",
-]);
 
 describe("SVM -> EVM e2e", () => {
   let usdc: TestERC20;
@@ -440,6 +420,26 @@ describe("SVM -> EVM e2e", () => {
     console.log("intentHashHex:", intentHashHex);
     console.log("HYPER_PROVER_ADDRESS_MAINNET:", HYPER_PROVER_ADDRESS);
 
+    const fulfillTx = await inbox.fulfill(
+      route,
+      rewardHashHex,
+      // TODO: figure out how to pass an SVM 32-byte address
+      // (should the Inbox contract be updated?)
+      solverEvmAddress,
+      intentHashHex,
+      ethers.ZeroAddress,
+      { gasLimit: 900_000 }
+    );
+
+    console.log("Fulfill transaction hash:", fulfillTx.hash);
+    const fulfillTxReceipt = await fulfillTx.wait(3);
+    console.log("Fulfill transaction receipt:", fulfillTxReceipt);
+    console.log("Fulfill transaction status:", fulfillTxReceipt.status);
+
+    const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
+    console.log("Fulfilled mapping result:", fulfilledMappingSlot);
+    expect(fulfilledMappingSlot).to.equal(solverEvmAddress);
+
     const requiredFee = await hyperProver.fetchFee(
       SOLANA_DOMAIN_ID,
       [intentHashHex],
@@ -455,53 +455,24 @@ describe("SVM -> EVM e2e", () => {
         ? requiredFee / BigInt(20)
         : ethers.parseEther("0.0005");
 
-    async function diagnosePotentialRevert() {
-      try {
-        await inbox.fulfillAndProve.staticCall(
-          route,
-          rewardHashHex,
-          solverEvmAddress,
-          intentHashHex,
-          HYPER_PROVER_ADDRESS,
-          data,
-          { value: requiredFee + buffer, gasLimit: 900_000 }
-        );
-        console.log(
-          "callStatic succeeded (on-chain revert is gas/fee related)"
-        );
-      } catch (err: any) {
-        const revertData: string = err.data ?? err.error?.data ?? "";
-        const desc = inboxErrorInterface.parseError(revertData);
-
-        console.log("name:", desc.name);
-        console.log("selector:", desc.selector);
-        console.log("signature:", desc.signature);
-        console.log("args:", desc.args);
-        throw err;
-      }
-    }
-    await diagnosePotentialRevert();
-
-    const fulfillTx = await inbox.fulfillAndProve(
-      route,
-      rewardHashHex,
-      // TODO: figure out how to pass an SVM 32-byte address
-      // (should the Inbox contract be updated?)
-      solverEvmAddress,
-      intentHashHex,
+    const initiateProvingTx = await inbox.initiateProving(
+      SOLANA_DOMAIN_ID,
+      [intentHashHex],
       HYPER_PROVER_ADDRESS,
       data,
-      { value: requiredFee + buffer, gasLimit: 900_000 }
+      { value: requiredFee + buffer }
     );
 
-    console.log("Fulfill ransaction hash:", fulfillTx.hash);
-    const fulfillTxReceipt = await fulfillTx.wait(3);
-    console.log("Fulfill transaction receipt:", fulfillTxReceipt);
-    console.log("Fulfill transaction status:", fulfillTxReceipt.status);
-
-    const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
-    console.log("Fulfilled mapping result:", fulfilledMappingSlot);
-    expect(fulfilledMappingSlot).to.equal(solverEvmAddress);
+    console.log("Initiate proving transaction hash:", fulfillTx.hash);
+    const initiateProvingTxReceipt = await initiateProvingTx.wait(3);
+    console.log(
+      "Initiate proving transaction receipt:",
+      initiateProvingTxReceipt
+    );
+    console.log(
+      "Initiate proving transaction status:",
+      initiateProvingTxReceipt.status
+    );
   });
 
   // Un-skip when a message passes
