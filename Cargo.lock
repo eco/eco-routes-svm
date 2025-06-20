@@ -2500,10 +2500,12 @@ name = "portal"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "anchor-spl",
  "base64 0.22.1",
  "derive-new",
  "derive_more",
  "goldie",
+ "itertools 0.14.0",
  "litesvm",
  "rand 0.9.1",
  "solana-sdk",

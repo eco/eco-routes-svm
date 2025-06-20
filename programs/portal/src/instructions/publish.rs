@@ -19,8 +19,6 @@ pub struct Publish<'info> {
 
 pub fn publish_intent(_: Context<Publish>, args: PublishArgs) -> Result<()> {
     let PublishArgs { intent, route_hash } = args;
-
-    intent.validate(Clock::get()?)?;
     let Intent {
         route_chain,
         route,
