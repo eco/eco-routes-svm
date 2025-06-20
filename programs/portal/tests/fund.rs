@@ -16,9 +16,14 @@ pub mod common;
 fn fund_intent_native_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let vault_balance = ctx.balance(&vault_pda);
     let fund_amount = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
@@ -27,7 +32,7 @@ fn fund_intent_native_success() {
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -40,9 +45,14 @@ fn fund_intent_native_success() {
 fn fund_intent_tokens_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -72,7 +82,7 @@ fn fund_intent_tokens_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -90,9 +100,14 @@ fn fund_intent_tokens_success() {
 fn fund_intent_tokens_2022_success() {
     let mut ctx = common::Context::new_with_token_2022();
     let intent = ctx.rand_intent();
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -122,7 +137,7 @@ fn fund_intent_tokens_2022_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -140,9 +155,14 @@ fn fund_intent_tokens_2022_success() {
 fn fund_intent_native_and_token_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let vault_balance = ctx.balance(&vault_pda);
     let fund_amount_native = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
@@ -175,7 +195,7 @@ fn fund_intent_native_and_token_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         true,
     ))));
@@ -199,9 +219,14 @@ fn fund_intent_native_and_token_with_zero_amounts_success() {
     intent.reward.tokens.iter_mut().for_each(|token| {
         token.amount = 0;
     });
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -231,7 +256,7 @@ fn fund_intent_native_and_token_with_zero_amounts_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         true,
     ))));
@@ -264,9 +289,14 @@ fn fund_intent_duplicate_tokens_success() {
     ];
     ctx.set_mint_account(&token_1);
     ctx.set_mint_account(&token_2);
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -296,7 +326,7 @@ fn fund_intent_duplicate_tokens_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -311,8 +341,13 @@ fn fund_intent_duplicate_tokens_success() {
 fn fund_intent_with_existing_vault_funds_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let fund_amount_native = intent.reward.native_amount - intent.reward.native_amount / 3;
@@ -320,7 +355,6 @@ fn fund_intent_with_existing_vault_funds_success() {
     ctx.airdrop(&vault_pda, intent.reward.native_amount / 3)
         .unwrap();
     ctx.airdrop(&funder, fund_amount_native).unwrap();
-
     intent.reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &vault_pda, token.amount / 2);
         ctx.airdrop_token_ata(&token.token, &funder, token.amount - token.amount / 2);
@@ -348,7 +382,7 @@ fn fund_intent_with_existing_vault_funds_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         true,
     ))));
@@ -366,8 +400,13 @@ fn fund_intent_with_existing_vault_funds_success() {
 fn fund_intent_already_funded_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let fund_amount_native = intent.reward.native_amount;
 
@@ -378,7 +417,7 @@ fn fund_intent_already_funded_success() {
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -397,8 +436,13 @@ fn fund_intent_already_funded_success() {
 fn fund_intent_insufficient_funds_partial_allowed_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let partial_native_amount = intent.reward.native_amount / 2;
@@ -430,7 +474,7 @@ fn fund_intent_insufficient_funds_partial_allowed_success() {
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.destination_chain, route_hash, &intent.reward),
+        intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -449,7 +493,7 @@ fn fund_intent_insufficient_funds_partial_allowed_success() {
 fn fund_intent_invalid_vault_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let fund_amount = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
 
@@ -463,8 +507,13 @@ fn fund_intent_invalid_vault_fails() {
 fn fund_intent_insufficient_native_funds_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
 
     let insufficient_amount = intent.reward.native_amount / 2;
@@ -478,8 +527,13 @@ fn fund_intent_insufficient_native_funds_fails() {
 fn fund_intent_insufficient_token_funds_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let fund_amount_native = intent.reward.native_amount;
@@ -518,8 +572,13 @@ fn fund_intent_insufficient_token_funds_fails() {
 fn fund_intent_invalid_vault_ata_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -551,8 +610,13 @@ fn fund_intent_invalid_vault_ata_fails() {
 fn fund_intent_invalid_mint_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let wrong_mint = Pubkey::new_unique();
@@ -582,8 +646,13 @@ fn fund_intent_invalid_mint_fails() {
 fn fund_intent_invalid_token_transfer_accounts_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
@@ -640,8 +709,13 @@ fn fund_intent_token_amount_overflow_fails() {
             amount: 2000,
         },
     ];
-    let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(
+        &intent.destination_chain,
+        &route_hash,
+        &intent.reward,
+    ))
+    .0;
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_err_and(common::is_portal_error(PortalError::RewardAmountOverflow)));

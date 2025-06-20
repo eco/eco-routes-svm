@@ -20,4 +20,11 @@ pub mod portal {
     pub fn fund<'info>(ctx: Context<'_, '_, '_, 'info, Fund<'info>>, args: FundArgs) -> Result<()> {
         fund_intent(ctx, args)
     }
+
+    pub fn refund<'info>(
+        ctx: Context<'_, '_, '_, 'info, Refund<'info>>,
+        args: RefundArgs,
+    ) -> Result<()> {
+        refund_intent(ctx, args)
+    }
 }

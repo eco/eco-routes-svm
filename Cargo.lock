@@ -1155,6 +1155,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "eco-svm-std"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "derive-new",
+ "derive_more",
+ "goldie",
+]
+
+[[package]]
 name = "ed25519"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2504,6 +2514,7 @@ dependencies = [
  "base64 0.22.1",
  "derive-new",
  "derive_more",
+ "eco-svm-std",
  "goldie",
  "itertools 0.14.0",
  "litesvm",

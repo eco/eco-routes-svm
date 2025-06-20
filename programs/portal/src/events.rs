@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use derive_new::new;
+use eco_svm_std::Bytes32;
 
-use crate::types::{Bytes32, Reward, Route};
+use crate::types::{Reward, Route};
 
 #[event]
 #[derive(new)]
@@ -17,4 +18,11 @@ pub struct IntentFunded {
     intent_hash: Bytes32,
     funder: Pubkey,
     complete: bool,
+}
+
+#[event]
+#[derive(new)]
+pub struct IntentRefunded {
+    intent_hash: Bytes32,
+    refundee: Pubkey,
 }

@@ -1,13 +1,16 @@
 use anchor_lang::prelude::*;
 
-pub mod fund;
-pub mod publish;
+mod fund;
+mod publish;
+mod refund;
 
 pub use fund::*;
 pub use publish::*;
+pub use refund::*;
 
 #[error_code]
 pub enum PortalError {
+    InvalidCreator,
     InvalidVault,
     InvalidVaultAta,
     InvalidMint,
@@ -15,4 +18,8 @@ pub enum PortalError {
     InsufficientFunds,
     InvalidTokenTransferAccounts,
     RewardAmountOverflow,
+    RewardNotExpired,
+    InvalidProof,
+    IntentAlreadyFulfilled,
+    InvalidCreatorToken,
 }
