@@ -14,7 +14,7 @@ use crate::types::{self, Bytes32, Reward, TokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FundArgs {
-    pub route_chain: Bytes32,
+    pub destination_chain: Bytes32,
     pub route_hash: Bytes32,
     pub reward: Reward,
     pub allow_partial: bool,
@@ -27,7 +27,7 @@ pub struct Fund<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
     /// CHECK: address is validated
-    #[account(mut, address = state::Vault::pda(args.route_chain, args.route_hash, &args.reward).0 @ PortalError::InvalidVault)]
+    #[account(mut, address = state::Vault::pda(args.destination_chain, args.route_hash, &args.reward).0 @ PortalError::InvalidVault)]
     pub vault: UncheckedAccount<'info>,
     pub token_program: Program<'info, token::Token>,
     pub token_2022_program: Program<'info, token_2022::Token2022>,
@@ -40,7 +40,7 @@ pub fn fund_intent<'info>(
     args: FundArgs,
 ) -> Result<()> {
     let FundArgs {
-        route_chain,
+        destination_chain,
         route_hash,
         reward,
         allow_partial,
@@ -63,7 +63,7 @@ pub fn fund_intent<'info>(
         }
         (_, funded_count) => {
             emit!(IntentFunded::new(
-                types::intent_hash(route_chain, route_hash, &reward),
+                types::intent_hash(destination_chain, route_hash, &reward),
                 ctx.accounts.funder.key(),
                 funded_count == reward_token_amounts.len() + 1,
             ));
@@ -101,7 +101,7 @@ fn fund_vault_native<'info>(
 fn fund_vault_tokens<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
     fund_token_accounts: Vec<TokenTransferAccounts<'info>>,
-    reward_token_amounts: &BTreeMap<Bytes32, u64>,
+    reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<usize> {
     let funded_token = fund_token_accounts
         .into_iter()
@@ -119,7 +119,7 @@ fn fund_vault_tokens<'info>(
 fn fund_vault_token<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
     accounts: TokenTransferAccounts<'info>,
-    reward_token_amounts: &BTreeMap<Bytes32, u64>,
+    reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<Option<Pubkey>> {
     let mint_key = accounts.mint.key();
     let vault_ata = get_associated_token_address_with_program_id(
@@ -132,7 +132,7 @@ fn fund_vault_token<'info>(
 
     let token_program = token_program_account_info(ctx, accounts.program_id())?;
     let reward_token_amount = reward_token_amounts
-        .get(mint_key.as_array())
+        .get(&mint_key)
         .ok_or(PortalError::InvalidMint)?;
     let to_data = ensure_initialized(ctx, &accounts.mint, &accounts.to, &token_program)?;
     let from_data = accounts.from_data()?;

@@ -68,11 +68,11 @@ impl<'info> TokenTransferAccounts<'info> {
     }
 }
 
-pub fn intent_hash(route_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> Bytes32 {
+pub fn intent_hash(destination_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> Bytes32 {
     let mut hasher = Keccak::v256();
     let mut hash = [0u8; 32];
 
-    hasher.update(&route_chain);
+    hasher.update(&destination_chain);
     hasher.update(&route_hash);
     hasher.update(&reward.hash());
 
@@ -83,7 +83,7 @@ pub fn intent_hash(route_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Intent {
-    pub route_chain: Bytes32,
+    pub destination_chain: Bytes32,
     pub route: Route,
     pub reward: Reward,
 }
@@ -91,7 +91,7 @@ pub struct Intent {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct Route {
     pub salt: Bytes32,
-    pub route_chain_portal: Bytes32,
+    pub destination_chain_portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
 }
@@ -117,10 +117,10 @@ impl Reward {
         hash
     }
 
-    pub fn token_amounts(&self) -> Result<BTreeMap<Bytes32, u64>> {
+    pub fn token_amounts(&self) -> Result<BTreeMap<Pubkey, u64>> {
         self.tokens
             .iter()
-            .try_fold(BTreeMap::<Bytes32, u64>::new(), |mut result, token| {
+            .try_fold(BTreeMap::<Pubkey, u64>::new(), |mut result, token| {
                 let entry = result.entry(token.token).or_default();
                 *entry = entry
                     .checked_add(token.amount)
@@ -133,7 +133,7 @@ impl Reward {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct TokenAmount {
-    pub token: Bytes32,
+    pub token: Pubkey,
     pub amount: u64,
 }
 
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn intent_hash_deterministic() {
-        let route_chain = [5u8; 32];
+        let destination_chain = [5u8; 32];
         let route_hash = [6u8; 32];
         let reward = Reward {
             deadline: 1500000,
@@ -158,18 +158,18 @@ mod tests {
             native_amount: 250,
             tokens: vec![
                 TokenAmount {
-                    token: [40u8; 32],
+                    token: Pubkey::new_from_array([40u8; 32]),
                     amount: 1000,
                 },
                 TokenAmount {
-                    token: [50u8; 32],
+                    token: Pubkey::new_from_array([50u8; 32]),
                     amount: 2000,
                 },
             ],
         };
 
-        let hash_1 = intent_hash(route_chain, route_hash, &reward);
-        let hash_2 = intent_hash(route_chain, route_hash, &reward);
+        let hash_1 = intent_hash(destination_chain, route_hash, &reward);
+        let hash_2 = intent_hash(destination_chain, route_hash, &reward);
 
         assert_eq!(hash_1, hash_2);
         goldie::assert_json!(hash_1);
@@ -184,16 +184,24 @@ mod tests {
             native_amount: 1_000_000_000,
             tokens: vec![
                 TokenAmount {
-                    token: [3u8; 32],
+                    token: Pubkey::new_from_array([3u8; 32]),
                     amount: 100,
                 },
                 TokenAmount {
-                    token: [4u8; 32],
+                    token: Pubkey::new_from_array([4u8; 32]),
                     amount: 200,
                 },
                 TokenAmount {
-                    token: [5u8; 32],
+                    token: Pubkey::new_from_array([5u8; 32]),
                     amount: 300,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([3u8; 32]),
+                    amount: 500,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([4u8; 32]),
+                    amount: 0,
                 },
             ],
         };

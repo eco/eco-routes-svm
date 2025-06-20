@@ -18,7 +18,7 @@ fn fund_intent_native_success() {
     let intent = ctx.rand_intent();
     let route_hash = random();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let vault_balance = ctx.balance(&vault_pda);
     let fund_amount = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
@@ -27,7 +27,7 @@ fn fund_intent_native_success() {
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -42,12 +42,12 @@ fn fund_intent_tokens_success() {
     let intent = ctx.rand_intent();
     let route_hash = random();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, token.amount);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     let result = ctx.fund_intent(
@@ -56,30 +56,33 @@ fn fund_intent_tokens_success() {
         route_hash,
         true,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
     assert!(ctx.balance(&ctx.payer.pubkey()) < payer_balance);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &funder), 0);
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), token.amount);
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount
+        );
     });
 }
 
@@ -89,12 +92,12 @@ fn fund_intent_tokens_2022_success() {
     let intent = ctx.rand_intent();
     let route_hash = random();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, token.amount);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     let result = ctx.fund_intent(
@@ -103,30 +106,33 @@ fn fund_intent_tokens_2022_success() {
         route_hash,
         true,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
     assert!(ctx.balance(&ctx.payer.pubkey()) < payer_balance);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &funder), 0);
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), token.amount);
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount
+        );
     });
 }
 
@@ -136,7 +142,7 @@ fn fund_intent_native_and_token_success() {
     let intent = ctx.rand_intent();
     let route_hash = random();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let vault_balance = ctx.balance(&vault_pda);
     let fund_amount_native = intent.reward.native_amount;
     let funder = ctx.funder.pubkey();
@@ -144,7 +150,7 @@ fn fund_intent_native_and_token_success() {
 
     ctx.airdrop(&funder, fund_amount_native).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, token.amount);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     let result = ctx.fund_intent(
@@ -153,21 +159,23 @@ fn fund_intent_native_and_token_success() {
         route_hash,
         false,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         true,
     ))));
@@ -175,10 +183,11 @@ fn fund_intent_native_and_token_success() {
     assert_eq!(ctx.balance(&funder), 0);
     assert!(ctx.balance(&ctx.payer.pubkey()) < payer_balance);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &funder), 0);
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), token.amount);
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount
+        );
     });
 }
 
@@ -192,12 +201,12 @@ fn fund_intent_native_and_token_with_zero_amounts_success() {
     });
     let route_hash = random();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, 0);
+        ctx.airdrop_token_ata(&token.token, &funder, 0);
     });
 
     let result = ctx.fund_intent(
@@ -206,30 +215,30 @@ fn fund_intent_native_and_token_with_zero_amounts_success() {
         route_hash,
         false,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         true,
     ))));
     assert_eq!(ctx.balance(&vault_pda), 0);
     assert!(ctx.balance(&ctx.payer.pubkey()) < payer_balance);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), 0);
+        assert_eq!(ctx.token_balance_ata(&token.token, &vault_pda), 0);
     });
 }
 
@@ -241,15 +250,15 @@ fn fund_intent_duplicate_tokens_success() {
     let token_2 = Pubkey::new_unique();
     intent.reward.tokens = vec![
         TokenAmount {
-            token: *token_1.as_array(),
+            token: token_1,
             amount: 1_000_000,
         },
         TokenAmount {
-            token: *token_2.as_array(),
+            token: token_2,
             amount: 1_000_000,
         },
         TokenAmount {
-            token: *token_1.as_array(),
+            token: token_1,
             amount: 1_000_000,
         },
     ];
@@ -257,12 +266,12 @@ fn fund_intent_duplicate_tokens_success() {
     ctx.set_mint_account(&token_2);
     let route_hash = random();
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, token.amount);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     let result = ctx.fund_intent(
@@ -271,21 +280,23 @@ fn fund_intent_duplicate_tokens_success() {
         route_hash,
         true,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
@@ -301,7 +312,7 @@ fn fund_intent_with_existing_vault_funds_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let fund_amount_native = intent.reward.native_amount - intent.reward.native_amount / 3;
@@ -311,10 +322,8 @@ fn fund_intent_with_existing_vault_funds_success() {
     ctx.airdrop(&funder, fund_amount_native).unwrap();
 
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        ctx.airdrop_token_ata(&mint, &vault_pda, token.amount / 2);
-        ctx.airdrop_token_ata(&mint, &funder, token.amount - token.amount / 2);
+        ctx.airdrop_token_ata(&token.token, &vault_pda, token.amount / 2);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount - token.amount / 2);
     });
 
     let result = ctx.fund_intent(
@@ -323,30 +332,33 @@ fn fund_intent_with_existing_vault_funds_success() {
         route_hash,
         true,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         true,
     ))));
     assert_eq!(ctx.balance(&vault_pda), intent.reward.native_amount);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), token.amount);
-        assert_eq!(ctx.token_balance_ata(&mint, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount
+        );
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
     });
 }
 
@@ -355,30 +367,29 @@ fn fund_intent_already_funded_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let fund_amount_native = intent.reward.native_amount;
 
     ctx.airdrop(&vault_pda, fund_amount_native).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        ctx.airdrop_token_ata(&mint, &vault_pda, token.amount);
+        ctx.airdrop_token_ata(&token.token, &vault_pda, token.amount);
     });
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
     assert_eq!(ctx.balance(&funder), 0);
     assert_eq!(ctx.balance(&vault_pda), fund_amount_native);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), token.amount);
-        assert_eq!(ctx.token_balance_ata(&mint, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount
+        );
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
     });
 }
 
@@ -387,16 +398,14 @@ fn fund_intent_insufficient_funds_partial_allowed_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let partial_native_amount = intent.reward.native_amount / 2;
 
     ctx.airdrop(&funder, partial_native_amount).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        ctx.airdrop_token_ata(&mint, &funder, token.amount / 2);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount / 2);
     });
 
     let result = ctx.fund_intent(
@@ -405,31 +414,34 @@ fn fund_intent_insufficient_funds_partial_allowed_success() {
         route_hash,
         true,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
-        intent_hash(intent.route_chain, route_hash, &intent.reward),
+        intent_hash(intent.destination_chain, route_hash, &intent.reward),
         ctx.funder.pubkey(),
         false,
     ))));
     assert_eq!(ctx.balance(&funder), 0);
     assert_eq!(ctx.balance(&vault_pda), partial_native_amount);
     intent.reward.tokens.iter().for_each(|token| {
-        let mint = Pubkey::new_from_array(token.token);
-
-        assert_eq!(ctx.token_balance_ata(&mint, &funder), 0);
-        assert_eq!(ctx.token_balance_ata(&mint, &vault_pda), token.amount / 2);
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount / 2
+        );
     });
 }
 
@@ -452,7 +464,7 @@ fn fund_intent_insufficient_native_funds_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
 
     let insufficient_amount = intent.reward.native_amount / 2;
@@ -467,7 +479,7 @@ fn fund_intent_insufficient_token_funds_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let fund_amount_native = intent.reward.native_amount;
@@ -475,11 +487,7 @@ fn fund_intent_insufficient_token_funds_fails() {
     ctx.airdrop(&funder, fund_amount_native).unwrap();
     intent.reward.tokens.iter().for_each(|token| {
         let insufficient_token_amount = token.amount / 2;
-        ctx.airdrop_token_ata(
-            &Pubkey::new_from_array(token.token),
-            &funder,
-            insufficient_token_amount,
-        );
+        ctx.airdrop_token_ata(&token.token, &funder, insufficient_token_amount);
     });
 
     let result = ctx.fund_intent(
@@ -488,16 +496,18 @@ fn fund_intent_insufficient_token_funds_fails() {
         route_hash,
         false,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
-            let vault_ata =
-                get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
@@ -509,12 +519,12 @@ fn fund_intent_invalid_vault_ata_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, token.amount);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     let result = ctx.fund_intent(
@@ -523,15 +533,14 @@ fn fund_intent_invalid_vault_ata_fails() {
         route_hash,
         true,
         intent.reward.tokens.iter().flat_map(|token| {
-            let mint = Pubkey::new_from_array(token.token);
             let funder_token =
-                get_associated_token_address_with_program_id(&funder, &mint, token_program);
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
             let wrong_vault_ata = Pubkey::new_unique();
 
             vec![
                 AccountMeta::new(funder_token, false),
                 AccountMeta::new(wrong_vault_ata, false),
-                AccountMeta::new_readonly(mint, false),
+                AccountMeta::new_readonly(token.token, false),
             ]
         }),
     );
@@ -543,7 +552,7 @@ fn fund_intent_invalid_mint_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
     let wrong_mint = Pubkey::new_unique();
@@ -574,12 +583,12 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
     let funder = ctx.funder.pubkey();
     let token_program = &ctx.token_program.clone();
 
     intent.reward.tokens.iter().for_each(|token| {
-        ctx.airdrop_token_ata(&Pubkey::new_from_array(token.token), &funder, token.amount);
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     let result = ctx.fund_intent(
@@ -592,16 +601,21 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
             .tokens
             .iter()
             .flat_map(|token| {
-                let mint = Pubkey::new_from_array(token.token);
-                let funder_token =
-                    get_associated_token_address_with_program_id(&funder, &mint, token_program);
-                let vault_ata =
-                    get_associated_token_address_with_program_id(&vault_pda, &mint, token_program);
+                let funder_token = get_associated_token_address_with_program_id(
+                    &funder,
+                    &token.token,
+                    token_program,
+                );
+                let vault_ata = get_associated_token_address_with_program_id(
+                    &vault_pda,
+                    &token.token,
+                    token_program,
+                );
 
                 vec![
                     AccountMeta::new(funder_token, false),
                     AccountMeta::new(vault_ata, false),
-                    AccountMeta::new_readonly(mint, false),
+                    AccountMeta::new_readonly(token.token, false),
                 ]
             })
             .chain(iter::once(AccountMeta::new(Pubkey::new_unique(), false))),
@@ -614,20 +628,20 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
 #[test]
 fn fund_intent_token_amount_overflow_fails() {
     let mut ctx = common::Context::default();
-    let token_mint = Pubkey::new_unique();
+    let mint = Pubkey::new_unique();
     let mut intent = ctx.rand_intent();
     intent.reward.tokens = vec![
         TokenAmount {
-            token: *token_mint.as_array(),
+            token: mint,
             amount: u64::MAX - 1000,
         },
         TokenAmount {
-            token: *token_mint.as_array(),
+            token: mint,
             amount: 2000,
         },
     ];
     let route_hash = random();
-    let vault_pda = state::Vault::pda(intent.route_chain, route_hash, &intent.reward).0;
+    let vault_pda = state::Vault::pda(intent.destination_chain, route_hash, &intent.reward).0;
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_err_and(common::is_portal_error(PortalError::RewardAmountOverflow)));
