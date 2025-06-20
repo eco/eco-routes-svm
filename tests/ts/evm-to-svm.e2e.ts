@@ -82,7 +82,9 @@ let route!: Route;
 let reward!: Reward;
 
 const salt = (() => {
-  const bytes = anchorUtils.bytes.utf8.encode("evm-svm-e2e".padEnd(32, "\0"));
+  const bytes = anchorUtils.bytes.utf8.encode(
+    "evm-svm-e2etest1".padEnd(32, "\0")
+  );
   return bytes.slice(0, 32);
 })();
 const saltHex = "0x" + Buffer.from(salt).toString("hex");

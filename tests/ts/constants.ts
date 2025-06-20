@@ -59,10 +59,10 @@ export const DISPATCHED_MSG_PDA_HEADER_LEN: number = 52;
 
 // EVM Optimism Addresses
 export const INTENT_SOURCE_ADDRESS =
-  "0xc17ce9da325a92bd2d4d9ae7e215755a487bb92e".toLowerCase();
+  "0x916BC960e3c1F9A06f25e970692b68dD7C0D3beE".toLowerCase();
 export const INBOX_ADDRESS =
-  "0xab241df93ac10e80b44a6a34e002d25354d12c42".toLowerCase();
+  "0xF5e916cF82a59Bc55013F6ADF2D65dba4bD886eE".toLowerCase();
 export const HYPER_PROVER_ADDRESS =
-  "0x0d1975200a9ff7af230a2460be1467ef1a82a610".toLowerCase();
+  "0x641e9F48514516527AF84E5388DC3A8F656A9239".toLowerCase();
 export const USDC_ADDRESS_MAINNET =
   "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85".toLowerCase();

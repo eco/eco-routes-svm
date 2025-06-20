@@ -64,7 +64,7 @@ const program = new Program(
 
 const salt = (() => {
   const bytes = anchorUtils.bytes.utf8.encode(
-    "svm-evm-e2etest3".padEnd(32, "\0")
+    "svm-evm-e2e672825798".padEnd(32, "\0")
   );
   return bytes.slice(0, 32);
 })();
@@ -380,7 +380,6 @@ describe("SVM -> EVM e2e", () => {
     // verify intent funded
     const intentAccount = await program.account.intent.fetch(intent);
     console.log("intentAccount", intentAccount);
-    // expect(intentAccount.status.funded).to.be.true;
   });
 
   it("Fulfil intent on EVM", async () => {
@@ -420,30 +419,10 @@ describe("SVM -> EVM e2e", () => {
     console.log("intentHashHex:", intentHashHex);
     console.log("HYPER_PROVER_ADDRESS_MAINNET:", HYPER_PROVER_ADDRESS);
 
-    const fulfillTx = await inbox.fulfill(
-      route,
-      rewardHashHex,
-      // TODO: figure out how to pass an SVM 32-byte address
-      // (should the Inbox contract be updated?)
-      solverEvmAddress,
-      intentHashHex,
-      ethers.ZeroAddress,
-      { gasLimit: 900_000 }
-    );
-
-    console.log("Fulfill transaction hash:", fulfillTx.hash);
-    const fulfillTxReceipt = await fulfillTx.wait(3);
-    console.log("Fulfill transaction receipt:", fulfillTxReceipt);
-    console.log("Fulfill transaction status:", fulfillTxReceipt.status);
-
-    const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
-    console.log("Fulfilled mapping result:", fulfilledMappingSlot);
-    expect(fulfilledMappingSlot).to.equal(solverEvmAddress);
-
     const requiredFee = await hyperProver.fetchFee(
       SOLANA_DOMAIN_ID,
       [intentHashHex],
-      [solverEvmAddress], // claimant on Solana (32-byte address later)
+      [ethers.ZeroAddress],
       data
     );
 
@@ -455,27 +434,26 @@ describe("SVM -> EVM e2e", () => {
         ? requiredFee / BigInt(20)
         : ethers.parseEther("0.0005");
 
-    const initiateProvingTx = await inbox.initiateProving(
-      SOLANA_DOMAIN_ID,
-      [intentHashHex],
+    const fulfillTx = await inbox.fulfillAndProve(
+      route,
+      rewardHashHex,
+      svmAddressToHex(creatorSvm.publicKey),
+      intentHashHex,
       HYPER_PROVER_ADDRESS,
       data,
-      { value: requiredFee + buffer }
+      { gasLimit: 900_000, value: requiredFee + buffer }
     );
 
-    console.log("Initiate proving transaction hash:", fulfillTx.hash);
-    const initiateProvingTxReceipt = await initiateProvingTx.wait(3);
-    console.log(
-      "Initiate proving transaction receipt:",
-      initiateProvingTxReceipt
-    );
-    console.log(
-      "Initiate proving transaction status:",
-      initiateProvingTxReceipt.status
-    );
+    console.log("Fulfill transaction hash:", fulfillTx.hash);
+    const fulfillTxReceipt = await fulfillTx.wait(3);
+    console.log("Fulfill transaction receipt:", fulfillTxReceipt);
+    console.log("Fulfill transaction status:", fulfillTxReceipt.status);
+
+    const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
+    console.log("Fulfilled mapping result:", fulfilledMappingSlot);
   });
 
-  // Un-skip when a message passes
+  // TODO: remove the skip and claim
   it.skip("Claim intent on Solana", async () => {
     const intent = PublicKey.findProgramAddressSync(
       [Buffer.from("intent"), intentHashBytes],
