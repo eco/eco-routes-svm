@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use anchor_lang::error::ERROR_CODE_OFFSET;
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{Event, InstructionData, ToAccountMetas};
+use anchor_lang::{AnchorSerialize, Event, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -10,12 +10,14 @@ use anchor_spl::token_2022::{self, spl_token_2022};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use derive_more::{Deref, DerefMut};
+use eco_svm_std::{Bytes32, Proof};
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
 use portal::instructions::PortalError;
-use portal::types::{Bytes32, Call, Intent, Reward, Route, TokenAmount};
+use portal::types::{Call, Intent, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::{Instruction, InstructionError};
 use solana_sdk::message::Message;
 use solana_sdk::program_pack::Pack;
@@ -91,10 +93,10 @@ impl Context {
         });
 
         Intent {
-            destination_chain: random(),
+            destination_chain: random::<[u8; 32]>().into(),
             route: Route {
-                salt: random(),
-                destination_chain_portal: random(),
+                salt: random::<[u8; 32]>().into(),
+                destination_chain_portal: random::<[u8; 32]>().into(),
                 tokens: (0..3)
                     .map(|_| TokenAmount {
                         token: Pubkey::new_unique(),
@@ -103,15 +105,15 @@ impl Context {
                     .collect(),
                 calls: (0..3)
                     .map(|_| Call {
-                        target: random(),
-                        data: random::<Bytes32>().to_vec(),
+                        target: random::<[u8; 32]>().into(),
+                        data: random::<[u8; 32]>().to_vec(),
                     })
                     .collect(),
             },
             reward: Reward {
                 deadline: self.now() + 3600,
                 creator: self.creator.pubkey(),
-                prover: random(),
+                prover: random::<[u8; 32]>().into(),
                 native_amount: sol_amount(1.0),
                 tokens: reward_tokens,
             },
@@ -279,8 +281,58 @@ impl Context {
             accounts,
             data: instruction.data(),
         };
+
         let transaction = Transaction::new(
             &[&self.payer, &self.funder],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn refund_intent(
+        &mut self,
+        intent: &Intent,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        creator: Pubkey,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+    ) -> TransactionResult {
+        let args = portal::instructions::RefundArgs {
+            destination_chain: intent.destination_chain,
+            route_hash,
+            reward: intent.reward.clone(),
+        };
+        let instruction = portal::instruction::Refund { args };
+        let accounts: Vec<_> = portal::accounts::Refund {
+            payer: self.payer.pubkey(),
+            creator,
+            vault,
+            proof,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_transfer_accounts)
+        .collect();
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: instruction.data(),
+        };
+
+        let transaction = Transaction::new(
+            &[&self.payer],
             Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
         );
@@ -322,6 +374,33 @@ impl Context {
         self.svm
             .get_account(pubkey)
             .and_then(|account| T::try_deserialize(&mut account.data.as_slice()).ok())
+    }
+
+    pub fn set_proof(&mut self, proof_pda: Pubkey, proof: Proof) {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0u8; 8]);
+        proof.serialize(&mut data).unwrap();
+
+        let account = solana_sdk::account::Account {
+            lamports: self.get_sysvar::<Rent>().minimum_balance(data.len()),
+            data,
+            owner: portal::ID,
+            executable: false,
+            rent_epoch: 0,
+        };
+
+        self.set_account(proof_pda, account).unwrap();
+    }
+
+    pub fn expire_intent(&mut self, intent: &Intent) {
+        self.warp_to_timestamp(intent.reward.deadline + 1);
+    }
+
+    fn warp_to_timestamp(&mut self, unix_timestamp: i64) {
+        let mut clock = self.get_sysvar::<Clock>();
+        clock.unix_timestamp = unix_timestamp;
+
+        self.set_sysvar(&clock);
     }
 
     fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
