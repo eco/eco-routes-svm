@@ -73,19 +73,22 @@ impl<'info> TokenTransferAccounts<'info> {
         authority: &AccountInfo<'info>,
         amount: u64,
     ) -> Result<()> {
-        transfer_checked(
-            CpiContext::new(
-                token_program.to_account_info(),
-                anchor_spl::token_interface::TransferChecked {
-                    from: self.from.to_account_info(),
-                    to: self.to.to_account_info(),
-                    mint: self.mint.to_account_info(),
-                    authority: authority.to_account_info(),
-                },
+        match amount {
+            0 => Ok(()),
+            amount => transfer_checked(
+                CpiContext::new(
+                    token_program.to_account_info(),
+                    anchor_spl::token_interface::TransferChecked {
+                        from: self.from.to_account_info(),
+                        to: self.to.to_account_info(),
+                        mint: self.mint.to_account_info(),
+                        authority: authority.to_account_info(),
+                    },
+                ),
+                amount,
+                self.mint_data()?.decimals,
             ),
-            amount,
-            self.mint_data()?.decimals,
-        )
+        }
     }
 
     pub fn transfer_with_signer(
@@ -95,20 +98,23 @@ impl<'info> TokenTransferAccounts<'info> {
         signer_seeds: &[&[&[u8]]],
         amount: u64,
     ) -> Result<()> {
-        transfer_checked(
-            CpiContext::new_with_signer(
-                token_program.to_account_info(),
-                anchor_spl::token_interface::TransferChecked {
-                    from: self.from.to_account_info(),
-                    to: self.to.to_account_info(),
-                    mint: self.mint.to_account_info(),
-                    authority: authority.to_account_info(),
-                },
-                signer_seeds,
+        match amount {
+            0 => Ok(()),
+            amount => transfer_checked(
+                CpiContext::new_with_signer(
+                    token_program.to_account_info(),
+                    anchor_spl::token_interface::TransferChecked {
+                        from: self.from.to_account_info(),
+                        to: self.to.to_account_info(),
+                        mint: self.mint.to_account_info(),
+                        authority: authority.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                amount,
+                self.mint_data()?.decimals,
             ),
-            amount,
-            self.mint_data()?.decimals,
-        )
+        }
     }
 
     pub fn token_program(
@@ -144,13 +150,17 @@ impl<'info> TokenTransferAccounts<'info> {
     }
 }
 
-pub fn intent_hash(destination_chain: &Bytes32, route_hash: &Bytes32, reward: &Reward) -> Bytes32 {
+pub fn intent_hash(
+    destination_chain: &Bytes32,
+    route_hash: &Bytes32,
+    reward_hash: &Bytes32,
+) -> Bytes32 {
     let mut hasher = Keccak::v256();
     let mut hash = [0u8; 32];
 
     hasher.update(destination_chain.as_ref());
     hasher.update(route_hash.as_ref());
-    hasher.update(reward.hash().as_ref());
+    hasher.update(reward_hash.as_ref());
 
     hasher.finalize(&mut hash);
 
@@ -182,7 +192,7 @@ pub struct Reward {
 }
 
 impl Reward {
-    fn hash(&self) -> Bytes32 {
+    pub fn hash(&self) -> Bytes32 {
         let encoded = self.try_to_vec().expect("Failed to serialize Reward");
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
@@ -244,8 +254,8 @@ mod tests {
             ],
         };
 
-        let hash_1 = intent_hash(&destination_chain, &route_hash, &reward);
-        let hash_2 = intent_hash(&destination_chain, &route_hash, &reward);
+        let hash_1 = intent_hash(&destination_chain, &route_hash, &reward.hash());
+        let hash_2 = intent_hash(&destination_chain, &route_hash, &reward.hash());
 
         assert_eq!(hash_1, hash_2);
         goldie::assert_json!(hash_1.as_ref());

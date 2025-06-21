@@ -9,7 +9,7 @@ use eco_svm_std::Bytes32;
 
 use crate::events::IntentFunded;
 use crate::instructions::PortalError;
-use crate::state;
+use crate::state::vault_pda;
 use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -27,7 +27,7 @@ pub struct Fund<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
     /// CHECK: address is validated
-    #[account(mut, address = state::vault_pda(&types::intent_hash(&args.destination_chain, &args.route_hash, &args.reward)).0 @ PortalError::InvalidVault)]
+    #[account(mut)]
     pub vault: UncheckedAccount<'info>,
     pub token_program: Program<'info, token::Token>,
     pub token_2022_program: Program<'info, token_2022::Token2022>,
@@ -45,6 +45,12 @@ pub fn fund_intent<'info>(
         reward,
         allow_partial,
     } = args;
+    let intent_hash = types::intent_hash(&destination_chain, &route_hash, &reward.hash());
+
+    require!(
+        ctx.accounts.vault.key() == vault_pda(&intent_hash).0,
+        PortalError::InvalidVault
+    );
 
     let native_funded = fund_vault_native(&ctx, &reward)?;
 
@@ -63,7 +69,7 @@ pub fn fund_intent<'info>(
         }
         (_, funded_count) => {
             emit!(IntentFunded::new(
-                types::intent_hash(&destination_chain, &route_hash, &reward),
+                intent_hash,
                 ctx.accounts.funder.key(),
                 funded_count == reward_token_amounts.len() + 1,
             ));

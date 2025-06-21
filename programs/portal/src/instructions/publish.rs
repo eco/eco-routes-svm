@@ -22,7 +22,7 @@ pub fn publish_intent(_: Context<Publish>, args: PublishArgs) -> Result<()> {
         reward,
     } = intent;
 
-    let intent_hash = intent_hash(&destination_chain, &route_hash, &reward);
+    let intent_hash = intent_hash(&destination_chain, &route_hash, &reward.hash());
     emit!(IntentPublished::new(intent_hash, route, reward));
 
     Ok(())
