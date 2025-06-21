@@ -5,12 +5,12 @@ use anchor_lang::system_program;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::TokenAccount;
 use anchor_spl::{associated_token, token, token_2022};
-use itertools::Itertools;
+use eco_svm_std::Bytes32;
 
 use crate::events::IntentFunded;
 use crate::instructions::PortalError;
 use crate::state;
-use crate::types::{self, Bytes32, Reward, TokenTransferAccounts};
+use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FundArgs {
@@ -27,7 +27,7 @@ pub struct Fund<'info> {
     #[account(mut)]
     pub funder: Signer<'info>,
     /// CHECK: address is validated
-    #[account(mut, address = state::Vault::pda(args.destination_chain, args.route_hash, &args.reward).0 @ PortalError::InvalidVault)]
+    #[account(mut, address = state::vault_pda(&types::intent_hash(&args.destination_chain, &args.route_hash, &args.reward)).0 @ PortalError::InvalidVault)]
     pub vault: UncheckedAccount<'info>,
     pub token_program: Program<'info, token::Token>,
     pub token_2022_program: Program<'info, token_2022::Token2022>,
@@ -51,7 +51,7 @@ pub fn fund_intent<'info>(
     let reward_token_amounts = reward.token_amounts()?;
     let token_funded_count = fund_vault_tokens(
         &ctx,
-        mint_token_vault_ata_accounts(&ctx)?,
+        ctx.remaining_accounts.try_into()?,
         &reward_token_amounts,
     )?;
 
@@ -63,7 +63,7 @@ pub fn fund_intent<'info>(
         }
         (_, funded_count) => {
             emit!(IntentFunded::new(
-                types::intent_hash(destination_chain, route_hash, &reward),
+                types::intent_hash(&destination_chain, &route_hash, &reward),
                 ctx.accounts.funder.key(),
                 funded_count == reward_token_amounts.len() + 1,
             ));
@@ -100,10 +100,11 @@ fn fund_vault_native<'info>(
 
 fn fund_vault_tokens<'info>(
     ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
-    fund_token_accounts: Vec<TokenTransferAccounts<'info>>,
+    fund_token_accounts: VecTokenTransferAccounts<'info>,
     reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<usize> {
     let funded_token = fund_token_accounts
+        .into_inner()
         .into_iter()
         .map(|fund_token_accounts| fund_vault_token(ctx, fund_token_accounts, reward_token_amounts))
         .filter_map(|result| match result {
@@ -125,12 +126,14 @@ fn fund_vault_token<'info>(
     let vault_ata = get_associated_token_address_with_program_id(
         ctx.accounts.vault.key,
         &mint_key,
-        accounts.program_id(),
+        accounts.token_program_id(),
     );
-
     require!(vault_ata == accounts.to.key(), PortalError::InvalidVaultAta);
 
-    let token_program = token_program_account_info(ctx, accounts.program_id())?;
+    let token_program = accounts.token_program(
+        &ctx.accounts.token_program,
+        &ctx.accounts.token_2022_program,
+    )?;
     let reward_token_amount = reward_token_amounts
         .get(&mint_key)
         .ok_or(PortalError::InvalidMint)?;
@@ -175,28 +178,4 @@ fn ensure_initialized<'info>(
     }
 
     TokenAccount::try_deserialize(&mut &to.try_borrow_data()?[..])
-}
-
-fn token_program_account_info<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
-    token_program_id: &Pubkey,
-) -> Result<AccountInfo<'info>> {
-    if *token_program_id == token::ID {
-        Ok(ctx.accounts.token_program.to_account_info())
-    } else if *token_program_id == token_2022::ID {
-        Ok(ctx.accounts.token_2022_program.to_account_info())
-    } else {
-        Err(PortalError::InvalidTokenProgram.into())
-    }
-}
-
-fn mint_token_vault_ata_accounts<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
-) -> Result<Vec<TokenTransferAccounts<'info>>> {
-    ctx.remaining_accounts
-        .iter()
-        .chunks(3)
-        .into_iter()
-        .map(|chunk| chunk.collect::<Vec<_>>().try_into())
-        .collect()
 }

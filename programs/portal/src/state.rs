@@ -1,40 +1,25 @@
 use anchor_lang::prelude::*;
+use eco_svm_std::Bytes32;
 
-use crate::types::{self, Bytes32, Reward};
+pub const VAULT_SEED: &[u8] = b"vault";
 
-const VAULT_SEED: &[u8] = b"vault";
-
-#[account]
-#[derive(InitSpace)]
-pub struct Vault {
-    pub bump: u8,
-}
-
-impl Vault {
-    pub fn pda(destination_chain: Bytes32, route_hash: Bytes32, reward: &Reward) -> (Pubkey, u8) {
-        Pubkey::find_program_address(
-            &[
-                VAULT_SEED,
-                types::intent_hash(destination_chain, route_hash, reward).as_ref(),
-            ],
-            &crate::ID,
-        )
-    }
+pub fn vault_pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[VAULT_SEED, intent_hash.as_ref()], &crate::ID)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::TokenAmount;
+    use crate::types::{self, Reward, TokenAmount};
 
     #[test]
-    fn vault_pda() {
-        let destination_chain = [5u8; 32];
-        let route_hash = [6u8; 32];
+    fn vault_pda_deterministic() {
+        let destination_chain = [5u8; 32].into();
+        let route_hash = [6u8; 32].into();
         let reward = Reward {
             deadline: 1640995200,
             creator: Pubkey::new_from_array([1u8; 32]),
-            prover: [2u8; 32],
+            prover: Pubkey::new_from_array([2u8; 32]),
             native_amount: 1_000_000_000,
             tokens: vec![
                 TokenAmount {
@@ -48,6 +33,10 @@ mod tests {
             ],
         };
 
-        goldie::assert_json!(Vault::pda(destination_chain, route_hash, &reward));
+        goldie::assert_json!(vault_pda(&types::intent_hash(
+            &destination_chain,
+            &route_hash,
+            &reward
+        )));
     }
 }

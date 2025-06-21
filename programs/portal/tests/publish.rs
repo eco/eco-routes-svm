@@ -9,14 +9,14 @@ pub mod common;
 fn publish_intent_success() {
     let mut ctx = common::Context::default();
     let intent = ctx.rand_intent();
-    let route_hash = random();
+    let route_hash = random::<[u8; 32]>().into();
     let creator_balance = ctx.balance(&ctx.creator.pubkey());
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
 
     let result = ctx.publish_intent(&intent, route_hash);
     assert!(
         result.is_ok_and(common::contains_event(IntentPublished::new(
-            intent_hash(intent.destination_chain, route_hash, &intent.reward),
+            intent_hash(&intent.destination_chain, &route_hash, &intent.reward),
             intent.route,
             intent.reward,
         )))
