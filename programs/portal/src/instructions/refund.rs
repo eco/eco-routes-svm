@@ -64,13 +64,14 @@ pub fn refund_intent<'info>(
         PortalError::InvalidWithdrawnMarker
     );
     // require intent not fulfilled or already withdrawn
+    // TODO: allow early recover if the token specified is not a reward token (before anything)
     require!(
         !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination_chain)?
             || !ctx.accounts.withdrawn_marker.data_is_empty(),
         PortalError::IntentFulfilledAndNotWithdrawn
     );
     require!(
-        reward.deadline <= Clock::get()?.unix_timestamp,
+        reward.deadline <= Clock::get()?.unix_timestamp, // TODO: allow early refund if already withdrawn
         PortalError::RewardNotExpired
     );
 
