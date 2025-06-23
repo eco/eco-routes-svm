@@ -14,6 +14,7 @@ use eco_svm_std::{Bytes32, Proof};
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
 use portal::instructions::PortalError;
+use portal::state::WithdrawnMarker;
 use portal::types::{Call, Intent, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
@@ -82,9 +83,9 @@ impl Context {
 
     pub fn rand_intent(&mut self) -> Intent {
         let reward_tokens: Vec<_> = (0..2)
-            .map(|_| TokenAmount {
+            .map(|i| TokenAmount {
                 token: Pubkey::new_unique(),
-                amount: random(),
+                amount: i * 1_000_000,
             })
             .collect();
 
@@ -297,12 +298,14 @@ impl Context {
         self.send_transaction(transaction)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
         intent: &Intent,
         vault: Pubkey,
         route_hash: Bytes32,
         proof: Pubkey,
+        withdrawn_marker: Pubkey,
         creator: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
@@ -317,6 +320,7 @@ impl Context {
             creator,
             vault,
             proof,
+            withdrawn_marker,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,
             system_program: anchor_lang::system_program::ID,
@@ -333,7 +337,13 @@ impl Context {
 
         let transaction = Transaction::new(
             &[&self.payer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
             self.svm.latest_blockhash(),
         );
 
@@ -390,6 +400,73 @@ impl Context {
         };
 
         self.set_account(proof_pda, account).unwrap();
+    }
+
+    pub fn set_withdrawn_marker(&mut self, withdrawn_marker_pda: Pubkey) {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0u8; 8]);
+
+        let account = solana_sdk::account::Account {
+            lamports: WithdrawnMarker::min_balance(self.get_sysvar()),
+            data,
+            owner: portal::ID,
+            executable: false,
+            rent_epoch: 0,
+        };
+
+        self.set_account(withdrawn_marker_pda, account).unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn withdraw_intent(
+        &mut self,
+        intent: &Intent,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        claimant: Pubkey,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+    ) -> TransactionResult {
+        let args = portal::instructions::WithdrawArgs {
+            destination_chain: intent.destination_chain,
+            route_hash,
+            reward: intent.reward.clone(),
+        };
+        let instruction = portal::instruction::Withdraw { args };
+        let accounts: Vec<_> = portal::accounts::Withdraw {
+            payer: self.payer.pubkey(),
+            claimant,
+            vault,
+            proof,
+            withdrawn_marker,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_transfer_accounts)
+        .collect();
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: instruction.data(),
+        };
+
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
     }
 
     pub fn expire_intent(&mut self, intent: &Intent) {

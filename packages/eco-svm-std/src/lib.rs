@@ -31,6 +31,13 @@ impl Proof {
     pub fn pda(intent_hash: &Bytes32, prover: &Pubkey) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[PROOF_SEED, intent_hash.as_ref()], prover)
     }
+
+    pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {
+        match account.data_is_empty() {
+            true => Ok(None),
+            false => Ok(Some(Proof::deserialize(&mut &account.data.borrow()[8..])?)),
+        }
+    }
 }
 
 #[cfg(test)]

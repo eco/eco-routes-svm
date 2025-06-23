@@ -27,4 +27,11 @@ pub mod portal {
     ) -> Result<()> {
         refund_intent(ctx, args)
     }
+
+    pub fn withdraw<'info>(
+        ctx: Context<'_, '_, '_, 'info, Withdraw<'info>>,
+        args: WithdrawArgs,
+    ) -> Result<()> {
+        withdraw_intent(ctx, args)
+    }
 }

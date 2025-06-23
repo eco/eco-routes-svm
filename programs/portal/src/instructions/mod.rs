@@ -3,10 +3,12 @@ use anchor_lang::prelude::*;
 mod fund;
 mod publish;
 mod refund;
+mod withdraw;
 
 pub use fund::*;
 pub use publish::*;
 pub use refund::*;
+pub use withdraw::*;
 
 #[error_code]
 pub enum PortalError {
@@ -20,6 +22,10 @@ pub enum PortalError {
     RewardAmountOverflow,
     RewardNotExpired,
     InvalidProof,
-    IntentAlreadyFulfilled,
+    IntentFulfilledAndNotWithdrawn,
+    IntentAlreadyWithdrawn,
+    IntentNotFulfilled,
     InvalidCreatorToken,
+    InvalidClaimantToken,
+    InvalidWithdrawnMarker,
 }
