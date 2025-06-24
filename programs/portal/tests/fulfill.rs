@@ -609,3 +609,32 @@ fn fulfill_intent_already_fulfilled_fail() {
         portal::instructions::PortalError::IntentAlreadyFulfilled
     )));
 }
+
+#[test]
+fn fulfill_intent_invalid_destination_chain_portal_fail() {
+    let mut ctx = common::Context::default();
+    let mut route = ctx.rand_intent().route;
+    route.tokens.clear();
+    route.calls.clear();
+    route.destination_chain_portal = rand::random::<[u8; 32]>().into();
+    let reward_hash = rand::random::<[u8; 32]>().into();
+    let claimant = Pubkey::new_unique();
+    let executor = state::executor_pda().0;
+
+    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
+
+    let result = ctx.fulfill_intent(
+        &route,
+        reward_hash,
+        claimant,
+        executor,
+        fulfill_marker,
+        vec![],
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_portal_error(
+        portal::instructions::PortalError::InvalidDestinationChainPortal
+    )));
+}

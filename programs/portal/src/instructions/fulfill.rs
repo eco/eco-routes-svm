@@ -49,6 +49,12 @@ pub fn fulfill_intent<'info>(
         reward_hash,
         claimant,
     } = args;
+
+    require!(
+        route.destination_chain_portal == crate::ID,
+        PortalError::InvalidDestinationChainPortal
+    );
+
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
     let route = execute_route_calls(ctx.accounts.executor.key, route, call_accounts)?;

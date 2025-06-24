@@ -36,4 +36,5 @@ pub enum PortalError {
     InvalidCalldata,
     InvalidFulfillTarget,
     InvalidFulfillMarker,
+    InvalidDestinationChainPortal,
 }

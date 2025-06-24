@@ -36,6 +36,12 @@ impl From<Bytes32> for [u8; 32] {
     }
 }
 
+impl PartialEq<Pubkey> for Bytes32 {
+    fn eq(&self, pubkey: &Pubkey) -> bool {
+        self.0 == pubkey.to_bytes()
+    }
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, new)]
 pub struct Proof {
     pub destination_chain: Bytes32,
@@ -57,9 +63,9 @@ impl Proof {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use anchor_lang::system_program;
+
+    use super::*;
 
     #[test]
     fn proof_pda_deterministic() {

@@ -110,7 +110,7 @@ impl Context {
             destination_chain: random::<[u8; 32]>().into(),
             route: Route {
                 salt: random::<[u8; 32]>().into(),
-                destination_chain_portal: random::<[u8; 32]>().into(),
+                destination_chain_portal: portal::ID.to_bytes().into(),
                 tokens: route_tokens,
                 calls: (0..3)
                     .map(|_| Call {
