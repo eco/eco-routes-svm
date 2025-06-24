@@ -5,6 +5,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::{token, token_2022};
+use eco_svm_std::account::AccountExt;
 use eco_svm_std::{Bytes32, Proof};
 
 use crate::events::IntentWithdrawn;
@@ -61,32 +62,17 @@ pub fn withdraw_intent<'info>(
         ctx.accounts.proof.key() == Proof::pda(&intent_hash, &reward.prover).0,
         PortalError::InvalidProof
     );
-    require!(
-        ctx.accounts.withdrawn_marker.key() == WithdrawnMarker::pda(&intent_hash).0,
-        PortalError::InvalidWithdrawnMarker
-    );
     validate_proof(
-        &ctx.accounts.proof.to_account_info(),
-        &ctx.accounts.claimant.to_account_info(),
+        &ctx.accounts.proof,
+        &ctx.accounts.claimant,
         destination_chain,
     )?;
-    require!(
-        ctx.accounts.withdrawn_marker.data_is_empty(),
-        PortalError::IntentAlreadyWithdrawn
-    );
 
     withdraw_native(&ctx, &reward, &signer_seeds)?;
     withdraw_tokens(&ctx, &reward, &signer_seeds)?;
 
     // once initialized, withdraw is never allowed again
-    let (_, bump) = WithdrawnMarker::pda(&intent_hash);
-    let signer_seeds = [CLAIMED_MARKER_SEED, intent_hash.as_ref(), &[bump]];
-    WithdrawnMarker::init(
-        &ctx.accounts.withdrawn_marker.to_account_info(),
-        &ctx.accounts.payer,
-        &ctx.accounts.system_program,
-        &signer_seeds,
-    )?;
+    mark_withdrawn(&ctx, &intent_hash)?;
 
     emit!(IntentWithdrawn::new(
         intent_hash,
@@ -171,10 +157,7 @@ fn withdraw_token<'info>(
         accounts.token_program_id(),
     );
 
-    require!(
-        accounts.from.key() == vault_ata,
-        PortalError::InvalidVaultAta
-    );
+    require!(accounts.from.key() == vault_ata, PortalError::InvalidAta);
     require!(
         accounts.to_data()?.owner == ctx.accounts.claimant.key(),
         PortalError::InvalidClaimantToken
@@ -191,4 +174,25 @@ fn withdraw_token<'info>(
     accounts.transfer_with_signer(&token_program, &ctx.accounts.vault, &[signer_seeds], amount)?;
 
     Ok(())
+}
+
+fn mark_withdrawn<'info>(
+    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    intent_hash: &Bytes32,
+) -> Result<()> {
+    let (withdrawn_marker_pda, bump) = WithdrawnMarker::pda(intent_hash);
+    require!(
+        ctx.accounts.withdrawn_marker.key() == withdrawn_marker_pda,
+        PortalError::InvalidWithdrawnMarker
+    );
+    let signer_seeds = [CLAIMED_MARKER_SEED, intent_hash.as_ref(), &[bump]];
+
+    WithdrawnMarker::default()
+        .init(
+            &ctx.accounts.withdrawn_marker,
+            &ctx.accounts.payer,
+            &ctx.accounts.system_program,
+            &signer_seeds,
+        )
+        .map_err(|_| PortalError::IntentAlreadyWithdrawn.into())
 }

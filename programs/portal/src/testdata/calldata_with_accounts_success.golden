@@ -1,0 +1,31 @@
+Ok(
+    CalldataWithAccounts {
+        calldata: Calldata {
+            data: [
+                1,
+                2,
+                3,
+                4,
+                5,
+            ],
+            account_count: 3,
+        },
+        accounts: [
+            SerializableAccountMeta {
+                pubkey: 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi,
+                is_signer: true,
+                is_writable: false,
+            },
+            SerializableAccountMeta {
+                pubkey: 8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR,
+                is_signer: false,
+                is_writable: true,
+            },
+            SerializableAccountMeta {
+                pubkey: CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8,
+                is_signer: false,
+                is_writable: false,
+            },
+        ],
+    },
+)

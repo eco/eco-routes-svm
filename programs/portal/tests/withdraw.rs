@@ -107,16 +107,6 @@ fn withdraw_intent_native_and_token_success() {
         withdrawn_marker,
         token_accounts,
     );
-    match &result {
-        Ok(metadata) => {
-            println!("Success - Logs: {:?}", metadata.logs);
-            println!(
-                "Looking for event: IntentWithdrawn {{ intent_hash: {:?}, claimant: {:?} }}",
-                intent_hash, claimant
-            );
-        }
-        Err(error) => println!("Error: {:?}", error),
-    }
     assert!(
         result.is_ok_and(common::contains_event(IntentWithdrawn::new(
             intent_hash,
@@ -486,7 +476,7 @@ fn withdraw_intent_invalid_vault_ata_fail() {
         token_accounts,
     );
     assert!(result.is_err_and(common::is_portal_error(
-        portal::instructions::PortalError::InvalidVaultAta
+        portal::instructions::PortalError::InvalidAta
     )));
 }
 

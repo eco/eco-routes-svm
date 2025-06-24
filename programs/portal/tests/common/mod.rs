@@ -28,6 +28,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
+const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../../target/deploy/portal.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
@@ -42,6 +43,7 @@ pub struct Context {
     pub creator: Keypair,
     pub payer: Keypair,
     pub funder: Keypair,
+    pub solver: Keypair,
 }
 
 impl Default for Context {
@@ -53,6 +55,7 @@ impl Default for Context {
         let creator = Keypair::new();
         let payer = Keypair::new();
         let funder = Keypair::new();
+        let solver = Keypair::new();
 
         svm.airdrop(&mint_authority.pubkey(), sol_amount(100.0))
             .unwrap();
@@ -65,6 +68,7 @@ impl Default for Context {
             creator,
             payer,
             funder,
+            solver,
         }
     }
 }
@@ -82,14 +86,23 @@ impl Context {
     }
 
     pub fn rand_intent(&mut self) -> Intent {
+        let route_tokens: Vec<_> = (0..2)
+            .map(|i| TokenAmount {
+                token: Pubkey::new_unique(),
+                amount: (i + 1) * 1_000_000,
+            })
+            .collect();
         let reward_tokens: Vec<_> = (0..2)
             .map(|i| TokenAmount {
                 token: Pubkey::new_unique(),
-                amount: i * 1_000_000,
+                amount: (i + 1) * 1_000_000,
             })
             .collect();
 
         reward_tokens.iter().for_each(|token| {
+            self.set_mint_account(&token.token);
+        });
+        route_tokens.iter().for_each(|token| {
             self.set_mint_account(&token.token);
         });
 
@@ -98,12 +111,7 @@ impl Context {
             route: Route {
                 salt: random::<[u8; 32]>().into(),
                 destination_chain_portal: random::<[u8; 32]>().into(),
-                tokens: (0..3)
-                    .map(|_| TokenAmount {
-                        token: Pubkey::new_unique(),
-                        amount: random(),
-                    })
-                    .collect(),
+                tokens: route_tokens,
                 calls: (0..3)
                     .map(|_| Call {
                         target: random::<[u8; 32]>().into(),
@@ -287,7 +295,7 @@ impl Context {
             &[&self.payer, &self.funder],
             Message::new(
                 &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
                     instruction,
                 ],
                 Some(&self.payer.pubkey()),
@@ -339,7 +347,7 @@ impl Context {
             &[&self.payer],
             Message::new(
                 &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
                     instruction,
                 ],
                 Some(&self.payer.pubkey()),
@@ -458,7 +466,60 @@ impl Context {
             &[&self.payer],
             Message::new(
                 &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(400_000),
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fulfill_intent(
+        &mut self,
+        route: &Route,
+        reward_hash: Bytes32,
+        claimant: Pubkey,
+        executor: Pubkey,
+        fulfill_marker: Pubkey,
+        token_accounts: impl IntoIterator<Item = AccountMeta>,
+        call_accounts: impl IntoIterator<Item = AccountMeta>,
+    ) -> TransactionResult {
+        let args = portal::instructions::FulfillArgs {
+            route: route.clone(),
+            reward_hash,
+            claimant,
+        };
+        let instruction = portal::instruction::Fulfill { args };
+        let accounts: Vec<_> = portal::accounts::Fulfill {
+            payer: self.payer.pubkey(),
+            solver: self.solver.pubkey(),
+            executor,
+            fulfill_marker,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            associated_token_program: anchor_spl::associated_token::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_accounts)
+        .chain(call_accounts)
+        .collect();
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: instruction.data(),
+        };
+
+        let transaction = Transaction::new(
+            &[&self.payer, &self.solver],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
                     instruction,
                 ],
                 Some(&self.payer.pubkey()),

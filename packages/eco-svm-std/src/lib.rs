@@ -2,6 +2,8 @@ use anchor_lang::prelude::*;
 use derive_more::Deref;
 use derive_new::new;
 
+pub mod account;
+
 pub const PROOF_SEED: &[u8] = b"proof";
 
 #[derive(

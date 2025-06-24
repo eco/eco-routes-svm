@@ -1,10 +1,13 @@
 use anchor_lang::prelude::*;
 
+mod fulfill;
 mod fund;
+mod fund_context;
 mod publish;
 mod refund;
 mod withdraw;
 
+pub use fulfill::*;
 pub use fund::*;
 pub use publish::*;
 pub use refund::*;
@@ -14,18 +17,23 @@ pub use withdraw::*;
 pub enum PortalError {
     InvalidCreator,
     InvalidVault,
-    InvalidVaultAta,
+    InvalidAta,
     InvalidMint,
     InvalidTokenProgram,
     InsufficientFunds,
     InvalidTokenTransferAccounts,
-    RewardAmountOverflow,
+    TokenAmountOverflow,
     RewardNotExpired,
     InvalidProof,
     IntentFulfilledAndNotWithdrawn,
     IntentAlreadyWithdrawn,
+    IntentAlreadyFulfilled,
     IntentNotFulfilled,
     InvalidCreatorToken,
     InvalidClaimantToken,
     InvalidWithdrawnMarker,
+    InvalidExecutor,
+    InvalidCalldata,
+    InvalidFulfillTarget,
+    InvalidFulfillMarker,
 }
