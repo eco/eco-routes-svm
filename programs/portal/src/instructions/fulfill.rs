@@ -3,14 +3,14 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::Bytes32;
+use eco_svm_std::{is_prover, Bytes32, CHAIN_ID};
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
 use crate::instructions::PortalError;
 use crate::state::{executor_pda, FulfillMarker, EXECUTOR_SEED, FULFILL_MARKER_SEED};
 use crate::types::{
-    self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts, CHAIN_ID,
+    self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
 
@@ -131,10 +131,7 @@ fn execute_route_call(
     call_accounts: &[AccountInfo],
     signer_seeds: &[&[u8]],
 ) -> Result<()> {
-    require!(
-        !types::is_prover(&program_id),
-        PortalError::InvalidFulfillTarget
-    );
+    require!(!is_prover(&program_id), PortalError::InvalidFulfillTarget);
 
     let instruction = Instruction::new_with_bytes(
         program_id,

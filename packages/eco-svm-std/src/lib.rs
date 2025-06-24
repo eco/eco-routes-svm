@@ -4,7 +4,20 @@ use derive_new::new;
 
 pub mod account;
 
+const PROVER_PREFIX: &str = "Prover";
 pub const PROOF_SEED: &[u8] = b"proof";
+pub const CHAIN_ID: [u8; 32] = {
+    let bytes = 1399811149u32.to_be_bytes();
+
+    [
+        bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]
+};
+
+pub fn is_prover(program_id: &Pubkey) -> bool {
+    program_id.to_string().starts_with(PROVER_PREFIX)
+}
 
 #[derive(
     AnchorSerialize, AnchorDeserialize, InitSpace, Deref, Clone, Copy, Debug, PartialEq, Eq,
@@ -46,11 +59,27 @@ impl Proof {
 mod tests {
     use super::*;
 
+    use anchor_lang::system_program;
+
     #[test]
     fn proof_pda_deterministic() {
         let intent_hash = [42u8; 32].into();
         let prover = Pubkey::new_from_array([123u8; 32]);
 
         goldie::assert_debug!(Proof::pda(&intent_hash, &prover));
+    }
+
+    #[test]
+    fn is_prover_true() {
+        assert!(is_prover(
+            &"Prover1111111111111111111111111111111111111"
+                .parse()
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn is_prover_false() {
+        assert!(!is_prover(&system_program::ID));
     }
 }

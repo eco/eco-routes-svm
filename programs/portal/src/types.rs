@@ -10,20 +10,7 @@ use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::PortalError;
 
-const PROVER_PREFIX: &str = "Prover";
-pub const CHAIN_ID: [u8; 32] = {
-    let bytes = 1399811149u32.to_be_bytes();
-
-    [
-        bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ]
-};
 pub const VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE: usize = 3;
-
-pub fn is_prover(program_id: &Pubkey) -> bool {
-    program_id.to_string().starts_with(PROVER_PREFIX)
-}
 
 pub struct VecTokenTransferAccounts<'info>(Vec<TokenTransferAccounts<'info>>);
 
@@ -356,10 +343,6 @@ pub struct Call {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use anchor_lang::system_program;
-
     use super::*;
 
     #[test]
@@ -791,18 +774,6 @@ mod tests {
         let transfer_accounts = TokenTransferAccounts::try_from(accounts).unwrap();
 
         goldie::assert_debug!(transfer_accounts.token_program_id());
-    }
-
-    #[test]
-    fn is_prover_true() {
-        assert!(is_prover(
-            &Pubkey::from_str("Prover1111111111111111111111111111111111111").unwrap()
-        ));
-    }
-
-    #[test]
-    fn is_prover_false() {
-        assert!(!is_prover(&system_program::ID));
     }
 
     #[test]
