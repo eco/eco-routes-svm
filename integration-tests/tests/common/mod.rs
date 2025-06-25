@@ -1,6 +1,5 @@
 use std::ops::Deref;
 
-use anchor_lang::error::ERROR_CODE_OFFSET;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{AnchorSerialize, Event, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
@@ -10,10 +9,10 @@ use anchor_spl::token_2022::{self, spl_token_2022};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::{Bytes32, Proof};
+use eco_svm_std::prover::Proof;
+use eco_svm_std::Bytes32;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
-use portal::instructions::PortalError;
 use portal::state::WithdrawnMarker;
 use portal::types::{Call, Intent, Reward, Route, TokenAmount};
 use rand::random;
@@ -28,8 +27,12 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
+mod hyperlane;
+
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
+const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
+const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -49,7 +52,13 @@ pub struct Context {
 impl Default for Context {
     fn default() -> Self {
         let mut svm = LiteSVM::new();
+
         svm.add_program(portal::ID, PORTAL_BIN);
+        svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
+        svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
+
+        hyperlane::add_hyperlane_programs(&mut svm);
+        hyperlane::init_hyperlane(&mut svm);
 
         let mint_authority = Keypair::new();
         let creator = Keypair::new();
@@ -482,11 +491,35 @@ impl Context {
         &mut self,
         route: &Route,
         reward_hash: Bytes32,
-        claimant: Pubkey,
+        claimant: Bytes32,
         executor: Pubkey,
         fulfill_marker: Pubkey,
         token_accounts: impl IntoIterator<Item = AccountMeta>,
         call_accounts: impl IntoIterator<Item = AccountMeta>,
+    ) -> TransactionResult {
+        self.fulfill_intent_with_signers(
+            route,
+            reward_hash,
+            claimant,
+            executor,
+            fulfill_marker,
+            token_accounts,
+            call_accounts,
+            vec![],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fulfill_intent_with_signers(
+        &mut self,
+        route: &Route,
+        reward_hash: Bytes32,
+        claimant: Bytes32,
+        executor: Pubkey,
+        fulfill_marker: Pubkey,
+        token_accounts: impl IntoIterator<Item = AccountMeta>,
+        call_accounts: impl IntoIterator<Item = AccountMeta>,
+        additional_signers: Vec<&Keypair>,
     ) -> TransactionResult {
         let args = portal::instructions::FulfillArgs {
             route: route.clone(),
@@ -515,8 +548,13 @@ impl Context {
             data: instruction.data(),
         };
 
+        let signers: Vec<_> = vec![&self.payer, &self.solver]
+            .into_iter()
+            .chain(additional_signers)
+            .collect();
+
         let transaction = Transaction::new(
-            &[&self.payer, &self.solver],
+            &signers,
             Message::new(
                 &[
                     ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
@@ -524,6 +562,63 @@ impl Context {
                 ],
                 Some(&self.payer.pubkey()),
             ),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_intent(
+        &mut self,
+        intent_hash: Bytes32,
+        source_chain: u64,
+        prover: Pubkey,
+        fulfill_marker: Pubkey,
+        dispatcher: Pubkey,
+        prover_dispatcher: Pubkey,
+        mailbox_program: Pubkey,
+        data: Vec<u8>,
+    ) -> TransactionResult {
+        let args = portal::instructions::ProveArgs {
+            prover,
+            source_chain,
+            intent_hash,
+            data,
+        };
+        let outbox_pda = hyperlane::get_outbox_pda();
+        let unique_message = Keypair::new();
+        let dispatched_message_pda =
+            hyperlane::get_dispatched_message_pda(&unique_message.pubkey());
+
+        let instruction = portal::instruction::Prove { args };
+        let accounts: Vec<_> = portal::accounts::Prove {
+            prover,
+            fulfill_marker,
+            dispatcher,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(vec![
+            AccountMeta::new_readonly(prover_dispatcher, false),
+            AccountMeta::new(self.payer.pubkey(), true),
+            AccountMeta::new(outbox_pda, false),
+            AccountMeta::new_readonly(spl_noop::ID, false),
+            AccountMeta::new_readonly(unique_message.pubkey(), true),
+            AccountMeta::new(dispatched_message_pda, false),
+            AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+            AccountMeta::new_readonly(mailbox_program, false),
+        ])
+        .collect();
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: instruction.data(),
+        };
+
+        let transaction = Transaction::new(
+            &[&self.payer, &unique_message],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
         );
 
@@ -569,13 +664,35 @@ where
     }
 }
 
-pub fn is_portal_error<T>(expected: PortalError) -> impl Fn(T) -> bool
+pub fn contains_event_and_msg<E, M>(expected: E, msg: M) -> impl Fn(TransactionMetadata) -> bool
+where
+    E: Event,
+    M: ToString,
+{
+    let expected = STANDARD.encode(expected.data());
+
+    move |actual: TransactionMetadata| {
+        actual
+            .logs
+            .iter()
+            .any(|log| log.contains(format!("Program data: {}", expected).as_str()))
+            && actual
+                .logs
+                .iter()
+                .any(|log| log.contains(msg.to_string().as_str()))
+    }
+}
+
+pub fn is_portal_error<T, Err>(expected: Err) -> impl Fn(T) -> bool
 where
     T: Deref<Target = FailedTransactionMetadata>,
+    Err: Into<u32>,
 {
+    let expected = expected.into();
+
     move |actual: T| match actual.err {
         TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
-            error_code == ERROR_CODE_OFFSET + expected as u32
+            error_code == expected
         }
         _ => false,
     }

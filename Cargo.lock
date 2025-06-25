@@ -1523,6 +1523,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyper-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "eco-svm-std",
+ "goldie",
+ "portal",
+]
+
+[[package]]
 name = "hyper-rustls"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1701,6 +1711,7 @@ dependencies = [
  "base64 0.22.1",
  "derive_more",
  "eco-svm-std",
+ "hyper-prover",
  "litesvm",
  "portal",
  "rand 0.9.1",

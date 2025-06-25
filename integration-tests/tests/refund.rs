@@ -1,6 +1,7 @@
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
-use eco_svm_std::{Bytes32, Proof};
+use eco_svm_std::prover::Proof;
+use eco_svm_std::Bytes32;
 use portal::events::IntentRefunded;
 use portal::state;
 use portal::types::{intent_hash, Intent};

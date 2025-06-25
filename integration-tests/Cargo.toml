@@ -9,6 +9,7 @@ anchor-spl = "0.31.1"
 base64 = "0.22.1"
 derive_more = { version = "2.0.1", features = ["deref_mut"] }
 eco-svm-std = { workspace = true }
+hyper-prover = { workspace = true }
 litesvm = "0.6.1"
 portal = { workspace = true }
 rand = "0.9.1"

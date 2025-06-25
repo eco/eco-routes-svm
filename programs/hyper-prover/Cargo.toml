@@ -1,0 +1,27 @@
+[package]
+name = "hyper-prover"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "hyper_prover"
+
+[features]
+mainnet = ["eco-svm-std/mainnet", "portal/mainnet"]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"
+eco-svm-std = { workspace = true }
+portal = { workspace = true, features = ["no-entrypoint"] }
+
+[dev-dependencies]
+goldie = "0.5.0"
+

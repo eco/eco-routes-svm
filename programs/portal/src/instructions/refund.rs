@@ -3,7 +3,8 @@ use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
-use eco_svm_std::{Bytes32, Proof};
+use eco_svm_std::prover::Proof;
+use eco_svm_std::Bytes32;
 
 use crate::events::IntentRefunded;
 use crate::instructions::PortalError;

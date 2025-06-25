@@ -1,12 +1,11 @@
-use std::str::FromStr;
-
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::solana_program::system_instruction;
-use anchor_lang::{system_program, AnchorSerialize};
+use anchor_lang::{system_program, AnchorSerialize, InstructionData};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022;
 use eco_svm_std::CHAIN_ID;
+use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentFulfilled;
 use portal::state::FulfillMarker;
 use portal::types::{Call, Calldata, CalldataWithAccounts, Route};
@@ -50,7 +49,7 @@ fn fulfill_intent_token_transfer_success() {
     let reward_hash = rand::random::<[u8; 32]>().into();
     let token_program = &ctx.token_program.clone();
     let recipient = Pubkey::new_unique();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let solver = ctx.solver.pubkey();
 
@@ -178,7 +177,7 @@ fn fulfill_intent_token_2022_transfer_success() {
     let reward_hash = rand::random::<[u8; 32]>().into();
     let token_program = &ctx.token_program.clone();
     let recipient = Pubkey::new_unique();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let solver = ctx.solver.pubkey();
 
@@ -306,7 +305,7 @@ fn fulfill_intent_native_transfer_success() {
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let recipient = Pubkey::new_unique();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let native_amount = 1_000_000_000;
 
@@ -361,7 +360,7 @@ fn fulfill_intent_invalid_executor_fail() {
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let wrong_executor = Pubkey::new_unique();
 
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
@@ -386,7 +385,7 @@ fn fulfill_intent_invalid_token_transfer_accounts_fail() {
     let mut ctx = common::Context::default();
     let route = ctx.rand_intent().route;
     let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
 
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
@@ -413,7 +412,7 @@ fn fulfill_intent_invalid_mint_fail() {
     let mut ctx = common::Context::default();
     let route = ctx.rand_intent().route;
     let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let solver = ctx.solver.pubkey();
     let token_program = &ctx.token_program.clone();
@@ -461,53 +460,13 @@ fn fulfill_intent_invalid_mint_fail() {
 }
 
 #[test]
-fn fulfill_intent_invalid_fulfill_target_fail() {
-    let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
-    route.tokens.clear();
-    let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
-    let executor = state::executor_pda().0;
-
-    let prover_program = Pubkey::from_str("Prover1111111111111111111111111111111111111").unwrap();
-    let calldata = Calldata {
-        data: vec![1, 2, 3],
-        account_count: 1,
-    };
-    let call_accounts = vec![AccountMeta::new(Pubkey::new_unique(), false)];
-    let calldata_with_accounts =
-        CalldataWithAccounts::new(calldata.clone(), call_accounts.clone()).unwrap();
-
-    let source_route = route_with_calldatas_with_accounts(
-        route.clone(),
-        vec![(prover_program, calldata_with_accounts)],
-    );
-    let destination_route = route_with_calldatas(route, vec![(prover_program, calldata)]);
-    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
-    let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-
-    let result = ctx.fulfill_intent(
-        &destination_route,
-        reward_hash,
-        claimant,
-        executor,
-        fulfill_marker,
-        vec![],
-        call_accounts,
-    );
-    assert!(result.is_err_and(common::is_portal_error(
-        portal::instructions::PortalError::InvalidFulfillTarget
-    )));
-}
-
-#[test]
 fn fulfill_intent_invalid_fulfill_marker_fail() {
     let mut ctx = common::Context::default();
     let mut route = ctx.rand_intent().route;
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
 
     let wrong_fulfill_marker = Pubkey::new_unique();
@@ -533,7 +492,7 @@ fn fulfill_intent_invalid_calldata_fail() {
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let recipient = Pubkey::new_unique();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let native_amount = 1_000_000_000;
 
@@ -579,7 +538,7 @@ fn fulfill_intent_already_fulfilled_fail() {
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
 
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
@@ -618,7 +577,7 @@ fn fulfill_intent_invalid_destination_chain_portal_fail() {
     route.calls.clear();
     route.destination_chain_portal = rand::random::<[u8; 32]>().into();
     let reward_hash = rand::random::<[u8; 32]>().into();
-    let claimant = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
 
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
@@ -636,5 +595,56 @@ fn fulfill_intent_invalid_destination_chain_portal_fail() {
 
     assert!(result.is_err_and(common::is_portal_error(
         portal::instructions::PortalError::InvalidDestinationChainPortal
+    )));
+}
+
+#[test]
+fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
+    let mut ctx = common::Context::default();
+    let mut route = ctx.rand_intent().route;
+    route.tokens.clear();
+    let reward_hash = rand::random::<[u8; 32]>().into();
+    let claimant = Pubkey::new_unique().to_bytes().into();
+    let executor = state::executor_pda().0;
+    let prove_data = eco_svm_std::prover::ProveArgs {
+        source_chain: 1,
+        intent_hash: rand::random::<[u8; 32]>().into(),
+        data: rand::random::<[u8; 32]>().to_vec(),
+        claimant: rand::random::<[u8; 32]>().into(),
+    };
+    let calldata = Calldata {
+        data: hyper_prover::instruction::Prove { args: prove_data }.data(),
+        account_count: 9,
+    };
+    let unique_message = solana_sdk::signature::Keypair::new();
+
+    let call_accounts = vec![
+        AccountMeta::new_readonly(executor, false),
+        AccountMeta::new_readonly(hyper_prover::state::dispatcher_pda().0, false),
+        AccountMeta::new(ctx.payer.pubkey(), false),
+        AccountMeta::new(Pubkey::new_unique(), false),
+        AccountMeta::new_readonly(spl_noop::ID, false),
+        AccountMeta::new_readonly(unique_message.pubkey(), true),
+        AccountMeta::new(Pubkey::new_unique(), false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(hyper_prover::hyperlane::MAILBOX_ID, false),
+        AccountMeta::new_readonly(hyper_prover::ID, false),
+    ];
+    let route_with_prover_call = route_with_calldatas(route, vec![(hyper_prover::ID, calldata)]);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route_with_prover_call.hash(), &reward_hash);
+    let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
+
+    let result = ctx.fulfill_intent_with_signers(
+        &route_with_prover_call,
+        reward_hash,
+        claimant,
+        executor,
+        fulfill_marker,
+        vec![],
+        call_accounts,
+        vec![&unique_message],
+    );
+    assert!(result.is_err_and(common::is_portal_error(
+        HyperProverError::InvalidPortalDispatcher
     )));
 }

@@ -3,6 +3,9 @@ name = "eco-svm-std"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+mainnet = []
+
 [dependencies]
 anchor-lang = "0.31.1"
 derive-new = "0.7.0"

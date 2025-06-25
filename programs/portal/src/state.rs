@@ -7,6 +7,7 @@ pub const VAULT_SEED: &[u8] = b"vault";
 pub const CLAIMED_MARKER_SEED: &[u8] = b"claimed_marker";
 pub const FULFILL_MARKER_SEED: &[u8] = b"fulfill_marker";
 pub const EXECUTOR_SEED: &[u8] = b"executor";
+pub const DISPATCHER_SEED: &[u8] = b"dispatcher";
 
 pub fn vault_pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[VAULT_SEED, intent_hash.as_ref()], &crate::ID)
@@ -14,6 +15,10 @@ pub fn vault_pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
 
 pub fn executor_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[EXECUTOR_SEED], &crate::ID)
+}
+
+pub fn dispatcher_pda() -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[DISPATCHER_SEED], &crate::ID)
 }
 
 #[account]
@@ -35,7 +40,7 @@ impl WithdrawnMarker {
 #[account]
 #[derive(InitSpace, Debug, PartialEq, new)]
 pub struct FulfillMarker {
-    pub claimant: Pubkey,
+    pub claimant: Bytes32,
     pub bump: u8,
 }
 
@@ -92,6 +97,11 @@ mod tests {
     #[test]
     fn executor_pda_deterministic() {
         goldie::assert_json!(executor_pda());
+    }
+
+    #[test]
+    fn dispatcher_pda_deterministic() {
+        goldie::assert_json!(dispatcher_pda());
     }
 
     #[test]

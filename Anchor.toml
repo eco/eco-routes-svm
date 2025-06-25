@@ -6,6 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
+hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 
 [registry]

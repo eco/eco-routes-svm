@@ -3,7 +3,7 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::{is_prover, Bytes32, CHAIN_ID};
+use eco_svm_std::{Bytes32, CHAIN_ID};
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
@@ -18,7 +18,7 @@ use crate::types::{
 pub struct FulfillArgs {
     pub route: Route,
     pub reward_hash: Bytes32,
-    pub claimant: Pubkey,
+    pub claimant: Bytes32,
 }
 
 #[derive(Accounts)]
@@ -137,8 +137,6 @@ fn execute_route_call(
     call_accounts: &[AccountInfo],
     signer_seeds: &[&[u8]],
 ) -> Result<()> {
-    require!(!is_prover(&program_id), PortalError::InvalidFulfillTarget);
-
     let instruction = Instruction::new_with_bytes(
         program_id,
         calldata,
@@ -155,7 +153,7 @@ fn execute_route_call(
     invoke_signed(&instruction, call_accounts, &[signer_seeds]).map_err(Into::into)
 }
 
-fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Pubkey) -> Result<()> {
+fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Bytes32) -> Result<()> {
     let (fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
     require!(
         ctx.accounts.fulfill_marker.key() == fulfill_marker,

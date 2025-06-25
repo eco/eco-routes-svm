@@ -6,7 +6,8 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::{Bytes32, Proof};
+use eco_svm_std::prover::Proof;
+use eco_svm_std::Bytes32;
 
 use crate::events::IntentWithdrawn;
 use crate::instructions::PortalError;
