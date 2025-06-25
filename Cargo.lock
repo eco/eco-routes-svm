@@ -1898,6 +1898,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "base64 0.22.1",
+ "derive_more",
+ "eco-svm-std",
+ "litesvm",
+ "portal",
+ "rand 0.9.1",
+ "solana-sdk",
+ "spl-noop",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2511,15 +2527,10 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
- "base64 0.22.1",
  "derive-new",
- "derive_more",
  "eco-svm-std",
  "goldie",
  "itertools 0.14.0",
- "litesvm",
- "rand 0.9.1",
- "solana-sdk",
  "tiny-keccak",
 ]
 
@@ -5244,6 +5255,15 @@ dependencies = [
  "solana-program-entrypoint",
  "solana-program-error",
  "solana-pubkey",
+]
+
+[[package]]
+name = "spl-noop"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c3bc351f7543a46f6807c231fc29ef2c4912c79bd6a4fb7d038cba6836f0fd7"
+dependencies = [
+ "solana-program",
 ]
 
 [[package]]

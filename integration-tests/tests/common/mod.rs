@@ -29,7 +29,7 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
-const PORTAL_BIN: &[u8] = include_bytes!("../../../../target/deploy/portal.so");
+const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
