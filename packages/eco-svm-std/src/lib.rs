@@ -6,14 +6,7 @@ pub mod account;
 
 const PROVER_PREFIX: &str = "Prover";
 pub const PROOF_SEED: &[u8] = b"proof";
-pub const CHAIN_ID: [u8; 32] = {
-    let bytes = 1399811149u32.to_be_bytes();
-
-    [
-        bytes[0], bytes[1], bytes[2], bytes[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ]
-};
+pub const CHAIN_ID: u64 = 1399811149;
 
 pub fn is_prover(program_id: &Pubkey) -> bool {
     program_id.to_string().starts_with(PROVER_PREFIX)
@@ -44,7 +37,7 @@ impl PartialEq<Pubkey> for Bytes32 {
 
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, new)]
 pub struct Proof {
-    pub destination_chain: Bytes32,
+    pub destination_chain: u64,
     pub claimant: Pubkey,
 }
 

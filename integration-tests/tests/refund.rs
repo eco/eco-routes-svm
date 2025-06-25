@@ -20,7 +20,7 @@ fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
     let route_hash = random::<[u8; 32]>().into();
     let funder = ctx.funder.pubkey();
     let vault_pda = state::vault_pda(&intent_hash(
-        &intent.destination_chain,
+        intent.destination_chain,
         &route_hash,
         &intent.reward.hash(),
     ))
@@ -61,11 +61,7 @@ fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
 #[test]
 fn refund_intent_native_success() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let creator = intent.reward.creator;
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -96,11 +92,7 @@ fn refund_intent_native_success() {
 #[test]
 fn refund_intent_tokens_success() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let creator = intent.reward.creator;
@@ -151,11 +143,7 @@ fn refund_intent_tokens_success() {
 #[test]
 fn refund_intent_tokens_2022_success() {
     let (mut ctx, intent, route_hash) = setup(true);
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let creator = intent.reward.creator;
@@ -207,11 +195,7 @@ fn refund_intent_tokens_2022_success() {
 fn refund_intent_native_and_token_success() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -264,16 +248,12 @@ fn refund_intent_native_and_token_success() {
 fn refund_intent_fulfilled_on_wrong_chain_success() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    let fulfillment_proof = Proof::new(random::<[u8; 32]>().into(), Pubkey::new_unique());
+    let fulfillment_proof = Proof::new(random(), Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof);
     ctx.expire_intent(&intent);
 
@@ -298,11 +278,7 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
 fn refund_intent_withdrawn_success() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -333,11 +309,7 @@ fn refund_intent_withdrawn_success() {
 fn refund_intent_invalid_creator_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let wrong_creator = Pubkey::new_unique();
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -363,11 +335,7 @@ fn refund_intent_invalid_vault_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
     let wrong_vault = Pubkey::new_unique();
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
@@ -391,11 +359,7 @@ fn refund_intent_invalid_vault_fail() {
 fn refund_intent_invalid_proof_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let wrong_proof = Pubkey::new_unique();
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -420,11 +384,7 @@ fn refund_intent_invalid_proof_fail() {
 fn refund_intent_already_fulfilled_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -451,11 +411,7 @@ fn refund_intent_already_fulfilled_fail() {
 fn refund_intent_not_expired_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -479,11 +435,7 @@ fn refund_intent_invalid_creator_token_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
     let wrong_owner = Pubkey::new_unique();
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
@@ -533,11 +485,7 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
     let claimant = Pubkey::new_unique();
-    let intent_hash = intent_hash(
-        &intent.destination_chain,
-        &route_hash,
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
