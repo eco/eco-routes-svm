@@ -6,7 +6,6 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-eco_routes = "J1Lfg3UWyGR1Z7BrBtjHFthxTVstGigLvAJ1wr9uSvRz"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 
 [registry]
