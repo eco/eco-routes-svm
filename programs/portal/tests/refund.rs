@@ -138,7 +138,6 @@ fn refund_intent_tokens_success() {
         creator,
         token_accounts,
     );
-    println!("refund_intent_tokens_success result: {:?}", result);
     assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
         intent_hash,
         creator,

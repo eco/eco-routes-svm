@@ -10,6 +10,8 @@ use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::PortalError;
 
+pub const VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE: usize = 3;
+
 pub struct VecTokenTransferAccounts<'info>(Vec<TokenTransferAccounts<'info>>);
 
 impl<'info> TryFrom<&[AccountInfo<'info>]> for VecTokenTransferAccounts<'info> {
@@ -18,7 +20,7 @@ impl<'info> TryFrom<&[AccountInfo<'info>]> for VecTokenTransferAccounts<'info> {
     fn try_from(accounts: &[AccountInfo<'info>]) -> Result<Self> {
         accounts
             .iter()
-            .chunks(3)
+            .chunks(VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE)
             .into_iter()
             .map(|chunk| chunk.collect::<Vec<_>>().try_into())
             .collect::<Result<Vec<TokenTransferAccounts>>>()
@@ -150,6 +152,95 @@ impl<'info> TokenTransferAccounts<'info> {
     }
 }
 
+/// Serializable version of Solana's `AccountMeta` for cross-chain communication.
+///
+/// Since Solana's native `AccountMeta` type doesn't implement serialization traits
+/// required for cross-chain messaging, this struct provides a serializable equivalent
+/// that can be included in `CallDataWithAccounts` and transmitted across chains.
+///
+/// This allows account metadata to be reconstructed on the destination chain
+/// during intent fulfillment, enabling proper validation and execution.
+#[derive(AnchorDeserialize, AnchorSerialize, Debug)]
+pub struct SerializableAccountMeta {
+    /// The account's public key
+    pub pubkey: Pubkey,
+    /// Whether this account must sign the transaction
+    pub is_signer: bool,
+    /// Whether this account's data may be modified
+    pub is_writable: bool,
+}
+
+impl From<AccountInfo<'_>> for SerializableAccountMeta {
+    fn from(account_info: AccountInfo<'_>) -> Self {
+        Self {
+            pubkey: account_info.key(),
+            is_signer: account_info.is_signer,
+            is_writable: account_info.is_writable,
+        }
+    }
+}
+
+impl From<AccountMeta> for SerializableAccountMeta {
+    fn from(account_meta: AccountMeta) -> Self {
+        Self {
+            pubkey: account_meta.pubkey,
+            is_signer: account_meta.is_signer,
+            is_writable: account_meta.is_writable,
+        }
+    }
+}
+
+/// Represents minimal calldata that can fit within Solana's 1024-byte instruction limit.
+/// This is provided as part of the fulfill instruction on the destination chain.
+///
+/// # Background
+/// Cross-chain intents need to include calldata for execution on the destination chain.
+/// However, Solana has a strict 1024-byte limit per instruction, making it infeasible to
+/// include full calldata with all account metadata in a single fulfill instruction.
+///
+/// # Solution
+/// The source chain submits the Route with full `CallDataWithAccounts`, but on the destination
+/// chain we provide only the minimal `Calldata` in the fulfill instruction. The account information is
+/// provided separately via the transaction accounts to reconstruct the complete calldata.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+pub struct Calldata {
+    pub data: Vec<u8>,
+    pub account_count: u8,
+}
+
+/// Complete calldata including both instruction data and account metadata.
+/// This is submitted on the source chain and reconstructed on the destination chain during fulfillment.
+///
+/// # Workflow
+/// 1. **Source Chain**: Intent submitted with Route containing `CallDataWithAccounts` (complete data)
+/// 2. **Destination Chain**: Fulfill instruction provides minimal `Calldata` + accounts in transaction
+/// 3. **Reconstruction**: Accounts from transaction combined with `Calldata` to build `CallDataWithAccounts`
+/// 4. **Execution**: Complete calldata is used to calculate intent hash and mark as fulfilled
+///
+/// This approach allows complex cross-chain calls while respecting Solana's instruction size limits.
+#[derive(AnchorSerialize, AnchorDeserialize, Debug)]
+pub struct CalldataWithAccounts {
+    pub calldata: Calldata,
+    pub accounts: Vec<SerializableAccountMeta>,
+}
+
+impl CalldataWithAccounts {
+    pub fn new<T>(calldata: Calldata, accounts: Vec<T>) -> Result<Self>
+    where
+        T: Into<SerializableAccountMeta>,
+    {
+        require!(
+            accounts.len() == calldata.account_count as usize,
+            PortalError::InvalidCalldata,
+        );
+
+        Ok(Self {
+            calldata,
+            accounts: accounts.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
 pub fn intent_hash(
     destination_chain: &Bytes32,
     route_hash: &Bytes32,
@@ -167,19 +258,36 @@ pub fn intent_hash(
     hash.into()
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Intent {
     pub destination_chain: Bytes32,
     pub route: Route,
     pub reward: Reward,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Route {
     pub salt: Bytes32,
     pub destination_chain_portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
+}
+
+impl Route {
+    pub fn hash(&self) -> Bytes32 {
+        let encoded = self.try_to_vec().expect("Failed to serialize Route");
+        let mut hasher = Keccak::v256();
+        let mut hash = [0u8; 32];
+
+        hasher.update(&encoded);
+        hasher.finalize(&mut hash);
+
+        hash.into()
+    }
+
+    pub fn token_amounts(&self) -> Result<BTreeMap<Pubkey, u64>> {
+        token_amounts(&self.tokens)
+    }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
@@ -204,17 +312,21 @@ impl Reward {
     }
 
     pub fn token_amounts(&self) -> Result<BTreeMap<Pubkey, u64>> {
-        self.tokens
-            .iter()
-            .try_fold(BTreeMap::<Pubkey, u64>::new(), |mut result, token| {
-                let entry = result.entry(token.token).or_default();
-                *entry = entry
-                    .checked_add(token.amount)
-                    .ok_or(PortalError::RewardAmountOverflow)?;
-
-                Ok(result)
-            })
+        token_amounts(&self.tokens)
     }
+}
+
+fn token_amounts(tokens: &[TokenAmount]) -> Result<BTreeMap<Pubkey, u64>> {
+    tokens
+        .iter()
+        .try_fold(BTreeMap::<Pubkey, u64>::new(), |mut result, token| {
+            let entry = result.entry(token.token).or_default();
+            *entry = entry
+                .checked_add(token.amount)
+                .ok_or(PortalError::TokenAmountOverflow)?;
+
+            Ok(result)
+        })
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
@@ -223,7 +335,7 @@ pub struct TokenAmount {
     pub amount: u64,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Call {
     pub target: Bytes32,
     pub data: Vec<u8>,
@@ -662,5 +774,111 @@ mod tests {
         let transfer_accounts = TokenTransferAccounts::try_from(accounts).unwrap();
 
         goldie::assert_debug!(transfer_accounts.token_program_id());
+    }
+
+    #[test]
+    fn route_hash_deterministic() {
+        let route = Route {
+            salt: [1u8; 32].into(),
+            destination_chain_portal: [2u8; 32].into(),
+            tokens: vec![
+                TokenAmount {
+                    token: Pubkey::new_from_array([3u8; 32]),
+                    amount: 100,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([4u8; 32]),
+                    amount: 200,
+                },
+            ],
+            calls: vec![
+                Call {
+                    target: [5u8; 32].into(),
+                    data: vec![1, 2, 3],
+                },
+                Call {
+                    target: [6u8; 32].into(),
+                    data: vec![4, 5, 6],
+                },
+            ],
+        };
+
+        goldie::assert_json!(route.hash().as_ref());
+    }
+
+    #[test]
+    fn route_token_amounts_deterministic() {
+        let route = Route {
+            salt: [1u8; 32].into(),
+            destination_chain_portal: [2u8; 32].into(),
+            tokens: vec![
+                TokenAmount {
+                    token: Pubkey::new_from_array([3u8; 32]),
+                    amount: 100,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([4u8; 32]),
+                    amount: 200,
+                },
+                TokenAmount {
+                    token: Pubkey::new_from_array([3u8; 32]),
+                    amount: 50,
+                },
+            ],
+            calls: vec![],
+        };
+
+        goldie::assert_debug!(route.token_amounts());
+    }
+
+    #[test]
+    fn calldata_with_accounts_success() {
+        let calldata = Calldata {
+            data: vec![1, 2, 3, 4, 5],
+            account_count: 3,
+        };
+        let accounts = vec![
+            SerializableAccountMeta {
+                pubkey: Pubkey::new_from_array([1u8; 32]),
+                is_signer: true,
+                is_writable: false,
+            },
+            SerializableAccountMeta {
+                pubkey: Pubkey::new_from_array([2u8; 32]),
+                is_signer: false,
+                is_writable: true,
+            },
+            SerializableAccountMeta {
+                pubkey: Pubkey::new_from_array([3u8; 32]),
+                is_signer: false,
+                is_writable: false,
+            },
+        ];
+
+        let result = CalldataWithAccounts::new(calldata, accounts);
+        goldie::assert_debug!(result);
+    }
+
+    #[test]
+    fn calldata_with_accounts_invalid_count_fail() {
+        let calldata = Calldata {
+            data: vec![1, 2, 3, 4, 5],
+            account_count: 3,
+        };
+        let accounts = vec![
+            SerializableAccountMeta {
+                pubkey: Pubkey::new_from_array([1u8; 32]),
+                is_signer: true,
+                is_writable: false,
+            },
+            SerializableAccountMeta {
+                pubkey: Pubkey::new_from_array([2u8; 32]),
+                is_signer: false,
+                is_writable: true,
+            },
+        ];
+
+        let result = CalldataWithAccounts::new(calldata, accounts);
+        assert!(result.is_err());
     }
 }

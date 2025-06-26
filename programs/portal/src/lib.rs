@@ -34,4 +34,11 @@ pub mod portal {
     ) -> Result<()> {
         withdraw_intent(ctx, args)
     }
+
+    pub fn fulfill<'info>(
+        ctx: Context<'_, '_, '_, 'info, Fulfill<'info>>,
+        args: FulfillArgs,
+    ) -> Result<()> {
+        fulfill_intent(ctx, args)
+    }
 }
