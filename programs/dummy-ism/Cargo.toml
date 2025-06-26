@@ -1,0 +1,20 @@
+[package]
+name = "dummy-ism"
+version = "0.1.0"
+description = "Dummy ISM for eco-routes-svm testing"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "dummy_ism"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"

@@ -166,7 +166,7 @@ fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Byte
             &ctx.accounts.fulfill_marker,
             &ctx.accounts.payer,
             &ctx.accounts.system_program,
-            &signer_seeds,
+            &[&signer_seeds],
         )
         .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
 }

@@ -40,3 +40,41 @@ impl IntoIterator for Bytes32 {
         self.0.into_iter()
     }
 }
+
+/// Serializable version of Solana's `AccountMeta` for cross-chain communication.
+///
+/// Since Solana's native `AccountMeta` type doesn't implement serialization traits
+/// required for cross-chain messaging, this struct provides a serializable equivalent
+/// that can be included in `CallDataWithAccounts` and transmitted across chains.
+///
+/// This allows account metadata to be reconstructed on the destination chain
+/// during intent fulfillment, enabling proper validation and execution.
+#[derive(AnchorDeserialize, AnchorSerialize, Debug)]
+pub struct SerializableAccountMeta {
+    /// The account's public key
+    pub pubkey: Pubkey,
+    /// Whether this account must sign the transaction
+    pub is_signer: bool,
+    /// Whether this account's data may be modified
+    pub is_writable: bool,
+}
+
+impl From<AccountInfo<'_>> for SerializableAccountMeta {
+    fn from(account_info: AccountInfo<'_>) -> Self {
+        Self {
+            pubkey: account_info.key(),
+            is_signer: account_info.is_signer,
+            is_writable: account_info.is_writable,
+        }
+    }
+}
+
+impl From<AccountMeta> for SerializableAccountMeta {
+    fn from(account_meta: AccountMeta) -> Self {
+        Self {
+            pubkey: account_meta.pubkey,
+            is_signer: account_meta.is_signer,
+            is_writable: account_meta.is_writable,
+        }
+    }
+}

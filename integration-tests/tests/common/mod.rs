@@ -1,7 +1,6 @@
 use std::ops::Deref;
 
-use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{AnchorSerialize, Event, InstructionData, ToAccountMetas};
+use anchor_lang::Event;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -9,16 +8,12 @@ use anchor_spl::token_2022::{self, spl_token_2022};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::prover::Proof;
-use eco_svm_std::Bytes32;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
-use portal::state::WithdrawnMarker;
 use portal::types::{Call, Intent, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
-use solana_sdk::instruction::{Instruction, InstructionError};
+use solana_sdk::instruction::InstructionError;
 use solana_sdk::message::Message;
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
@@ -27,12 +22,13 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
+mod hyper_prover_helpers;
 mod hyperlane;
+mod portal_helpers;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
-const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -47,6 +43,7 @@ pub struct Context {
     pub payer: Keypair,
     pub funder: Keypair,
     pub solver: Keypair,
+    pub sender: Keypair,
 }
 
 impl Default for Context {
@@ -55,7 +52,6 @@ impl Default for Context {
 
         svm.add_program(portal::ID, PORTAL_BIN);
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
-        svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
 
         hyperlane::add_hyperlane_programs(&mut svm);
         hyperlane::init_hyperlane(&mut svm);
@@ -65,6 +61,7 @@ impl Default for Context {
         let payer = Keypair::new();
         let funder = Keypair::new();
         let solver = Keypair::new();
+        let sender = Keypair::new();
 
         svm.airdrop(&mint_authority.pubkey(), sol_amount(100.0))
             .unwrap();
@@ -78,6 +75,7 @@ impl Default for Context {
             payer,
             funder,
             solver,
+            sender,
         }
     }
 }
@@ -116,7 +114,7 @@ impl Context {
         });
 
         Intent {
-            destination_chain: random(),
+            destination_chain: random::<u32>().into(),
             route: Route {
                 salt: random::<[u8; 32]>().into(),
                 destination_chain_portal: portal::ID.to_bytes().into(),
@@ -131,7 +129,7 @@ impl Context {
             reward: Reward {
                 deadline: self.now() + 3600,
                 creator: self.creator.pubkey(),
-                prover: random::<[u8; 32]>().into(),
+                prover: hyper_prover::ID,
                 native_amount: sol_amount(1.0),
                 tokens: reward_tokens,
             },
@@ -244,129 +242,6 @@ impl Context {
         self.send_transaction(transaction).unwrap();
     }
 
-    pub fn publish_intent(&mut self, intent: &Intent, route_hash: Bytes32) -> TransactionResult {
-        let args = portal::instructions::PublishArgs {
-            intent: intent.clone(),
-            route_hash,
-        };
-        let instruction = portal::instruction::Publish { args };
-        let accounts: Vec<_> = portal::accounts::Publish {}.to_account_metas(None);
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
-    }
-
-    pub fn fund_intent(
-        &mut self,
-        intent: &Intent,
-        vault: Pubkey,
-        route_hash: Bytes32,
-        allow_partial: bool,
-        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-    ) -> TransactionResult {
-        let args = portal::instructions::FundArgs {
-            destination_chain: intent.destination_chain,
-            route_hash,
-            reward: intent.reward.clone(),
-            allow_partial,
-        };
-        let instruction = portal::instruction::Fund { args };
-        let accounts: Vec<_> = portal::accounts::Fund {
-            payer: self.payer.pubkey(),
-            funder: self.funder.pubkey(),
-            vault,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            associated_token_program: anchor_spl::associated_token::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer, &self.funder],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-                    instruction,
-                ],
-                Some(&self.payer.pubkey()),
-            ),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn refund_intent(
-        &mut self,
-        intent: &Intent,
-        vault: Pubkey,
-        route_hash: Bytes32,
-        proof: Pubkey,
-        withdrawn_marker: Pubkey,
-        creator: Pubkey,
-        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-    ) -> TransactionResult {
-        let args = portal::instructions::RefundArgs {
-            destination_chain: intent.destination_chain,
-            route_hash,
-            reward: intent.reward.clone(),
-        };
-        let instruction = portal::instruction::Refund { args };
-        let accounts: Vec<_> = portal::accounts::Refund {
-            payer: self.payer.pubkey(),
-            creator,
-            vault,
-            proof,
-            withdrawn_marker,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-                    instruction,
-                ],
-                Some(&self.payer.pubkey()),
-            ),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
-    }
-
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }
@@ -401,232 +276,6 @@ impl Context {
         self.svm
             .get_account(pubkey)
             .and_then(|account| T::try_deserialize(&mut account.data.as_slice()).ok())
-    }
-
-    pub fn set_proof(&mut self, proof_pda: Pubkey, proof: Proof) {
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0u8; 8]);
-        proof.serialize(&mut data).unwrap();
-
-        let account = solana_sdk::account::Account {
-            lamports: self.get_sysvar::<Rent>().minimum_balance(data.len()),
-            data,
-            owner: portal::ID,
-            executable: false,
-            rent_epoch: 0,
-        };
-
-        self.set_account(proof_pda, account).unwrap();
-    }
-
-    pub fn set_withdrawn_marker(&mut self, withdrawn_marker_pda: Pubkey) {
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0u8; 8]);
-
-        let account = solana_sdk::account::Account {
-            lamports: WithdrawnMarker::min_balance(self.get_sysvar()),
-            data,
-            owner: portal::ID,
-            executable: false,
-            rent_epoch: 0,
-        };
-
-        self.set_account(withdrawn_marker_pda, account).unwrap();
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn withdraw_intent(
-        &mut self,
-        intent: &Intent,
-        vault: Pubkey,
-        route_hash: Bytes32,
-        claimant: Pubkey,
-        proof: Pubkey,
-        withdrawn_marker: Pubkey,
-        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-    ) -> TransactionResult {
-        let args = portal::instructions::WithdrawArgs {
-            destination_chain: intent.destination_chain,
-            route_hash,
-            reward: intent.reward.clone(),
-        };
-        let instruction = portal::instruction::Withdraw { args };
-        let accounts: Vec<_> = portal::accounts::Withdraw {
-            payer: self.payer.pubkey(),
-            claimant,
-            vault,
-            proof,
-            withdrawn_marker,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-                    instruction,
-                ],
-                Some(&self.payer.pubkey()),
-            ),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn fulfill_intent(
-        &mut self,
-        route: &Route,
-        reward_hash: Bytes32,
-        claimant: Bytes32,
-        executor: Pubkey,
-        fulfill_marker: Pubkey,
-        token_accounts: impl IntoIterator<Item = AccountMeta>,
-        call_accounts: impl IntoIterator<Item = AccountMeta>,
-    ) -> TransactionResult {
-        self.fulfill_intent_with_signers(
-            route,
-            reward_hash,
-            claimant,
-            executor,
-            fulfill_marker,
-            token_accounts,
-            call_accounts,
-            vec![],
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn fulfill_intent_with_signers(
-        &mut self,
-        route: &Route,
-        reward_hash: Bytes32,
-        claimant: Bytes32,
-        executor: Pubkey,
-        fulfill_marker: Pubkey,
-        token_accounts: impl IntoIterator<Item = AccountMeta>,
-        call_accounts: impl IntoIterator<Item = AccountMeta>,
-        additional_signers: Vec<&Keypair>,
-    ) -> TransactionResult {
-        let args = portal::instructions::FulfillArgs {
-            route: route.clone(),
-            reward_hash,
-            claimant,
-        };
-        let instruction = portal::instruction::Fulfill { args };
-        let accounts: Vec<_> = portal::accounts::Fulfill {
-            payer: self.payer.pubkey(),
-            solver: self.solver.pubkey(),
-            executor,
-            fulfill_marker,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            associated_token_program: anchor_spl::associated_token::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_accounts)
-        .chain(call_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let signers: Vec<_> = vec![&self.payer, &self.solver]
-            .into_iter()
-            .chain(additional_signers)
-            .collect();
-
-        let transaction = Transaction::new(
-            &signers,
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-                    instruction,
-                ],
-                Some(&self.payer.pubkey()),
-            ),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn prove_intent(
-        &mut self,
-        intent_hash: Bytes32,
-        source_chain: u64,
-        prover: Pubkey,
-        fulfill_marker: Pubkey,
-        dispatcher: Pubkey,
-        prover_dispatcher: Pubkey,
-        mailbox_program: Pubkey,
-        data: Vec<u8>,
-    ) -> TransactionResult {
-        let args = portal::instructions::ProveArgs {
-            prover,
-            source_chain,
-            intent_hash,
-            data,
-        };
-        let outbox_pda = hyperlane::get_outbox_pda();
-        let unique_message = Keypair::new();
-        let dispatched_message_pda =
-            hyperlane::get_dispatched_message_pda(&unique_message.pubkey());
-
-        let instruction = portal::instruction::Prove { args };
-        let accounts: Vec<_> = portal::accounts::Prove {
-            prover,
-            fulfill_marker,
-            dispatcher,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(vec![
-            AccountMeta::new_readonly(prover_dispatcher, false),
-            AccountMeta::new(self.payer.pubkey(), true),
-            AccountMeta::new(outbox_pda, false),
-            AccountMeta::new_readonly(spl_noop::ID, false),
-            AccountMeta::new_readonly(unique_message.pubkey(), true),
-            AccountMeta::new(dispatched_message_pda, false),
-            AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
-            AccountMeta::new_readonly(mailbox_program, false),
-        ])
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer, &unique_message],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
-    }
-
-    pub fn expire_intent(&mut self, intent: &Intent) {
-        self.warp_to_timestamp(intent.reward.deadline + 1);
     }
 
     fn warp_to_timestamp(&mut self, unix_timestamp: i64) {

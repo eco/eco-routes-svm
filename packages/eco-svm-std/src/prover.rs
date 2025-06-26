@@ -5,8 +5,9 @@ use crate::Bytes32;
 
 pub const PROOF_SEED: &[u8] = b"proof";
 pub const PROVE_DISCRIMINATOR: [u8; 8] = [52, 246, 26, 161, 211, 170, 86, 215];
+pub const CLOSE_PROOF_DISCRIMINATOR: [u8; 8] = [64, 76, 168, 8, 126, 109, 164, 179];
 
-#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, new)]
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug)]
 pub struct Proof {
     pub destination_chain: u64,
     pub claimant: Pubkey,
@@ -18,10 +19,13 @@ impl Proof {
     }
 
     pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {
-        match account.data_is_empty() {
-            true => Ok(None),
-            false => Ok(Some(Proof::deserialize(&mut &account.data.borrow()[8..])?)),
-        }
+        account
+            .data
+            .borrow()
+            .get(8..)
+            .map(Self::try_from_slice)
+            .transpose()
+            .map_err(Into::into)
     }
 }
 
