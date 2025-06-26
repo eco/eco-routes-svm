@@ -107,7 +107,7 @@ impl Context {
         });
 
         Intent {
-            destination_chain: random::<[u8; 32]>().into(),
+            destination_chain: random(),
             route: Route {
                 salt: random::<[u8; 32]>().into(),
                 destination_chain_portal: portal::ID.to_bytes().into(),

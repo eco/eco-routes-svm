@@ -115,7 +115,7 @@ fn fulfill_intent_token_transfer_success() {
             .map(|calldata| (*token_program, calldata))
             .collect(),
     );
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &source_route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
     destination_route.tokens.iter().for_each(|token| {
@@ -243,7 +243,7 @@ fn fulfill_intent_token_2022_transfer_success() {
             .map(|calldata| (*token_program, calldata))
             .collect(),
     );
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &source_route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
     destination_route.tokens.iter().for_each(|token| {
@@ -328,7 +328,7 @@ fn fulfill_intent_native_transfer_success() {
         vec![(system_program::ID, calldata_with_accounts)],
     );
     let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &source_route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.fulfill_intent(
@@ -364,7 +364,7 @@ fn fulfill_intent_invalid_executor_fail() {
     let claimant = Pubkey::new_unique();
     let wrong_executor = Pubkey::new_unique();
 
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
 
     let result = ctx.fulfill_intent(
@@ -389,7 +389,7 @@ fn fulfill_intent_invalid_token_transfer_accounts_fail() {
     let claimant = Pubkey::new_unique();
     let executor = state::executor_pda().0;
 
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
 
     let insufficient_token_accounts = vec![AccountMeta::new(Pubkey::new_unique(), false)];
@@ -418,7 +418,7 @@ fn fulfill_intent_invalid_mint_fail() {
     let solver = ctx.solver.pubkey();
     let token_program = &ctx.token_program.clone();
 
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
 
     let wrong_tokens: Vec<_> = (0..route.tokens.len())
@@ -483,7 +483,7 @@ fn fulfill_intent_invalid_fulfill_target_fail() {
         vec![(prover_program, calldata_with_accounts)],
     );
     let destination_route = route_with_calldatas(route, vec![(prover_program, calldata)]);
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &source_route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
 
     let result = ctx.fulfill_intent(
@@ -555,7 +555,7 @@ fn fulfill_intent_invalid_calldata_fail() {
         vec![(system_program::ID, calldata_with_accounts)],
     );
     let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &source_route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.fulfill_intent(
@@ -582,7 +582,7 @@ fn fulfill_intent_already_fulfilled_fail() {
     let claimant = Pubkey::new_unique();
     let executor = state::executor_pda().0;
 
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
     ctx.fulfill_intent(
@@ -621,7 +621,7 @@ fn fulfill_intent_invalid_destination_chain_portal_fail() {
     let claimant = Pubkey::new_unique();
     let executor = state::executor_pda().0;
 
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.fulfill_intent(
