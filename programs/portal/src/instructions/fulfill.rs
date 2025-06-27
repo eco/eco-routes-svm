@@ -59,7 +59,7 @@ pub fn fulfill_intent<'info>(
     fund_executor(&ctx, &route, token_transfer_accounts)?;
     let route = execute_route_calls(ctx.accounts.executor.key, route, call_accounts)?;
 
-    let intent_hash = types::intent_hash(&CHAIN_ID.into(), &route.hash(), &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     mark_fulfilled(&ctx, &intent_hash, &claimant)?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));

@@ -241,15 +241,11 @@ impl CalldataWithAccounts {
     }
 }
 
-pub fn intent_hash(
-    destination_chain: &Bytes32,
-    route_hash: &Bytes32,
-    reward_hash: &Bytes32,
-) -> Bytes32 {
+pub fn intent_hash(destination_chain: u64, route_hash: &Bytes32, reward_hash: &Bytes32) -> Bytes32 {
     let mut hasher = Keccak::v256();
     let mut hash = [0u8; 32];
 
-    hasher.update(destination_chain.as_ref());
+    hasher.update(destination_chain.to_be_bytes().as_slice());
     hasher.update(route_hash.as_ref());
     hasher.update(reward_hash.as_ref());
 
@@ -260,7 +256,7 @@ pub fn intent_hash(
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Intent {
-    pub destination_chain: Bytes32,
+    pub destination_chain: u64,
     pub route: Route,
     pub reward: Reward,
 }
@@ -347,7 +343,7 @@ mod tests {
 
     #[test]
     fn intent_hash_deterministic() {
-        let destination_chain = [5u8; 32].into();
+        let destination_chain = 1000;
         let route_hash = [6u8; 32].into();
         let reward = Reward {
             deadline: 1500000,
@@ -366,8 +362,8 @@ mod tests {
             ],
         };
 
-        let hash_1 = intent_hash(&destination_chain, &route_hash, &reward.hash());
-        let hash_2 = intent_hash(&destination_chain, &route_hash, &reward.hash());
+        let hash_1 = intent_hash(destination_chain, &route_hash, &reward.hash());
+        let hash_2 = intent_hash(destination_chain, &route_hash, &reward.hash());
 
         assert_eq!(hash_1, hash_2);
         goldie::assert_json!(hash_1.as_ref());

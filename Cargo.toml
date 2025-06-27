@@ -1,9 +1,10 @@
 [workspace]
-members = ["packages/*", "programs/*", "tests"]
+members = ["integration-tests", "packages/*", "programs/*"]
 resolver = "2"
 
 [workspace.dependencies]
 eco-svm-std = { path = "packages/eco-svm-std" }
+portal = { path = "programs/portal" }
 
 [profile.release]
 overflow-checks = true

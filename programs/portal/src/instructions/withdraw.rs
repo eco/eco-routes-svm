@@ -15,7 +15,7 @@ use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct WithdrawArgs {
-    pub destination_chain: Bytes32,
+    pub destination_chain: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
 }
@@ -50,7 +50,7 @@ pub fn withdraw_intent<'info>(
         route_hash,
         reward,
     } = args;
-    let intent_hash = types::intent_hash(&destination_chain, &route_hash, &reward.hash());
+    let intent_hash = types::intent_hash(destination_chain, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
     let signer_seeds = [VAULT_SEED, intent_hash.as_ref(), &[bump]];
 
@@ -85,7 +85,7 @@ pub fn withdraw_intent<'info>(
 fn validate_proof(
     proof: &AccountInfo,
     claimant: &AccountInfo,
-    destination_chain: Bytes32,
+    destination_chain: u64,
 ) -> Result<()> {
     match Proof::try_from_account_info(proof)? {
         Some(proof)

@@ -13,7 +13,7 @@ use crate::types::{self, Reward, VecTokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FundArgs {
-    pub destination_chain: Bytes32,
+    pub destination_chain: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
     pub allow_partial: bool,
@@ -44,7 +44,7 @@ pub fn fund_intent<'info>(
         reward,
         allow_partial,
     } = args;
-    let intent_hash = types::intent_hash(&destination_chain, &route_hash, &reward.hash());
+    let intent_hash = types::intent_hash(destination_chain, &route_hash, &reward.hash());
 
     require!(
         ctx.accounts.vault.key() == vault_pda(&intent_hash).0,
