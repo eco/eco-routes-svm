@@ -52,7 +52,27 @@ import { addressToBytes32Hex, encodeTransfer, hex32ToNums } from "./evmUtils";
 import ecoRoutesIdl from "../../target/idl/eco_routes.json";
 import { Reward, Route } from "./evmUtils";
 
-const creatorSvm = loadKeypairFromFile("../../keys/program_auth_mainnet.json"); // SVM intent creator key
+const inboxErrorInterface = new ethers.Interface([
+  "error InsufficientFee(uint256 _requiredFee)",
+  "error NativeTransferFailed()",
+  "error ChainIdTooLarge(uint256 _chainId)",
+  "error UnauthorizedHandle(address _sender)",
+  "error UnauthorizedProve(address _sender)",
+  "error UnauthorizedIncomingProof(address _sender)",
+  "error MailboxCannotBeZeroAddress()",
+  "error RouterCannotBeZeroAddress()",
+  "error InboxCannotBeZeroAddress()",
+  "error ProverCannotBeZeroAddress()",
+  "error InvalidOriginChainId()",
+  "error NotFulfilled(bytes32)",
+  "error AlreadyProven(bytes32)",
+  "error InsufficientFee(uint256)",
+  "error ArrayLengthMismatch()",
+  "error ChainIdTooLarge(uint256)",
+  "error SenderCannotBeZeroAddress()",
+]);
+
+const creatorSvm = loadKeypairFromFile("../../keys/program_auth_mainnet.json");
 const connection = new Connection(MAINNET_RPC, "confirmed");
 const provider = new AnchorProvider(connection, new anchor.Wallet(creatorSvm), {
   commitment: "confirmed",
@@ -64,7 +84,7 @@ const program = new Program(
 
 const salt = (() => {
   const bytes = anchorUtils.bytes.utf8.encode(
-    "svm-evm-e2e672825798".padEnd(32, "\0")
+    "svm-evm-e2e-test224489".padEnd(32, "\0")
   );
   return bytes.slice(0, 32);
 })();
@@ -434,6 +454,35 @@ describe("SVM -> EVM e2e", () => {
         ? requiredFee / BigInt(20)
         : ethers.parseEther("0.0005");
 
+    async function diagnosePotentialRevert() {
+      try {
+        const res = await inbox.fulfillAndProve.staticCall(
+          route,
+          rewardHashHex,
+          svmAddressToHex(creatorSvm.publicKey),
+          intentHashHex,
+          HYPER_PROVER_ADDRESS,
+          data,
+          { gasLimit: 900_000, value: requiredFee + buffer }
+        );
+
+        console.log("callStatic result:", res);
+        console.log(
+          "callStatic succeeded (on-chain revert is gas/fee related)"
+        );
+      } catch (err: any) {
+        const revertData: string = err.data ?? err.error?.data ?? "";
+        const desc = inboxErrorInterface.parseError(revertData);
+
+        console.log("name:", desc.name);
+        console.log("selector:", desc.selector);
+        console.log("signature:", desc.signature);
+        console.log("args:", desc.args);
+        throw err;
+      }
+    }
+    await diagnosePotentialRevert();
+
     const fulfillTx = await inbox.fulfillAndProve(
       route,
       rewardHashHex,
@@ -453,8 +502,7 @@ describe("SVM -> EVM e2e", () => {
     console.log("Fulfilled mapping result:", fulfilledMappingSlot);
   });
 
-  // TODO: remove the skip and claim
-  it.skip("Claim intent on Solana", async () => {
+  it("Claim intent on Solana", async () => {
     const intent = PublicKey.findProgramAddressSync(
       [Buffer.from("intent"), intentHashBytes],
       program.programId

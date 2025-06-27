@@ -83,7 +83,7 @@ let reward!: Reward;
 
 const salt = (() => {
   const bytes = anchorUtils.bytes.utf8.encode(
-    "evm-svm-e2etest1".padEnd(32, "\0")
+    "evm-svm-e2etest12334666".padEnd(32, "\0")
   );
   return bytes.slice(0, 32);
 })();
@@ -506,8 +506,7 @@ describe("EVM → SVM e2e", () => {
     expect(accountInfo?.data.length).to.be.greaterThan(0);
   });
 
-  // Un-skip when a message passes
-  it.skip("proves and withdraws on EVM", async () => {
+  it("proves and withdraws on EVM", async () => {
     console.log("Waiting for the message to land...");
     await new Promise((resolve) => setTimeout(resolve, 20_000));
     const l2Provider = new JsonRpcProvider(process.env.EVM_RPC);

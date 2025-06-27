@@ -19,7 +19,7 @@ pub enum IntentStatus {
     Claimed(bool, u8),
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct TokenAmount {
     pub token: [u8; 32],
     pub amount: u64,
@@ -51,7 +51,7 @@ fn validate_token_amounts(tokens: &[TokenAmount], max_len: usize) -> Result<()> 
     Ok(())
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct Call {
     pub destination: [u8; 32],
     #[max_len(MAX_CALLDATA_SIZE)]
@@ -77,7 +77,7 @@ fn validate_calls(calls: &[Call], max_len: usize) -> Result<()> {
     Ok(())
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct Route {
     pub salt: [u8; 32],
     pub source_domain_id: u32,
@@ -111,7 +111,7 @@ impl Route {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct Reward {
     pub creator: Pubkey,
     #[max_len(MAX_REWARD_TOKENS)]

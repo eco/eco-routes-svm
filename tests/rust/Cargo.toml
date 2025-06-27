@@ -36,3 +36,6 @@ tracing-subscriber = { version = "0.3.19", features = [
     "chrono",
 ] }
 tracing-appender = "0.2.3"
+itertools = "0.14.0"
+tokio = "1.45.1"
+hex = "0.4.3"

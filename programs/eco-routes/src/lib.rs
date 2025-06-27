@@ -1,3 +1,4 @@
+use crate::hyperlane::SimulationReturnData;
 use anchor_lang::prelude::*;
 
 declare_id!("a6BKzp2ixm6ogEJ268UT4UGFMLnsgPWnVm93vsjupc3");
@@ -12,7 +13,6 @@ use instructions::*;
 
 #[program]
 pub mod eco_routes {
-
     use super::*;
 
     pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> Result<()> {
@@ -78,7 +78,7 @@ pub mod eco_routes {
         _origin: u32,
         _sender: [u8; 32],
         payload: Vec<u8>,
-    ) -> Result<()> {
+    ) -> Result<SimulationReturnData<Vec<SerializableAccountMeta>>> {
         instructions::handle_account_metas(ctx, _origin, _sender, payload)
     }
 
@@ -88,7 +88,9 @@ pub mod eco_routes {
     }
 
     #[instruction(discriminator = &hyperlane::INTERCHAIN_SECURITY_MODULE_ACCOUNT_METAS_DISCRIMINATOR)]
-    pub fn ism_account_metas(ctx: Context<IsmAccountMetas>) -> Result<()> {
+    pub fn ism_account_metas(
+        ctx: Context<IsmAccountMetas>,
+    ) -> Result<SimulationReturnData<Vec<SerializableAccountMeta>>> {
         instructions::ism_account_metas(ctx)
     }
     pub fn fulfill_intent<'info>(

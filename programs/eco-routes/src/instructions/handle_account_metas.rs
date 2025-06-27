@@ -1,13 +1,10 @@
-use anchor_lang::{prelude::*, solana_program::program::set_return_data};
-use borsh::BorshSerialize;
-
 use crate::{
     encoding,
     error::EcoRoutesError,
+    hyperlane::SimulationReturnData,
     state::{EcoRoutes, Intent},
 };
-
-use super::expected_process_authority;
+use anchor_lang::prelude::*;
 
 #[derive(Debug, AnchorDeserialize, AnchorSerialize, Clone)]
 pub struct SerializableAccountMeta {
@@ -51,17 +48,14 @@ pub fn handle_account_metas(
     _origin: u32,
     _sender: [u8; 32],
     payload: Vec<u8>,
-) -> Result<()> {
-    let (intent_hashes, _solvers) = encoding::decode_fulfillment_message(&payload)
+) -> Result<SimulationReturnData<Vec<SerializableAccountMeta>>> {
+    let (intent_hashes, _claimants) = encoding::decode_fulfillment_message(&payload)
         .map_err(|_| error!(EcoRoutesError::InvalidHandlePayload))?;
 
-    let mut metas = vec![
-        SerializableAccountMeta::from(AccountMeta::new_readonly(
-            expected_process_authority(),
-            true,
-        )),
-        SerializableAccountMeta::from(AccountMeta::new_readonly(EcoRoutes::pda().0, false)),
-    ];
+    let mut metas = vec![SerializableAccountMeta::from(AccountMeta::new_readonly(
+        EcoRoutes::pda().0,
+        false,
+    ))];
 
     for intent_hash in intent_hashes {
         metas.push(SerializableAccountMeta::from(AccountMeta::new(
@@ -70,7 +64,5 @@ pub fn handle_account_metas(
         )));
     }
 
-    set_return_data(&metas.try_to_vec()?);
-
-    Ok(())
+    Ok(SimulationReturnData::new(metas))
 }
