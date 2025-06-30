@@ -40,4 +40,5 @@ pub enum PortalError {
     InvalidDestinationChainPortal,
     InvalidProver,
     InvalidDispatcher,
+    InvalidProofCloser,
 }

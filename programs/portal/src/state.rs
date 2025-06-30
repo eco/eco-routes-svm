@@ -8,6 +8,7 @@ pub const CLAIMED_MARKER_SEED: &[u8] = b"claimed_marker";
 pub const FULFILL_MARKER_SEED: &[u8] = b"fulfill_marker";
 pub const EXECUTOR_SEED: &[u8] = b"executor";
 pub const DISPATCHER_SEED: &[u8] = b"dispatcher";
+pub const PROOF_CLOSER_SEED: &[u8] = b"proof_closer";
 
 pub fn vault_pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[VAULT_SEED, intent_hash.as_ref()], &crate::ID)
@@ -19,6 +20,10 @@ pub fn executor_pda() -> (Pubkey, u8) {
 
 pub fn dispatcher_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[DISPATCHER_SEED], &crate::ID)
+}
+
+pub fn proof_closer_pda() -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROOF_CLOSER_SEED], &crate::ID)
 }
 
 #[account]
@@ -115,5 +120,10 @@ mod tests {
             &route_hash,
             &reward_hash,
         )));
+    }
+
+    #[test]
+    fn proof_closer_pda_deterministic() {
+        goldie::assert_json!(proof_closer_pda());
     }
 }

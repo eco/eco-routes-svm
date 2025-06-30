@@ -9,8 +9,31 @@ use crate::instructions::Prove;
 
 #[cfg(feature = "mainnet")]
 pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
+#[cfg(feature = "mainnet")]
+pub const MULTISIG_ISM_MESSAGE_ID: Pubkey = pubkey!("EpAuVN1oc5GccKAk41VMBHTgzJFtB5bftvi92SywQdbS");
 #[cfg(not(feature = "mainnet"))]
 pub const MAILBOX_ID: Pubkey = pubkey!("75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSXS5aR");
+#[cfg(not(feature = "mainnet"))]
+pub const MULTISIG_ISM_MESSAGE_ID: Pubkey = pubkey!("4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k");
+
+pub const HANDLE_DISCRIMINATOR: [u8; 8] = [33, 210, 5, 66, 196, 212, 239, 142];
+pub const HANDLE_ACCOUNT_METAS_DISCRIMINATOR: [u8; 8] = [194, 141, 30, 82, 241, 41, 169, 52];
+pub const INTERCHAIN_SECURITY_MODULE_DISCRIMINATOR: [u8; 8] = [45, 18, 245, 87, 234, 46, 246, 15];
+pub const INTERCHAIN_SECURITY_MODULE_ACCOUNT_METAS_DISCRIMINATOR: [u8; 8] =
+    [190, 214, 218, 129, 67, 97, 4, 76];
+
+pub fn process_authority_pda() -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[
+            b"hyperlane",
+            b"-",
+            b"process_authority",
+            b"-",
+            crate::ID.as_ref(),
+        ],
+        &MAILBOX_ID,
+    )
+}
 
 // Hyperlane's instructions copied from their code.
 // Even though we are only using OutboxDispatch, it
@@ -88,4 +111,14 @@ pub fn dispatch_msg(
         &[signer_seeds],
     )
     .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_authority_pda_deterministic() {
+        goldie::assert_json!(process_authority_pda());
+    }
 }

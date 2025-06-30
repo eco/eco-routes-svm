@@ -1,18 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::Proof;
+use eco_svm_std::prover::{Proof, CLOSE_PROOF_DISCRIMINATOR};
 use eco_svm_std::Bytes32;
 
 use crate::events::IntentWithdrawn;
 use crate::instructions::PortalError;
-use crate::state::{vault_pda, WithdrawnMarker, CLAIMED_MARKER_SEED, VAULT_SEED};
-use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts};
+use crate::state::{
+    proof_closer_pda, vault_pda, WithdrawnMarker, CLAIMED_MARKER_SEED, PROOF_CLOSER_SEED,
+    VAULT_SEED,
+};
+use crate::types::{
+    self, Reward, TokenTransferAccounts, VecTokenTransferAccounts,
+    VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
+};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct WithdrawArgs {
@@ -33,7 +40,14 @@ pub struct Withdraw<'info> {
     #[account(mut)]
     pub vault: UncheckedAccount<'info>,
     /// CHECK: address is validated
+    #[account(mut)]
     pub proof: UncheckedAccount<'info>,
+    /// CHECK: address is validated
+    #[account(address = proof_closer_pda().0 @ PortalError::InvalidProofCloser)]
+    pub proof_closer: UncheckedAccount<'info>,
+    /// CHECK: address is validated
+    #[account(executable, address = args.reward.prover @ PortalError::InvalidProver)]
+    pub prover: UncheckedAccount<'info>,
     /// CHECK: address is validated
     #[account(mut)]
     pub withdrawn_marker: UncheckedAccount<'info>,
@@ -59,21 +73,16 @@ pub fn withdraw_intent<'info>(
         ctx.accounts.vault.key() == vault_pda,
         PortalError::InvalidVault
     );
-    require!(
-        ctx.accounts.proof.key() == Proof::pda(&intent_hash, &reward.prover).0,
-        PortalError::InvalidProof
-    );
-    validate_proof(
-        &ctx.accounts.proof,
-        &ctx.accounts.claimant,
-        destination_chain,
-    )?;
+    validate_proof(&ctx, destination_chain, &intent_hash, &reward.prover)?;
 
     withdraw_native(&ctx, &reward, &signer_seeds)?;
-    withdraw_tokens(&ctx, &reward, &signer_seeds)?;
+    let (token_transfer_accounts, remaining_accounts) =
+        token_transfer_and_remaining_accounts(&ctx, &reward)?;
+    withdraw_tokens(&ctx, &reward, &signer_seeds, token_transfer_accounts)?;
 
     // once initialized, withdraw is never allowed again
     mark_withdrawn(&ctx, &intent_hash)?;
+    close_proof(&ctx, remaining_accounts)?;
 
     emit!(IntentWithdrawn::new(
         intent_hash,
@@ -84,13 +93,29 @@ pub fn withdraw_intent<'info>(
 }
 
 fn validate_proof(
-    proof: &AccountInfo,
-    claimant: &AccountInfo,
+    ctx: &Context<Withdraw>,
     destination_chain: u64,
+    intent_hash: &Bytes32,
+    prover: &Pubkey,
 ) -> Result<()> {
-    match Proof::try_from_account_info(proof)? {
+    require!(
+        ctx.accounts.proof.key() == Proof::pda(intent_hash, prover).0,
+        PortalError::InvalidProof
+    );
+    require!(
+        ctx.accounts.proof.owner == prover,
+        PortalError::InvalidProof
+    );
+
+    msg!(
+        "Proof::try_from_account_info(&ctx.accounts.proof) {:?}",
+        Proof::try_from_account_info(&ctx.accounts.proof)
+    );
+
+    match Proof::try_from_account_info(&ctx.accounts.proof)? {
         Some(proof)
-            if proof.claimant == claimant.key() && proof.destination_chain == destination_chain =>
+            if proof.claimant == *ctx.accounts.claimant.key
+                && proof.destination_chain == destination_chain =>
         {
             Ok(())
         }
@@ -122,12 +147,28 @@ fn withdraw_native<'info>(
     }
 }
 
+fn token_transfer_and_remaining_accounts<'c, 'info>(
+    ctx: &Context<'_, '_, 'c, 'info, Withdraw<'info>>,
+    reward: &Reward,
+) -> Result<(VecTokenTransferAccounts<'info>, &'c [AccountInfo<'info>])> {
+    let split_index = reward.tokens.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE;
+    require!(
+        split_index <= ctx.remaining_accounts.len(),
+        PortalError::InvalidTokenTransferAccounts
+    );
+
+    let (token_transfer_accounts, remaining_accounts) =
+        ctx.remaining_accounts.split_at(split_index);
+
+    Ok((token_transfer_accounts.try_into()?, remaining_accounts))
+}
+
 fn withdraw_tokens<'info>(
     ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
     reward: &Reward,
     signer_seeds: &[&[u8]],
+    accounts: VecTokenTransferAccounts<'info>,
 ) -> Result<()> {
-    let accounts: VecTokenTransferAccounts<'info> = ctx.remaining_accounts.try_into()?;
     let accounts = accounts.into_inner();
     let mints = accounts
         .iter()
@@ -193,7 +234,50 @@ fn mark_withdrawn<'info>(
             &ctx.accounts.withdrawn_marker,
             &ctx.accounts.payer,
             &ctx.accounts.system_program,
-            &signer_seeds,
+            &[&signer_seeds],
         )
         .map_err(|_| PortalError::IntentAlreadyWithdrawn.into())
+}
+
+fn close_proof<'info>(
+    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    remaining_accounts: &[AccountInfo<'info>],
+) -> Result<()> {
+    let (_, bump) = proof_closer_pda();
+    let signer_seeds = [PROOF_CLOSER_SEED, &[bump]];
+
+    let remaining_account_metas = remaining_accounts.iter().map(|account| AccountMeta {
+        pubkey: account.key(),
+        is_signer: account.is_signer,
+        is_writable: account.is_writable,
+    });
+    let remaining_account_infos = remaining_accounts
+        .iter()
+        .map(ToAccountInfo::to_account_info);
+
+    let ix = Instruction::new_with_bytes(
+        ctx.accounts.prover.key(),
+        &CLOSE_PROOF_DISCRIMINATOR,
+        vec![
+            AccountMeta::new_readonly(ctx.accounts.proof_closer.key(), true),
+            AccountMeta::new(ctx.accounts.proof.key(), false),
+        ]
+        .into_iter()
+        .chain(remaining_account_metas)
+        .collect(),
+    );
+
+    invoke_signed(
+        &ix,
+        vec![
+            ctx.accounts.proof_closer.to_account_info(),
+            ctx.accounts.proof.to_account_info(),
+        ]
+        .into_iter()
+        .chain(remaining_account_infos)
+        .collect::<Vec<_>>()
+        .as_slice(),
+        &[&signer_seeds],
+    )
+    .map_err(Into::into)
 }
