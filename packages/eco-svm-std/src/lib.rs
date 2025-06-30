@@ -1,16 +1,13 @@
 use anchor_lang::prelude::*;
 use derive_more::Deref;
-use derive_new::new;
 
 pub mod account;
+pub mod prover;
 
-const PROVER_PREFIX: &str = "Prover";
-pub const PROOF_SEED: &[u8] = b"proof";
+#[cfg(feature = "mainnet")]
 pub const CHAIN_ID: u64 = 1399811149;
-
-pub fn is_prover(program_id: &Pubkey) -> bool {
-    program_id.to_string().starts_with(PROVER_PREFIX)
-}
+#[cfg(not(feature = "mainnet"))]
+pub const CHAIN_ID: u64 = 1399811150;
 
 #[derive(
     AnchorSerialize, AnchorDeserialize, InitSpace, Deref, Clone, Copy, Debug, PartialEq, Eq,
@@ -35,50 +32,49 @@ impl PartialEq<Pubkey> for Bytes32 {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, new)]
-pub struct Proof {
-    pub destination_chain: u64,
-    pub claimant: Pubkey,
+impl IntoIterator for Bytes32 {
+    type Item = u8;
+    type IntoIter = std::array::IntoIter<u8, 32>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
 }
 
-impl Proof {
-    pub fn pda(intent_hash: &Bytes32, prover: &Pubkey) -> (Pubkey, u8) {
-        Pubkey::find_program_address(&[PROOF_SEED, intent_hash.as_ref()], prover)
-    }
+/// Serializable version of Solana's `AccountMeta` for cross-chain communication.
+///
+/// Since Solana's native `AccountMeta` type doesn't implement serialization traits
+/// required for cross-chain messaging, this struct provides a serializable equivalent
+/// that can be included in `CallDataWithAccounts` and transmitted across chains.
+///
+/// This allows account metadata to be reconstructed on the destination chain
+/// during intent fulfillment, enabling proper validation and execution.
+#[derive(AnchorDeserialize, AnchorSerialize, Debug)]
+pub struct SerializableAccountMeta {
+    /// The account's public key
+    pub pubkey: Pubkey,
+    /// Whether this account must sign the transaction
+    pub is_signer: bool,
+    /// Whether this account's data may be modified
+    pub is_writable: bool,
+}
 
-    pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {
-        match account.data_is_empty() {
-            true => Ok(None),
-            false => Ok(Some(Proof::deserialize(&mut &account.data.borrow()[8..])?)),
+impl From<AccountInfo<'_>> for SerializableAccountMeta {
+    fn from(account_info: AccountInfo<'_>) -> Self {
+        Self {
+            pubkey: account_info.key(),
+            is_signer: account_info.is_signer,
+            is_writable: account_info.is_writable,
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use anchor_lang::system_program;
-
-    use super::*;
-
-    #[test]
-    fn proof_pda_deterministic() {
-        let intent_hash = [42u8; 32].into();
-        let prover = Pubkey::new_from_array([123u8; 32]);
-
-        goldie::assert_debug!(Proof::pda(&intent_hash, &prover));
-    }
-
-    #[test]
-    fn is_prover_true() {
-        assert!(is_prover(
-            &"Prover1111111111111111111111111111111111111"
-                .parse()
-                .unwrap()
-        ));
-    }
-
-    #[test]
-    fn is_prover_false() {
-        assert!(!is_prover(&system_program::ID));
+impl From<AccountMeta> for SerializableAccountMeta {
+    fn from(account_meta: AccountMeta) -> Self {
+        Self {
+            pubkey: account_meta.pubkey,
+            is_signer: account_meta.is_signer,
+            is_writable: account_meta.is_writable,
+        }
     }
 }

@@ -1,8 +1,9 @@
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
-use eco_svm_std::{Bytes32, Proof};
+use eco_svm_std::prover::Proof;
+use eco_svm_std::Bytes32;
 use portal::events::IntentRefunded;
-use portal::state;
+use portal::state::{self, proof_closer_pda};
 use portal::types::{intent_hash, Intent};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
@@ -528,6 +529,7 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
         claimant,
         proof,
         withdrawn_marker,
+        proof_closer_pda().0,
         token_accounts,
     )
     .unwrap();

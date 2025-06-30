@@ -9,6 +9,7 @@ crate-type = ["cdylib", "lib"]
 name = "portal"
 
 [features]
+mainnet = ["eco-svm-std/mainnet"]
 default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []

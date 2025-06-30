@@ -2,15 +2,13 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
 
-pub trait AccountExt:
-    AccountSerialize + AccountDeserialize + AnchorSerialize + AnchorDeserialize + Owner + Space
-{
+pub trait AccountExt: AccountSerialize + AccountDeserialize + Owner + Space {
     fn init<'info>(
         self,
         account: &AccountInfo<'info>,
-        payer: &Signer<'info>,
+        payer: &AccountInfo<'info>,
         system_program: &Program<'info, System>,
-        signer_seeds: &[&[u8]],
+        signer_seeds: &[&[&[u8]]],
     ) -> Result<()> {
         let program_id = Self::owner();
         let data_len = 8 + Self::INIT_SPACE;
@@ -36,7 +34,7 @@ pub trait AccountExt:
                         account.to_account_info(),
                         system_program.to_account_info(),
                     ],
-                    &[signer_seeds],
+                    signer_seeds,
                 )?;
             }
             vault_balance => {
@@ -51,19 +49,19 @@ pub trait AccountExt:
                             account.to_account_info(),
                             system_program.to_account_info(),
                         ],
-                        &[signer_seeds],
+                        signer_seeds,
                     )?;
                 }
 
                 invoke_signed(
                     &system_instruction::allocate(&account.key(), data_len as u64),
                     &[account.to_account_info(), system_program.to_account_info()],
-                    &[signer_seeds],
+                    signer_seeds,
                 )?;
                 invoke_signed(
                     &system_instruction::assign(&account.key(), &program_id),
                     &[account.to_account_info(), system_program.to_account_info()],
-                    &[signer_seeds],
+                    signer_seeds,
                 )?;
             }
         }

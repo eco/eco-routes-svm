@@ -3,12 +3,14 @@ use anchor_lang::prelude::*;
 mod fulfill;
 mod fund;
 mod fund_context;
+mod prove;
 mod publish;
 mod refund;
 mod withdraw;
 
 pub use fulfill::*;
 pub use fund::*;
+pub use prove::*;
 pub use publish::*;
 pub use refund::*;
 pub use withdraw::*;
@@ -34,7 +36,9 @@ pub enum PortalError {
     InvalidWithdrawnMarker,
     InvalidExecutor,
     InvalidCalldata,
-    InvalidFulfillTarget,
     InvalidFulfillMarker,
     InvalidDestinationChainPortal,
+    InvalidProver,
+    InvalidDispatcher,
+    InvalidProofCloser,
 }

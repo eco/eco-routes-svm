@@ -38,5 +38,13 @@ pub struct IntentWithdrawn {
 #[derive(new)]
 pub struct IntentFulfilled {
     intent_hash: Bytes32,
-    claimant: Pubkey,
+    claimant: Bytes32,
+}
+
+#[event]
+#[derive(new)]
+pub struct IntentProven {
+    intent_hash: Bytes32,
+    source_chain: u64,
+    destination_chain: u64,
 }

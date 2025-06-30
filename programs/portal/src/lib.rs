@@ -41,4 +41,11 @@ pub mod portal {
     ) -> Result<()> {
         fulfill_intent(ctx, args)
     }
+
+    pub fn prove<'info>(
+        ctx: Context<'_, '_, '_, 'info, Prove<'info>>,
+        args: ProveArgs,
+    ) -> Result<()> {
+        prove_intent(ctx, args)
+    }
 }
