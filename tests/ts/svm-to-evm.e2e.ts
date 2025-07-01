@@ -36,13 +36,13 @@ const provider = new AnchorProvider(connection, new anchor.Wallet(creatorSvm), {
 const program = new Program(ecoRoutesIdl as anchor.Idl, provider) as Program<EcoRoutes>;
 
 const salt = (() => {
-    const bytes = anchorUtils.bytes.utf8.encode("svm-evm-e2e-unique-test-241".padEnd(32, "\0"));
+    const bytes = anchorUtils.bytes.utf8.encode("svm-eveg55s7sasamsms".padEnd(32, "\0"));
     return bytes.slice(0, 32);
 })();
 
 describe("SVM -> EVM e2e", () => {
     const saltHex = "0x" + Buffer.from(salt).toString("hex");
-    const deadline = 1756627873;
+    const deadline = 1796627873;
 
     let usdc: TestERC20;
     let inbox: Inbox;
@@ -304,7 +304,7 @@ describe("SVM -> EVM e2e", () => {
         const sourceChainProver = ethers.zeroPadValue(svmAddressToHex(ECO_ROUTES_ID_MAINNET), 32);
         const data = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes", "address"], [sourceChainProver, "0x", ethers.ZeroAddress]);
 
-        const requiredFee = await hyperProver.fetchFee(SOLANA_DOMAIN_ID, [intentHashHex], [ethers.ZeroAddress], data);
+        const requiredFee = await hyperProver.fetchFee(SOLANA_DOMAIN_ID, [intentHashHex], [ethers.zeroPadValue(ethers.ZeroAddress, 32)], data);
 
         // add 5% to the fee (to be safe)
         const buffer = requiredFee / BigInt(20) > ethers.parseEther("0.0005") ? requiredFee / BigInt(20) : ethers.parseEther("0.0005");
@@ -314,14 +314,13 @@ describe("SVM -> EVM e2e", () => {
             value: requiredFee + buffer,
         });
 
-        const fulfillTxReceipt = await fulfillTx.wait(3);
+        const fulfillTxReceipt = await fulfillTx.wait(5);
         console.log("Fulfill transaction hash:", fulfillTxReceipt.hash);
 
         const fulfilledMappingSlot = await inbox.fulfilled(intentHashHex);
         console.log("Fulfilled mapping result:", fulfilledMappingSlot);
     });
 
-    // TODO: un-skip when the EVM contract is updated
     it.skip("Claim intent on Solana", async () => {
         const intent = PublicKey.findProgramAddressSync([Buffer.from("intent"), intentHashBytes], program.programId)[0];
         const vault = PublicKey.findProgramAddressSync([Buffer.from("reward"), intentHashBytes, svmUsdcMint.toBytes()], program.programId)[0];

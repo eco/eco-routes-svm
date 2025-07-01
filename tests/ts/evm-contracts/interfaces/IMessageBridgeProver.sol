@@ -40,9 +40,9 @@ interface IMessageBridgeProver is IProver {
 
     /**
      * @notice Unauthorized incoming proof from source chain
-     * @param _sender Address that initiated the proof
+     * @param _sender Address that initiated the proof (as bytes32 for cross-VM compatibility)
      */
-    error UnauthorizedIncomingProof(address _sender);
+    error UnauthorizedIncomingProof(bytes32 _sender);
 
     /**
      * @notice Mailbox address cannot be zero
@@ -85,7 +85,7 @@ interface IMessageBridgeProver is IProver {
      * @notice Calculates the fee required for message dispatch
      * @param _sourceChainId Chain ID of source chain
      * @param _intentHashes Array of intent hashes to prove
-     * @param _claimants Array of claimant addresses
+     * @param _claimants Array of claimant bytes32
      * @param _data Additional data for message formatting.
      *        Specific format varies by implementation:
      *        - HyperProver: (bytes32 sourceChainProver, bytes metadata, address hookAddr, [uint256 gasLimitOverride])
@@ -95,7 +95,7 @@ interface IMessageBridgeProver is IProver {
     function fetchFee(
         uint256 _sourceChainId,
         bytes32[] calldata _intentHashes,
-        address[] calldata _claimants,
+        bytes32[] calldata _claimants,
         bytes calldata _data
     ) external view returns (uint256);
 }

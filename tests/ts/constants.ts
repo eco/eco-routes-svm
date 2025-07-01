@@ -8,26 +8,19 @@ export const SPL_NOOP_ID = new PublicKey("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjN
 export const EVM_DOMAIN_ID = 10; // optimism mainnet domaind id
 export const SOLANA_DOMAIN_ID = 1399811149; // solana mainnet domaind id
 export const DEVNET_RPC = "https://api.devnet.solana.com";
-export const MAINNET_RPC =
-	"https://mainnet.helius-rpc.com/?api-key=b274219f-935d-42c1-8209-efdbf2115ec3";
+export const MAINNET_RPC = "https://mainnet.helius-rpc.com/?api-key=b274219f-935d-42c1-8209-efdbf2115ec3";
 export const TESTNET_RPC = "https://api.testnet.solana.com";
 export const USDC_MINT = new PublicKey("2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH");
 export const USDC_DECIMALS = 6;
-export const SOLVER_PLACEHOLDER_PUBKEY = new PublicKey(
-	"So1ver1111111111111111111111111111111111111"
-);
+export const SOLVER_PLACEHOLDER_PUBKEY = new PublicKey("So1ver1111111111111111111111111111111111111");
 
 // EVM testnet contracts on Sepolia
-export const INTENT_SOURCE_ADDRESS_TESTNET =
-	"0xf784eCE056cb95CD486C7fBef218AE1a7a5dE27d".toLowerCase();
+export const INTENT_SOURCE_ADDRESS_TESTNET = "0xf784eCE056cb95CD486C7fBef218AE1a7a5dE27d".toLowerCase();
 export const INBOX_ADDRESS_TESTNET = "0xb5670A91Ab60c14231316b59f3c311A7Fd342eE8".toLowerCase();
-export const STORAGE_PROVER_ADDRESS_TESTNET =
-	"0x1947e422b769e0568b692096B06fd9C39E25150d".toLowerCase();
+export const STORAGE_PROVER_ADDRESS_TESTNET = "0x1947e422b769e0568b692096B06fd9C39E25150d".toLowerCase();
 export const TEST_USDC_ADDRESS_TESTNET = "0x72A0CE0Da1E62BAF7FBB48ea347EB038836D091a".toLowerCase();
 
-export const IGP_FEE_RECEIVER_TESTNET = new PublicKey(
-	"9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy"
-);
+export const IGP_FEE_RECEIVER_TESTNET = new PublicKey("9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy");
 export const IGP_PROGRAM_ID_TESTNET = new PublicKey("5p7Hii6CJL4xGBYYTGEQmH9LnUSZteFJUu9AVLDExZX2");
 
 // Solana mainnet IGP addresses
