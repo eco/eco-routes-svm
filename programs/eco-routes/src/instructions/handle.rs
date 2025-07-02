@@ -1,11 +1,19 @@
+use crate::{
+    encoding,
+    error::EcoRoutesError,
+    state::{EcoRoutes, Intent},
+};
 use anchor_lang::prelude::*;
-
-use crate::{encoding, error::EcoRoutesError, state::Intent};
 
 #[derive(Accounts)]
 pub struct Handle<'info> {
     #[account(address = expected_process_authority() @ EcoRoutesError::InvalidProcessAuthority)]
     pub prover_process_authority: Signer<'info>,
+
+    #[account(
+        address = EcoRoutes::pda().0 @ EcoRoutesError::InvalidEcoRoutes,
+    )]
+    pub eco_routes: Account<'info, EcoRoutes>,
 }
 
 pub fn expected_process_authority() -> Pubkey {
@@ -29,14 +37,24 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
     payload: Vec<u8>,
 ) -> Result<()> {
     let fulfill_messages = encoding::FulfillMessages::decode(&payload)?;
-    let accounts: Vec<_> = ctx.remaining_accounts.iter().collect();
 
     require!(
-        fulfill_messages.len() == accounts.len(),
-        EcoRoutesError::InvalidFulfillMessage
+        ctx.accounts.eco_routes.prover == sender,
+        EcoRoutesError::InvalidSender
     );
 
-    for ((intent_hash, solver), account) in fulfill_messages.iter().zip(accounts) {
+    let intent_account_infos: Vec<_> = ctx.remaining_accounts.iter().collect();
+
+    require!(
+        fulfill_messages.intent_hashes().len() == fulfill_messages.claimants().len(),
+        EcoRoutesError::InvalidHandlePayload
+    );
+    require!(
+        fulfill_messages.intent_hashes().len() == intent_account_infos.len(),
+        EcoRoutesError::InvalidHandlePayload
+    );
+
+    for ((intent_hash, claimant), account) in fulfill_messages.iter().zip(intent_account_infos) {
         require_keys_eq!(
             account.key(),
             Intent::pda(*intent_hash).0,
@@ -46,13 +64,12 @@ pub fn handle<'a, 'b, 'c: 'info, 'info>(
 
         let mut intent: Account<Intent> = Account::try_from(account)?;
 
-        require!(intent.route.inbox == sender, EcoRoutesError::InvalidSender);
         require!(
             intent.route.destination_domain_id == origin,
             EcoRoutesError::InvalidOrigin
         );
 
-        intent.fulfill(*solver)?;
+        intent.fulfill(*claimant)?;
         intent.exit(ctx.program_id)?;
     }
 

@@ -54,6 +54,7 @@ impl SvmCallDataWithAccountMetas {
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct FulfillIntentArgs {
     pub intent_hash: [u8; 32],
+    pub claimant: [u8; 32],
     pub route: Route,
     pub reward: Reward,
 }
@@ -168,7 +169,21 @@ pub fn fulfill_intent<'info>(
         ctx.bumps.intent_fulfillment_marker,
     );
 
-    hyperlane::dispatch_fulfillment_message(&ctx, &route, &reward, &intent_hash, solver)
+    hyperlane::dispatch_fulfillment_message(
+        &route,
+        &reward,
+        &intent_hash,
+        args.claimant,
+        &ctx.accounts.mailbox_program,
+        &ctx.accounts.outbox_pda,
+        &ctx.accounts.dispatch_authority,
+        &ctx.accounts.spl_noop_program,
+        &ctx.accounts.payer,
+        &ctx.accounts.unique_message,
+        &ctx.accounts.system_program,
+        &ctx.accounts.dispatched_message_pda,
+        ctx.bumps.dispatch_authority,
+    )
 }
 
 fn transfer_route_tokens<'info>(
@@ -339,7 +354,7 @@ fn actual_account_meta(account: &AccountInfo, route_salt: [u8; 32]) -> AccountMe
 }
 
 fn validate_intent_hash(route: &Route, reward: &Reward, expected: &[u8; 32]) -> Result<()> {
-    let hash = encoding::intent_hash(route, reward);
+    let hash = encoding::get_intent_hash(route, reward);
     require!(hash == *expected, EcoRoutesError::InvalidIntent);
 
     Ok(())

@@ -1,6 +1,7 @@
+use crate::hyperlane::SimulationReturnData;
 use anchor_lang::prelude::*;
 
-declare_id!("J1Lfg3UWyGR1Z7BrBtjHFthxTVstGigLvAJ1wr9uSvRz");
+declare_id!("a6BKzp2ixm6ogEJ268UT4UGFMLnsgPWnVm93vsjupc3");
 
 pub mod encoding;
 pub mod error;
@@ -12,11 +13,28 @@ use instructions::*;
 
 #[program]
 pub mod eco_routes {
-
     use super::*;
 
     pub fn publish_intent(ctx: Context<PublishIntent>, args: PublishIntentArgs) -> Result<()> {
         instructions::publish_intent(ctx, args)
+    }
+
+    pub fn initialize_eco_routes(
+        ctx: Context<InitializeEcoRoutes>,
+        args: InitializeEcoRoutesArgs,
+    ) -> Result<()> {
+        instructions::initialize_eco_routes(ctx, args)
+    }
+
+    pub fn set_authority(ctx: Context<SetAuthority>) -> Result<()> {
+        instructions::set_authority(ctx)
+    }
+
+    pub fn set_authorized_prover(
+        ctx: Context<SetAuthorizedProver>,
+        args: SetAuthorizedProverArgs,
+    ) -> Result<()> {
+        instructions::set_authorized_prover(ctx, args)
     }
 
     pub fn fund_intent_spl(ctx: Context<FundIntentSpl>, args: FundIntentSplArgs) -> Result<()> {
@@ -60,7 +78,7 @@ pub mod eco_routes {
         _origin: u32,
         _sender: [u8; 32],
         payload: Vec<u8>,
-    ) -> Result<()> {
+    ) -> Result<SimulationReturnData<Vec<SerializableAccountMeta>>> {
         instructions::handle_account_metas(ctx, _origin, _sender, payload)
     }
 
@@ -70,7 +88,9 @@ pub mod eco_routes {
     }
 
     #[instruction(discriminator = &hyperlane::INTERCHAIN_SECURITY_MODULE_ACCOUNT_METAS_DISCRIMINATOR)]
-    pub fn ism_account_metas(ctx: Context<IsmAccountMetas>) -> Result<()> {
+    pub fn ism_account_metas(
+        ctx: Context<IsmAccountMetas>,
+    ) -> Result<SimulationReturnData<Vec<SerializableAccountMeta>>> {
         instructions::ism_account_metas(ctx)
     }
 

@@ -1,20 +1,11 @@
-use anchor_lang::{require, Result};
-use derive_more::Deref;
-use ethabi::{decode, encode, ParamType, Token};
-use tiny_keccak::{Hasher, Keccak};
-
 use crate::{
     error::EcoRoutesError,
     state::{Reward, Route, TokenAmount},
 };
-
-#[inline(always)]
-fn as_bytes32(token: &Token) -> Option<[u8; 32]> {
-    match token {
-        Token::FixedBytes(bytes) => bytes.as_slice().try_into().ok(),
-        _ => None,
-    }
-}
+use anchor_lang::{require, Result};
+use derive_more::Deref;
+use ethabi::{decode, encode, ParamType, Token};
+use tiny_keccak::{Hasher, Keccak};
 
 #[inline(always)]
 fn u256_be(v: u64) -> [u8; 32] {
@@ -74,18 +65,60 @@ pub fn hash_route(route: &Route) -> [u8; 32] {
     // Tail: start with tokens_tail
     let mut tail = tokens_tail;
 
-    // Now build “calls_tail.” Even if calls.len() == 0, we must emit the 32-byte length = 0.
-    let mut calls_tail = Vec::new();
-    calls_tail.extend_from_slice(&u256_be(route.calls.len() as u64)); // calls length
-
-    // If there were any calls, each call would be encoded as a tuple:
-    //    [destination (bytes32)]
-    //    [offset_to_dynamic_bytes (uint256) : always "32" within the tuple]
-    //    [value (uint256)]
-    //    [ dynamic_bytes: length + padded data ]
+    // ---------------------------------------------------------------
+    // Build “calls_tail”.
     //
-    // Since our fixture’s calls == empty, we’ll never actually push bytes here. But
-    // we still wrote calls_tail.extend_from_slice(&u256_be(0)) above for length.
+    // ABI layout for (bytes32,bytes,uint256)[]:
+    //   calls_tail :=
+    //     [ length ]                         -- 32 bytes
+    //     [ offset_0 ] … [ offset_{n-1} ]    -- n * 32
+    //     tuple_0 | tuple_1 | … | tuple_{n-1}
+    //
+    //   tuple_i :=
+    //     [ destination ]                    -- bytes32
+    //     [ 0x60 ]                           -- offset to calldata inside tuple (= 96)
+    //     [ value ]                          -- uint256 (always 0)
+    //     [ calldata_len ]                   -- uint256
+    //     [ calldata bytes ] + padding
+    // ---------------------------------------------------------------
+    let mut calls_tail = Vec::new();
+    let n_calls = route.calls.len();
+    calls_tail.extend_from_slice(&u256_be(n_calls as u64)); // array length
+
+    if n_calls > 0 {
+        // first collect each tuple’s encoded bytes so we know their sizes
+        let mut tuples = Vec::new();
+        for call in &route.calls {
+            // head (destination, offset-to-bytes, value)
+            let mut tup = Vec::with_capacity(96);
+            tup.extend_from_slice(&call.destination); // bytes32
+            tup.extend_from_slice(&u256_be(96)); // offset to bytes
+            tup.extend_from_slice(&u256_be(0)); // value == 0
+
+            // dynamic bytes
+            let len = call.calldata.len();
+            tup.extend_from_slice(&u256_be(len as u64)); // bytes length
+            tup.extend_from_slice(&call.calldata); // bytes payload
+            let pad = (32 - (len % 32)) % 32; // right-pad to 32-byte boundary
+            tup.extend(std::iter::repeat(0u8).take(pad));
+
+            tuples.push(tup);
+        }
+
+        // compute offsets
+        let head_size = n_calls * 32;
+        let mut running_size = 0usize;
+        for tup in &tuples {
+            let offset = head_size + running_size;
+            calls_tail.extend_from_slice(&u256_be(offset as u64)); // offset_i
+            running_size += tup.len();
+        }
+
+        // append the tuples themselves
+        for tup in tuples {
+            calls_tail.extend_from_slice(&tup);
+        }
+    }
 
     // Append calls_tail (which is just the 32-byte zero length) to tail.
     tail.extend_from_slice(&calls_tail);
@@ -103,10 +136,9 @@ pub fn hash_route(route: &Route) -> [u8; 32] {
     // Keccak256 of that:
     let mut hasher = Keccak::v256();
     hasher.update(&full);
-    let mut hash = [0u8; 32];
-    hasher.finalize(&mut hash);
-
-    hash
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
 }
 
 /// Mirrors: keccak256( abi.encode(
@@ -156,59 +188,68 @@ pub fn hash_reward(r: &Reward) -> [u8; 32] {
 
     let mut hasher = Keccak::v256();
     hasher.update(&full);
-    let mut hash = [0u8; 32];
-    hasher.finalize(&mut hash);
-
-    hash
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
 }
 
-pub fn intent_hash(route: &Route, reward: &Reward) -> [u8; 32] {
+// intent = keccak256( routeHash | rewardHash )
+pub fn get_intent_hash(route: &Route, reward: &Reward) -> [u8; 32] {
+    let rh = hash_route(route);
+    let rwd = hash_reward(reward);
     let mut hasher = Keccak::v256();
+    hasher.update(&rh);
+    hasher.update(&rwd);
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
+}
 
-    let route_hash = hash_route(route);
-    let reward_hash = hash_reward(reward);
-
-    hasher.update(&route_hash);
-    hasher.update(&reward_hash);
-    let mut hash = [0u8; 32];
-    hasher.finalize(&mut hash);
-
-    hash
+#[inline(always)]
+fn as_bytes32(token: &Token) -> Option<[u8; 32]> {
+    if let Token::FixedBytes(bytes) = token {
+        if bytes.len() == 32 {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(bytes);
+            return Some(out);
+        }
+    }
+    None
 }
 
 #[derive(Deref)]
 pub struct FulfillMessages(Vec<([u8; 32], [u8; 32])>);
 
 impl FulfillMessages {
-    pub fn new(intent_hashes: Vec<[u8; 32]>, solvers: Vec<[u8; 32]>) -> Result<Self> {
+    pub fn new(intent_hashes: Vec<[u8; 32]>, claimants: Vec<[u8; 32]>) -> Result<Self> {
         require!(
-            intent_hashes.len() == solvers.len(),
+            intent_hashes.len() == claimants.len(),
             EcoRoutesError::InvalidFulfillMessage
         );
 
-        Ok(Self(intent_hashes.into_iter().zip(solvers).collect()))
+        Ok(Self(intent_hashes.into_iter().zip(claimants).collect()))
     }
 
     pub fn intent_hashes(&self) -> Vec<[u8; 32]> {
         self.iter().map(|(intent_hash, _)| *intent_hash).collect()
     }
 
-    pub fn solvers(&self) -> Vec<[u8; 32]> {
-        self.iter().map(|(_, solver)| *solver).collect()
+    pub fn claimants(&self) -> Vec<[u8; 32]> {
+        self.iter().map(|(_, claimant)| *claimant).collect()
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let (intent_hashes, solvers) = self
+        let (intent_hashes, claimants) = self
             .iter()
-            .map(|(intent_hash, solver)| {
+            .map(|(intent_hash, claimant)| {
                 (
                     Token::FixedBytes(intent_hash.to_vec()),
-                    Token::FixedBytes(solver.to_vec()),
+                    Token::FixedBytes(claimant.to_vec()),
                 )
             })
             .unzip();
 
-        encode(&[Token::Array(intent_hashes), Token::Array(solvers)])
+        encode(&[Token::Array(intent_hashes), Token::Array(claimants)])
     }
 
     pub fn decode(data: &[u8]) -> Result<Self> {
@@ -221,14 +262,14 @@ impl FulfillMessages {
             decode(&schema_fixed, data).map_err(|_| EcoRoutesError::InvalidFulfillMessage)?;
 
         match &tokens[..] {
-            [Token::Array(intent_hashes), Token::Array(solvers)] => {
+            [Token::Array(intent_hashes), Token::Array(claimants)] => {
                 let intent_hashes = intent_hashes
                     .iter()
                     .filter_map(as_bytes32)
                     .collect::<Vec<_>>();
-                let solvers = solvers.iter().filter_map(as_bytes32).collect::<Vec<_>>();
+                let claimants = claimants.iter().filter_map(as_bytes32).collect::<Vec<_>>();
 
-                Self::new(intent_hashes, solvers)
+                Self::new(intent_hashes, claimants)
             }
             _ => Err(EcoRoutesError::InvalidFulfillMessage.into()),
         }
@@ -290,7 +331,7 @@ mod tests {
             }],
         };
 
-        let intent_hash = intent_hash(&route, &reward);
+        let intent_hash = get_intent_hash(&route, &reward);
         let route_hash = hash_route(&route);
         let reward_hash = hash_reward(&reward);
 

@@ -1,10 +1,9 @@
-use anchor_lang::{prelude::*, solana_program::program::set_return_data};
-use borsh::BorshSerialize;
-use std::iter;
-
-use crate::{encoding, state::Intent};
-
-use super::expected_process_authority;
+use crate::{
+    encoding,
+    hyperlane::SimulationReturnData,
+    state::{EcoRoutes, Intent},
+};
+use anchor_lang::prelude::*;
 
 #[derive(Debug, AnchorDeserialize, AnchorSerialize, Clone)]
 pub struct SerializableAccountMeta {
@@ -48,22 +47,18 @@ pub fn handle_account_metas(
     _origin: u32,
     _sender: [u8; 32],
     payload: Vec<u8>,
-) -> Result<()> {
+) -> Result<SimulationReturnData<Vec<SerializableAccountMeta>>> {
     let fulfill_messages = encoding::FulfillMessages::decode(&payload)?;
-    let account_metas: Vec<SerializableAccountMeta> = iter::once(AccountMeta::new_readonly(
-        expected_process_authority(),
-        true,
-    ))
-    .chain(
-        fulfill_messages
-            .intent_hashes()
-            .into_iter()
-            .map(|intent_hash| AccountMeta::new(Intent::pda(intent_hash).0, false)),
-    )
-    .map(Into::into)
-    .collect();
 
-    set_return_data(&account_metas.try_to_vec()?);
+    let metas: Vec<SerializableAccountMeta> =
+        std::iter::once(AccountMeta::new_readonly(EcoRoutes::pda().0, false).into())
+            .chain(
+                fulfill_messages
+                    .intent_hashes()
+                    .iter()
+                    .map(|hash| AccountMeta::new(Intent::pda(*hash).0, false).into()),
+            )
+            .collect();
 
-    Ok(())
+    Ok(SimulationReturnData::new(metas))
 }

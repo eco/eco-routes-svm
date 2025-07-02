@@ -1,0 +1,41 @@
+{
+  "name": "eco-tests",
+  "version": "0.1.0",
+  "description": "TypeScript E2E tests",
+  "private": true,
+  "license": "ISC",
+  "scripts": {
+    "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "test:evm-to-svm": "mocha -r ts-node/register --timeout 120000 \"evm-to-svm.e2e.ts\"",
+    "test:svm-to-evm": "mocha -r ts-node/register --timeout 120000 \"svm-to-evm.e2e.ts\""
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.31.1",
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.2",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@hyperlane-xyz/core": "7.1.8",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.2",
+    "@openzeppelin/contracts": "^5.0.1",
+    "@typechain/ethers-v6": "0.5.1",
+    "@typechain/hardhat": "9.1.0",
+    "@types/bn.js": "5.1.0",
+    "@types/chai": "5.2.2",
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.15.19",
+    "chai": "^4.3.4",
+    "dotenv": "^16.0.3",
+    "ethers": "^6.10.0",
+    "hardhat": "^2.25.0",
+    "mocha": "^11.4.0",
+    "or": "^0.2.0",
+    "prettier": "^2.6.2",
+    "ts-mocha": "^11.1.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^4.3.5"
+  }
+}

@@ -138,7 +138,7 @@ impl Context {
             self.get_sysvar(),
         )
         .unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let bump = Intent::pda(intent_hash).1;
 
         reward_tokens.iter().for_each(|token| {

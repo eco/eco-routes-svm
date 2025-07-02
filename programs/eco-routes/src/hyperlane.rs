@@ -9,11 +9,10 @@ use anchor_lang::{
 
 use crate::{
     encoding,
-    instructions::FulfillIntent,
     state::{Reward, Route},
 };
 
-pub const DOMAIN_ID: u32 = 1;
+pub const DOMAIN_ID: u32 = 1399811149;
 
 pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
 pub const MULTISIG_ISM_ID: Pubkey = pubkey!("TrustedRe1ayer1sm11111111111111111111111111");
@@ -55,33 +54,28 @@ struct OutboxDispatch {
 struct InboxProcess {}
 
 pub fn dispatch_fulfillment_message<'info>(
-    ctx: &Context<'_, '_, '_, 'info, FulfillIntent<'info>>,
     route: &Route,
     reward: &Reward,
     intent_hash: &[u8; 32],
-    solver: &Signer<'info>,
+    claimant: [u8; 32],
+    mailbox_program: &UncheckedAccount<'info>,
+    outbox_pda: &UncheckedAccount<'info>,
+    dispatch_authority: &UncheckedAccount<'info>,
+    spl_noop_program: &UncheckedAccount<'info>,
+    payer: &Signer<'info>,
+    unique_message: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    dispatched_message_pda: &UncheckedAccount<'info>,
+    dispatch_authority_bump: u8,
 ) -> Result<()> {
-    let mailbox_program = &ctx.accounts.mailbox_program;
-    let outbox_pda = &ctx.accounts.outbox_pda;
-    let dispatch_authority = &ctx.accounts.dispatch_authority;
-    let spl_noop_program = &ctx.accounts.spl_noop_program;
-    let payer = &ctx.accounts.payer;
-    let unique_message = &ctx.accounts.unique_message;
-    let system_program = &ctx.accounts.system_program;
-    let dispatched_message_pda = &ctx.accounts.dispatched_message_pda;
-    let dispatch_authority_bump = ctx.bumps.dispatch_authority;
-
     let outbox_dispatch = MailboxInstruction::OutboxDispatch(OutboxDispatch {
         sender: dispatch_authority.key(),
         // Domain id is flipped so the message sends back to the Intent's source chain, but hashes match
         destination_domain: route.source_domain_id,
         recipient: reward.prover,
-        message_body: encoding::FulfillMessages::new(
-            vec![*intent_hash],
-            vec![solver.key().to_bytes()],
-        )
-        .expect("fulfill messages must be valid with one intent hash and one solver")
-        .encode(),
+        message_body: encoding::FulfillMessages::new(vec![*intent_hash], vec![claimant])
+            .expect("fulfill messages must be valid with one intent hash and one solver")
+            .encode(),
     });
 
     let ix = Instruction {
@@ -113,4 +107,30 @@ pub fn dispatch_fulfillment_message<'info>(
     )?;
 
     Ok(())
+}
+
+/// NOTE: This is used for hyperlane interop only and should not be used anywhere else
+/// A ridiculous workaround for `<https://github.com/solana-labs/solana/issues/31391>`,
+/// which is a bug where if a simulated transaction's return data ends with zero byte(s),
+/// they end up being incorrectly truncated.
+/// As a workaround, we can (de)serialize data with a trailing non-zero byte.
+#[derive(Debug, AnchorSerialize, AnchorDeserialize)]
+pub struct SimulationReturnData<T>
+where
+    T: AnchorSerialize + AnchorDeserialize,
+{
+    pub return_data: T,
+    trailing_byte: u8,
+}
+
+impl<T> SimulationReturnData<T>
+where
+    T: AnchorSerialize + AnchorDeserialize,
+{
+    pub fn new(return_data: T) -> Self {
+        Self {
+            return_data,
+            trailing_byte: u8::MAX,
+        }
+    }
 }

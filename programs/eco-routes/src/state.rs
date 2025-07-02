@@ -8,6 +8,7 @@ pub const MAX_ROUTE_TOKENS: usize = 3;
 pub const MAX_REWARD_TOKENS: usize = 3;
 pub const MAX_CALLS: usize = 3;
 pub const MAX_CALLDATA_SIZE: usize = 256;
+pub const ECO_ROUTES_AUTHORITY: &str = "aEGzbWJhZ7RX8uCmeG4jVfskQe6eoP7zcdoHmY2PWys";
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
 #[repr(u8)]
@@ -18,7 +19,7 @@ pub enum IntentStatus {
     Claimed(bool, u8),
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct TokenAmount {
     pub token: [u8; 32],
     pub amount: u64,
@@ -49,7 +50,7 @@ fn validate_token_amounts(tokens: &[TokenAmount], max_len: usize) -> Result<()> 
     Ok(())
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct Call {
     pub destination: [u8; 32],
     #[max_len(MAX_CALLDATA_SIZE)]
@@ -74,7 +75,7 @@ fn validate_calls(calls: &[Call], max_len: usize) -> Result<()> {
     Ok(())
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct Route {
     pub salt: [u8; 32],
     pub source_domain_id: u32,
@@ -108,7 +109,7 @@ impl Route {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, PartialEq, Eq, Debug, InitSpace, Default)]
 pub struct Reward {
     pub creator: Pubkey,
     #[max_len(MAX_REWARD_TOKENS)]
@@ -156,7 +157,7 @@ pub struct Intent {
 impl Intent {
     pub fn new(intent_hash: [u8; 32], route: Route, reward: Reward, bump: u8) -> Result<Self> {
         require!(
-            intent_hash == encoding::intent_hash(&route, &reward),
+            intent_hash == encoding::get_intent_hash(&route, &reward),
             EcoRoutesError::InvalidIntentHash
         );
 
@@ -315,6 +316,40 @@ impl IntentFulfillmentMarker {
             &[b"intent_fulfillment_marker", intent_hash.as_ref()],
             &crate::ID,
         )
+    }
+}
+
+#[account]
+#[derive(PartialEq, Eq, Debug, InitSpace)]
+pub struct EcoRoutes {
+    pub authority: Pubkey,
+    pub prover: [u8; 32],
+    pub bump: u8,
+}
+
+impl EcoRoutes {
+    pub fn new(authority: Pubkey, prover: [u8; 32], bump: u8) -> Self {
+        Self {
+            authority,
+            prover,
+            bump,
+        }
+    }
+
+    pub fn set_authority(&mut self, new_authority: Pubkey) -> Result<()> {
+        self.authority = new_authority;
+
+        Ok(())
+    }
+
+    pub fn set_authorized_prover(&mut self, new_prover: [u8; 32]) -> Result<()> {
+        self.prover = new_prover;
+
+        Ok(())
+    }
+
+    pub fn pda() -> (Pubkey, u8) {
+        Pubkey::find_program_address(&[b"eco_routes"], &crate::ID)
     }
 }
 
@@ -609,7 +644,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let bump = 123;
 
         let intent = Intent::new(intent_hash, route.clone(), reward.clone(), bump).unwrap();
@@ -751,7 +786,7 @@ mod tests {
             unix_timestamp: deadline - 100,
         };
         let reward = Reward::new(reward_tokens, creator, 50, deadline, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         let clock = Clock {
@@ -815,7 +850,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         assert_eq!(intent.status, IntentStatus::Funding(false, 0));
@@ -860,7 +895,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Funded;
@@ -915,7 +950,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         assert_eq!(intent.status, IntentStatus::Funding(false, 0));
@@ -967,7 +1002,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Funded;
@@ -1016,7 +1051,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         assert_eq!(
@@ -1052,7 +1087,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let clock = Clock {
             slot: 200,
@@ -1098,7 +1133,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let not_expired_clock = Clock {
             slot: 150,
@@ -1142,7 +1177,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let clock = Clock {
             slot: 200,
@@ -1204,7 +1239,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let clock = Clock {
             slot: 200,
@@ -1254,7 +1289,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let not_expired_clock = Clock {
             slot: 150,
@@ -1300,7 +1335,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let clock = Clock {
             slot: 200,
@@ -1356,7 +1391,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let clock = Clock {
             slot: 200,
@@ -1400,7 +1435,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Claimed(false, 0);
@@ -1439,7 +1474,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Funding(false, 0);
@@ -1494,7 +1529,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Claimed(false, 0);
@@ -1537,7 +1572,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Funding(false, 0);
@@ -1586,7 +1621,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
 
         intent.status = IntentStatus::Fulfilled;
@@ -1623,7 +1658,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let solver = [42; 32];
 
@@ -1666,7 +1701,7 @@ mod tests {
             unix_timestamp: 1609459200,
         };
         let reward = Reward::new(reward_tokens, creator, 50, 1609459300, clock).unwrap();
-        let intent_hash = encoding::intent_hash(&route, &reward);
+        let intent_hash = encoding::get_intent_hash(&route, &reward);
         let mut intent = Intent::new(intent_hash, route, reward, 123).unwrap();
         let solver = [42; 32];
 

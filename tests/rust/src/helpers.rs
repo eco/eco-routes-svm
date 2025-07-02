@@ -1,5 +1,6 @@
 use anchor_lang::{AnchorDeserialize, AnchorSerialize, Discriminator};
 use anyhow::Result;
+use eco_routes::state::EcoRoutes;
 use litesvm::LiteSVM;
 use rand::Rng;
 use solana_sdk::{account::Account, clock::Clock, pubkey::Pubkey};
@@ -9,7 +10,7 @@ pub fn sol_amount(amount: f64) -> u64 {
 }
 
 pub fn usdc_amount(amount: f64) -> u64 {
-    (amount * 10.0_f64.powf(usdc_decimals() as f64)) as u64
+    (amount * usdc_decimals() as f64 * 10.0) as u64
 }
 
 pub fn usdc_decimals() -> u8 {
@@ -67,6 +68,20 @@ pub fn write_account_anchor_re<T: AnchorSerialize>(
         },
     )?;
     Ok(())
+}
+
+pub fn write_eco_routes_pda(
+    svm: &mut LiteSVM,
+    authority: Pubkey,
+    prover: [u8; 32],
+) -> anyhow::Result<()> {
+    let (pda, bump) = Pubkey::find_program_address(&[b"eco_routes"], &eco_routes::ID);
+
+    let state = EcoRoutes::new(authority, prover, bump);
+    let mut data = EcoRoutes::DISCRIMINATOR.to_vec();
+    data.extend(state.try_to_vec()?);
+
+    write_account_re(svm, pda, eco_routes::ID, data)
 }
 
 pub fn read_account_lamports(svm: &LiteSVM, pubkey: &Pubkey) -> Result<u64> {

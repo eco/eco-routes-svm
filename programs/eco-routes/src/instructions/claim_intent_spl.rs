@@ -18,7 +18,7 @@ pub struct ClaimIntentSpl<'info> {
         mut,
         seeds = [b"intent", args.intent_hash.as_ref()],
         bump = intent.bump,
-        constraint = matches!(intent.status, IntentStatus::Fulfilled | IntentStatus::Claimed(_, _)) @ EcoRoutesError::NotClaimable,
+        constraint = matches!(intent.status, IntentStatus::Fulfilled | IntentStatus::Claimed(_, _)) @ EcoRoutesError::NotInFundingPhase,
     )]
     pub intent: Account<'info, Intent>,
 
