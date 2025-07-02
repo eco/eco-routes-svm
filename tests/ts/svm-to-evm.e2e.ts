@@ -43,6 +43,9 @@ const salt = (() => {
 describe("SVM -> EVM e2e", () => {
     const saltHex = "0x" + Buffer.from(salt).toString("hex");
     const deadline = 1796627873;
+    const routeTokenAmount = 2;
+    const rewardSplTokenAmount = 2;
+    const rewardSolTokenAmount = 0.015;
 
     let usdc: TestERC20;
     let inbox: Inbox;
@@ -70,7 +73,7 @@ describe("SVM -> EVM e2e", () => {
         inbox = Inbox__factory.connect(INBOX_ADDRESS, solverEvm);
         hyperProver = HyperProver__factory.connect(HYPER_PROVER_ADDRESS, solverEvm);
 
-        const evmCallTransferAmount = BigInt(usdcAmount(2));
+        const evmCallTransferAmount = BigInt(usdcAmount(routeTokenAmount));
         evmTransferCalldata = encodeTransfer(await userEvm.getAddress(), Number(evmCallTransferAmount));
         const transferUsdcEvmCall = {
             target: USDC_ADDRESS_MAINNET,
@@ -81,14 +84,14 @@ describe("SVM -> EVM e2e", () => {
         const routeTokens = [
             {
                 token: USDC_ADDRESS_MAINNET,
-                amount: BigInt(usdcAmount(2)),
+                amount: BigInt(usdcAmount(routeTokenAmount)),
             },
         ];
 
         const rewardTokens = [
             {
                 token: svmAddressToHex(svmUsdcMint),
-                amount: BigInt(usdcAmount(2)),
+                amount: BigInt(usdcAmount(rewardSplTokenAmount)),
             },
         ];
 
@@ -123,7 +126,7 @@ describe("SVM -> EVM e2e", () => {
             creator: svmAddressToHex(creatorSvm.publicKey),
             prover: svmAddressToHex(ECO_ROUTES_ID_MAINNET),
             deadline: BigInt(deadline),
-            nativeValue: BigInt(0.015 * LAMPORTS_PER_SOL),
+            nativeValue: BigInt(rewardSolTokenAmount * LAMPORTS_PER_SOL),
             tokens: rewardTokens,
         };
 
@@ -163,14 +166,14 @@ describe("SVM -> EVM e2e", () => {
         const routeSolTokenArg = [
             {
                 token: hex32ToNums(addressToBytes32Hex(USDC_ADDRESS_MAINNET)),
-                amount: new BN(usdcAmount(2)),
+                amount: new BN(usdcAmount(routeTokenAmount)),
             },
         ];
 
         const rewardSolTokenArg = [
             {
                 token: Array.from(svmUsdcMint.toBytes()),
-                amount: new BN(usdcAmount(2)),
+                amount: new BN(usdcAmount(rewardSplTokenAmount)),
             },
         ];
 
@@ -184,7 +187,7 @@ describe("SVM -> EVM e2e", () => {
         ];
 
         const routeSol = {
-            salt: Array.from(Buffer.from(saltHex.slice(2), "hex")),
+            salt: Array.from(salt),
             sourceDomainId: SOLANA_DOMAIN_ID,
             destinationDomainId: EVM_DOMAIN_ID,
             inbox: hex32ToNums(addressToBytes32Hex(INBOX_ADDRESS)),
@@ -196,7 +199,7 @@ describe("SVM -> EVM e2e", () => {
             creator: creatorSvm.publicKey,
             prover: Array.from(ECO_ROUTES_ID_MAINNET.toBytes()),
             tokens: rewardSolTokenArg,
-            nativeAmount: new BN(0.015 * LAMPORTS_PER_SOL),
+            nativeAmount: new BN(rewardSolTokenAmount * LAMPORTS_PER_SOL),
             deadline: new BN(reward.deadline.toString()),
         };
 

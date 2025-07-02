@@ -64,7 +64,9 @@ const salt = (() => {
 describe("EVM → SVM e2e", () => {
     const deadline = 211160000;
     const saltHex = "0x" + Buffer.from(salt).toString("hex");
-    const nativeRewardWei = ethers.parseEther("0.0001"); // 1 * 10^14 wei = 0.0001 ETH
+    const routeTokenAmount = 1;
+    const rewardTokenAmount = 1;
+    const rewardNativeWei = ethers.parseEther("0.0001"); // 1 * 10^14 wei = 0.0001 ETH
 
     let intentSource: IntentSource;
     let usdc: TestERC20;
@@ -96,7 +98,7 @@ describe("EVM → SVM e2e", () => {
             svmUsdcMint,
             testReceiverAta,
             executionAuthority,
-            usdcAmount(1),
+            usdcAmount(routeTokenAmount),
             USDC_DECIMALS,
             undefined,
             TOKEN_2022_PROGRAM_ID
@@ -120,7 +122,7 @@ describe("EVM → SVM e2e", () => {
         const routeTokens = [
             {
                 token: svmAddressToHex(svmUsdcMint),
-                amount: BigInt(usdcAmount(1)),
+                amount: BigInt(usdcAmount(routeTokenAmount)),
             },
         ];
 
@@ -145,11 +147,11 @@ describe("EVM → SVM e2e", () => {
             creator: addressToBytes32Hex(await creatorEvm.getAddress()),
             prover: addressToBytes32Hex(HYPER_PROVER_ADDRESS),
             deadline: BigInt(deadline),
-            nativeValue: nativeRewardWei,
+            nativeValue: rewardNativeWei,
             tokens: [
                 {
                     token: addressToBytes32Hex(USDC_ADDRESS_MAINNET),
-                    amount: BigInt(usdcAmount(1)),
+                    amount: BigInt(usdcAmount(rewardTokenAmount)),
                 },
             ],
         };
@@ -175,7 +177,7 @@ describe("EVM → SVM e2e", () => {
 
         const publishTx = await intentSource[
             "publishAndFund(((bytes32,uint256,uint256,bytes32,(bytes32,uint256)[],(bytes32,bytes,uint256)[]),(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[])),bool)"
-        ]({ route, reward }, false, { value: nativeRewardWei });
+        ]({ route, reward }, false, { value: rewardNativeWei });
         const publishTxReceipt = await publishTx.wait(5);
 
         console.log("Publish Intent EVM transaction hash: ", publishTxReceipt.hash);
@@ -225,7 +227,7 @@ describe("EVM → SVM e2e", () => {
         const routeSolTokenArg = [
             {
                 token: Array.from(svmUsdcMint.toBytes()),
-                amount: new BN(usdcAmount(1)),
+                amount: new BN(usdcAmount(routeTokenAmount)),
             },
         ];
         const lightTransferCheckedSvmCall = wrapIxHeaderOnly(transferTokenIx);
@@ -251,10 +253,10 @@ describe("EVM → SVM e2e", () => {
             tokens: [
                 {
                     token: hex32ToNums(addressToBytes32Hex(USDC_ADDRESS_MAINNET)),
-                    amount: new BN(usdcAmount(1)),
+                    amount: new BN(usdcAmount(rewardTokenAmount)),
                 },
             ],
-            nativeAmount: new BN(nativeRewardWei.toString()),
+            nativeAmount: new BN(rewardNativeWei.toString()),
             deadline: new BN(deadline),
         };
 
