@@ -36,7 +36,9 @@ const provider = new AnchorProvider(connection, new anchor.Wallet(creatorSvm), {
 const program = new Program(ecoRoutesIdl as anchor.Idl, provider) as Program<EcoRoutes>;
 
 const salt = (() => {
-    const bytes = anchorUtils.bytes.utf8.encode("svm-to-evm-test-251".padEnd(32, "\0"));
+    // Use timestamp as salt to avoid account conflicts while being reproducible
+    const timestamp = Date.now().toString();
+    const bytes = anchorUtils.bytes.utf8.encode(timestamp.padEnd(32, "\0"));
     return bytes.slice(0, 32);
 })();
 
@@ -301,7 +303,7 @@ describe("SVM -> EVM e2e", () => {
     });
 
     it("Fulfill intent on EVM", async () => {
-        const usdcApproveTx = await usdc.connect(solverEvm).approve(INBOX_ADDRESS, usdcAmount(10));
+        const usdcApproveTx = await usdc.connect(solverEvm).approve(INBOX_ADDRESS, usdcAmount(routeTokenAmount));
         await usdcApproveTx.wait(5);
 
         const sourceChainProver = svmAddressToHex(ECO_ROUTES_ID_MAINNET);

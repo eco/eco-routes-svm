@@ -57,7 +57,9 @@ let route!: Route;
 let reward!: Reward;
 
 const salt = (() => {
-    const bytes = anchorUtils.bytes.utf8.encode("evm-svm-e2e-unique-test-12552".padEnd(32, "\0"));
+    // Use timestamp as salt to avoid account conflicts while being reproducible
+    const timestamp = Date.now().toString();
+    const bytes = anchorUtils.bytes.utf8.encode(timestamp.padEnd(32, "\0"));
     return bytes.slice(0, 32);
 })();
 
@@ -76,7 +78,7 @@ describe("EVM → SVM e2e", () => {
     let routeHashHex!: string;
     let l2Provider: ethers.JsonRpcProvider;
     let svmUsdcMint: PublicKey = USDC_MINT;
-    let testReceiver: PublicKey = new PublicKey("SDCcPraNtvK4XPk5XASqYExWyEPrH9YAnEwm6Hcuz3U");
+    let testReceiver: PublicKey = new PublicKey(process.env.SOLANA_TEST_RECEIVER!);
     let transferTokenIx: TransactionInstruction;
 
     before("Test setup", async () => {
