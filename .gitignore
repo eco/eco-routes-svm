@@ -11,3 +11,4 @@ test-ledger
 **/evm-artifacts
 **/evm-types
 **/.env
+CLAUDE.md

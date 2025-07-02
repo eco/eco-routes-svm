@@ -1,6 +1,12 @@
 [workspace]
-members = ["programs/*", "tests/rust"]
+members = ["integration-tests", "packages/*", "programs/*", "tests/rust"]
 resolver = "2"
+
+[workspace.dependencies]
+dummy-ism = { path = "programs/dummy-ism" }
+eco-svm-std = { path = "packages/eco-svm-std" }
+hyper-prover = { path = "programs/hyper-prover" }
+portal = { path = "programs/portal" }
 
 [profile.release]
 overflow-checks = true

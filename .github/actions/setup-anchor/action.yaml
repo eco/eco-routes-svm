@@ -1,0 +1,83 @@
+name: 'Setup Anchor'
+description: 'Install Solana CLI and Anchor CLI with caching'
+inputs:
+  anchor-version:
+    description: 'Anchor CLI version to install'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache Solana installation
+      id: cache-solana
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/solana
+          ~/.local/share/solana
+        key: solana-stable-${{ runner.os }}
+
+    - name: Install Solana CLI
+      if: steps.cache-solana.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
+        echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+    - name: Add Solana to PATH
+      if: steps.cache-solana.outputs.cache-hit == 'true'
+      shell: bash
+      run: echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+    - name: Cache Anchor installation
+      id: cache-anchor
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.avm
+          ~/.cargo/bin/anchor
+          ~/.cargo/bin/avm
+        key: anchor-${{ inputs.anchor-version }}-${{ runner.os }}
+
+    - name: Install AVM (Anchor Version Manager)
+      if: steps.cache-anchor.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+        cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+
+    - name: Install Anchor CLI
+      if: steps.cache-anchor.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
+        avm install ${{ inputs.anchor-version }}
+        avm use ${{ inputs.anchor-version }}
+
+    - name: Add Anchor to PATH
+      shell: bash
+      run: |
+        echo "$HOME/.avm/bin" >> $GITHUB_PATH
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Set Anchor version (cached)
+      if: steps.cache-anchor.outputs.cache-hit == 'true'
+      shell: bash
+      run: |
+        export PATH="$HOME/.avm/bin:$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
+        avm use ${{ inputs.anchor-version }}
+
+    - name: Generate keypair for testing
+      shell: bash
+      run: |
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+        mkdir -p ~/.config/solana
+        solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
+        solana config set --url localhost
+
+    - name: Verify installations
+      shell: bash
+      run: |
+        export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.avm/bin:$PATH"
+        solana --version
+        anchor --version

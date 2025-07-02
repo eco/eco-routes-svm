@@ -6,14 +6,9 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-eco_routes = "J1Lfg3UWyGR1Z7BrBtjHFthxTVstGigLvAJ1wr9uSvRz"
-
-[programs.testnet]
-[programs.mainnet]
-eco_routes = "a6BKzp2ixm6ogEJ268UT4UGFMLnsgPWnVm93vsjupc3"
-
-[programs.devnet]
-eco_routes = "a8oJgxwLj5xH7HoYGePXfox9pE8MA5cM2sBo1KU2Wic"
+hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
+portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
+dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 
 [registry]
 url = "https://api.apr.dev"
@@ -23,4 +18,4 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "cargo test"
+test = "cargo test --no-fail-fast"

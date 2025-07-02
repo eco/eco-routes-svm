@@ -1,0 +1,18 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
+base64 = "0.22.1"
+derive_more = { version = "2.0.1", features = ["deref_mut"] }
+dummy-ism = { workspace = true }
+eco-svm-std = { workspace = true }
+hyper-prover = { workspace = true, features = ["no-entrypoint"] }
+litesvm = "0.6.1"
+portal = { workspace = true, features = ["no-entrypoint"] }
+rand = "0.9.1"
+solana-sdk = "2.2.1"
+spl-noop = { version = "1.0.0", features = ["no-entrypoint"] }

@@ -1,0 +1,15 @@
+[package]
+name = "eco-svm-std"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+mainnet = []
+
+[dependencies]
+anchor-lang = "0.31.1"
+derive-new = "0.7.0"
+derive_more = { version = "2.0.1", features = ["deref"] }
+
+[dev-dependencies]
+goldie = "0.5.0"

@@ -1,0 +1,92 @@
+name: PR checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  RUST_VERSION: "1.85.1"
+  ANCHOR_VERSION: "0.31.1"
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: nightly
+          components: rustfmt
+          cache-key-suffix: format
+
+      - name: Check Rust formatting
+        run: cargo +nightly fmt --all -- --check
+
+  import-sort:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: import-sort
+
+      - name: Install cargo-sort
+        run: |
+          if ! command -v cargo-sort &> /dev/null; then
+            cargo install cargo-sort
+          fi
+
+      - name: Check import sorting
+        run: cargo sort --workspace --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          components: clippy
+          cache-key-suffix: clippy
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+
+      - name: Build Anchor program
+        run: anchor build
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: test
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+
+      - name: Run Anchor tests
+        run: anchor test
