@@ -6,3 +6,8 @@ node_modules
 test-ledger
 .yarn
 .gitignore
+**/keys/*.json
+**/evm-cache
+**/evm-artifacts
+**/evm-types
+**/.env
