@@ -36,7 +36,7 @@ const provider = new AnchorProvider(connection, new anchor.Wallet(creatorSvm), {
 const program = new Program(ecoRoutesIdl as anchor.Idl, provider) as Program<EcoRoutes>;
 
 const salt = (() => {
-    const bytes = anchorUtils.bytes.utf8.encode("svm-eveg55s7sasamsms".padEnd(32, "\0"));
+    const bytes = anchorUtils.bytes.utf8.encode("svm-to-evm-test-251".padEnd(32, "\0"));
     return bytes.slice(0, 32);
 })();
 
@@ -299,18 +299,20 @@ describe("SVM -> EVM e2e", () => {
 
     it("Fulfill intent on EVM", async () => {
         const usdcApproveTx = await usdc.connect(solverEvm).approve(INBOX_ADDRESS, usdcAmount(10));
-        await usdcApproveTx.wait(10);
+        await usdcApproveTx.wait(5);
 
-        const sourceChainProver = ethers.zeroPadValue(svmAddressToHex(ECO_ROUTES_ID_MAINNET), 32);
+        const sourceChainProver = svmAddressToHex(ECO_ROUTES_ID_MAINNET);
+
         const data = ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes", "address"], [sourceChainProver, "0x", ethers.ZeroAddress]);
 
-        const requiredFee = await hyperProver.fetchFee(SOLANA_DOMAIN_ID, [intentHashHex], [ethers.zeroPadValue(ethers.ZeroAddress, 32)], data);
+        const svmClaimantBytes = svmAddressToHex(creatorSvm.publicKey);
+        const requiredFee = await hyperProver.fetchFee(SOLANA_DOMAIN_ID, [intentHashHex], [svmClaimantBytes], data);
 
         // add 5% to the fee (to be safe)
         const buffer = requiredFee / BigInt(20) > ethers.parseEther("0.0005") ? requiredFee / BigInt(20) : ethers.parseEther("0.0005");
 
-        const fulfillTx = await inbox.fulfillAndProve(route, rewardHashHex, svmAddressToHex(creatorSvm.publicKey), intentHashHex, HYPER_PROVER_ADDRESS, data, {
-            gasLimit: 900_000,
+        const fulfillTx = await inbox.fulfillAndProve(route, rewardHashHex, svmClaimantBytes, intentHashHex, HYPER_PROVER_ADDRESS, data, {
+            gasLimit: 600_000,
             value: requiredFee + buffer,
         });
 
@@ -321,9 +323,14 @@ describe("SVM -> EVM e2e", () => {
         console.log("Fulfilled mapping result:", fulfilledMappingSlot);
     });
 
-    it.skip("Claim intent on Solana", async () => {
+    it("Claim intent on Solana", async () => {
+        console.log("Waiting for the message to be delivered...");
+        await new Promise((resolve) => setTimeout(resolve, 35_000));
+
         const intent = PublicKey.findProgramAddressSync([Buffer.from("intent"), intentHashBytes], program.programId)[0];
         const vault = PublicKey.findProgramAddressSync([Buffer.from("reward"), intentHashBytes, svmUsdcMint.toBytes()], program.programId)[0];
+
+        const claimerTokenAccount = getAssociatedTokenAddressSync(svmUsdcMint, creatorSvm.publicKey, false, TOKEN_2022_PROGRAM_ID);
 
         const claimSplIx = await program.methods
             .claimIntentSpl({
@@ -336,9 +343,21 @@ describe("SVM -> EVM e2e", () => {
                 payer: creatorSvm.publicKey,
                 systemProgram: SystemProgram.programId,
                 vault,
-                claimerToken: getAssociatedTokenAddressSync(svmUsdcMint, creatorSvm.publicKey),
+                claimerToken: claimerTokenAccount,
                 mint: svmUsdcMint,
-                tokenProgram: TOKEN_PROGRAM_ID,
+                tokenProgram: TOKEN_2022_PROGRAM_ID,
+            })
+            .instruction();
+
+        const claimNativeIx = await program.methods
+            .claimIntentNative({
+                intentHash: Array.from(intentHashBytes),
+            })
+            .accountsStrict({
+                intent,
+                claimer: creatorSvm.publicKey,
+                payer: creatorSvm.publicKey,
+                systemProgram: SystemProgram.programId,
             })
             .instruction();
 
@@ -347,7 +366,7 @@ describe("SVM -> EVM e2e", () => {
             new TransactionMessage({
                 payerKey: creatorSvm.publicKey,
                 recentBlockhash: blockhash.blockhash,
-                instructions: [claimSplIx],
+                instructions: [claimSplIx, claimNativeIx],
             }).compileToV0Message()
         );
         claimIntentTx.sign([creatorSvm]);
@@ -361,6 +380,7 @@ describe("SVM -> EVM e2e", () => {
             },
             "confirmed"
         );
+        console.log("Claim Intent Rewards tx signature: ", claimIntentTxSignature);
 
         const intentAccount = await program.account.intent.fetch(intent);
         const claimed = intentAccount.status.claimed[0];

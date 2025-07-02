@@ -13,12 +13,12 @@ import { ethers, JsonRpcProvider } from "ethers";
   );
 
   console.log(
-    `Sending 0.002 ETH from ${await creator.getAddress()} → ${solverAddr}`
+    `Sending 0.001 ETH from ${await creator.getAddress()} → ${solverAddr}`
   );
 
   const tx = await creator.sendTransaction({
     to: solverAddr,
-    value: ethers.parseEther("0.002"),
+    value: ethers.parseEther("0.001"),
   });
   console.log(`Tx hash: ${tx.hash}`);
 

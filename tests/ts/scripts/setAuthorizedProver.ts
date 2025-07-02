@@ -16,7 +16,7 @@ import { HYPER_PROVER_ADDRESS, MAINNET_RPC } from "../constants";
 import { addressToBytes32Hex, hex32ToNums } from "../evmUtils";
 
 const authorityKp = loadKeypairFromFile(
-  "../../../keys/program_auth_mainnet.json"
+  "../../keys/program_auth_mainnet.json"
 );
 const connection = new Connection(MAINNET_RPC, "confirmed");
 const provider = new AnchorProvider(
