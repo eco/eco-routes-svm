@@ -8,8 +8,8 @@
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
     "generate-types": "typechain --target ethers-v6 --out-dir evm-types 'abis/*.json'",
-    "test:evm-to-svm": "npm run generate-types && ts-mocha --timeout 120000 \"evm-to-svm.e2e.ts\"",
-    "test:svm-to-evm": "npm run generate-types && ts-mocha --timeout 120000 \"svm-to-evm.e2e.ts\""
+    "test:evm-to-svm": "yarn generate-types && ts-mocha --timeout 120000 \"evm-to-svm.e2e.ts\"",
+    "test:svm-to-evm": "yarn generate-types && ts-mocha --timeout 120000 \"svm-to-evm.e2e.ts\""
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.31.1",
