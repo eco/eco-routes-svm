@@ -190,9 +190,7 @@ describe("SVM -> EVM e2e", () => {
 
         const routeSol = {
             salt: Array.from(salt),
-            sourceDomainId: SOLANA_DOMAIN_ID,
-            destinationDomainId: EVM_DOMAIN_ID,
-            inbox: hex32ToNums(addressToBytes32Hex(INBOX_ADDRESS)),
+            destinationChainPortal: hex32ToNums(addressToBytes32Hex(INBOX_ADDRESS)),
             tokens: routeSolTokenArg,
             calls: callsSol,
         };

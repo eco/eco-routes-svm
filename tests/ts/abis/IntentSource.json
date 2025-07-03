@@ -1,0 +1,441 @@
+[
+  {
+    "type": "function",
+    "name": "createIntent",
+    "inputs": [
+      {
+        "name": "route",
+        "type": "tuple",
+        "components": [
+          {"name": "salt", "type": "bytes32"},
+          {"name": "sourceDomainId", "type": "uint256"},
+          {"name": "destinationDomainId", "type": "uint256"},
+          {"name": "inbox", "type": "bytes32"},
+          {
+            "name": "tokens",
+            "type": "tuple[]",
+            "components": [
+              {"name": "token", "type": "bytes32"},
+              {"name": "amount", "type": "uint256"}
+            ]
+          },
+          {
+            "name": "calls",
+            "type": "tuple[]",
+            "components": [
+              {"name": "destination", "type": "bytes32"},
+              {"name": "calldata", "type": "bytes"},
+              {"name": "value", "type": "uint256"}
+            ]
+          }
+        ]
+      },
+      {
+        "name": "reward",
+        "type": "tuple",
+        "components": [
+          {"name": "creator", "type": "bytes32"},
+          {"name": "prover", "type": "bytes32"},
+          {"name": "deadline", "type": "uint256"},
+          {"name": "nativeValue", "type": "uint256"},
+          {
+            "name": "tokens",
+            "type": "tuple[]",
+            "components": [
+              {"name": "token", "type": "bytes32"},
+              {"name": "amount", "type": "uint256"}
+            ]
+          }
+        ]
+      },
+      {"name": "allowPartialFunding", "type": "bool"}
+    ],
+    "outputs": [
+      {"name": "intentHash", "type": "bytes32"},
+      {"name": "routeHash", "type": "bytes32"}
+    ],
+    "stateMutability": "payable"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "components": [
+              {
+                "internalType": "bytes32",
+                "name": "salt",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "uint256",
+                "name": "source",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "destination",
+                "type": "uint256"
+              },
+              {
+                "internalType": "address",
+                "name": "inbox",
+                "type": "address"
+              },
+              {
+                "components": [
+                  {
+                    "internalType": "address",
+                    "name": "token",
+                    "type": "address"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct TokenAmount[]",
+                "name": "tokens",
+                "type": "tuple[]"
+              },
+              {
+                "components": [
+                  {
+                    "internalType": "address",
+                    "name": "target",
+                    "type": "address"
+                  },
+                  {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "value",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct Call[]",
+                "name": "calls",
+                "type": "tuple[]"
+              }
+            ],
+            "internalType": "struct Route",
+            "name": "route",
+            "type": "tuple"
+          },
+          {
+            "components": [
+              {
+                "internalType": "address",
+                "name": "creator",
+                "type": "address"
+              },
+              {
+                "internalType": "address",
+                "name": "prover",
+                "type": "address"
+              },
+              {
+                "internalType": "uint256",
+                "name": "deadline",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "nativeValue",
+                "type": "uint256"
+              },
+              {
+                "components": [
+                  {
+                    "internalType": "address",
+                    "name": "token",
+                    "type": "address"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct TokenAmount[]",
+                "name": "tokens",
+                "type": "tuple[]"
+              }
+            ],
+            "internalType": "struct Reward",
+            "name": "reward",
+            "type": "tuple"
+          }
+        ],
+        "internalType": "struct Intent",
+        "name": "intent",
+        "type": "tuple"
+      },
+      {
+        "internalType": "bool",
+        "name": "allowPartial",
+        "type": "bool"
+      }
+    ],
+    "name": "publishAndFund",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "intentHash",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "payable",
+    "type": "function"
+  },
+  {
+    "type": "function",
+    "name": "withdrawRewards",
+    "inputs": [
+      {"name": "routeHash", "type": "bytes32"},
+      {
+        "name": "reward",
+        "type": "tuple",
+        "components": [
+          {"name": "creator", "type": "bytes32"},
+          {"name": "prover", "type": "bytes32"},
+          {"name": "deadline", "type": "uint256"},
+          {"name": "nativeValue", "type": "uint256"},
+          {
+            "name": "tokens",
+            "type": "tuple[]",
+            "components": [
+              {"name": "token", "type": "bytes32"},
+              {"name": "amount", "type": "uint256"}
+            ]
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "inputs": [
+      {
+        "components": [
+          {
+            "components": [
+              {
+                "internalType": "bytes32",
+                "name": "salt",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "uint256",
+                "name": "source",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "destination",
+                "type": "uint256"
+              },
+              {
+                "internalType": "bytes32",
+                "name": "inbox",
+                "type": "bytes32"
+              },
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "token",
+                    "type": "bytes32"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct TokenAmount[]",
+                "name": "tokens",
+                "type": "tuple[]"
+              },
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "target",
+                    "type": "bytes32"
+                  },
+                  {
+                    "internalType": "bytes",
+                    "name": "data",
+                    "type": "bytes"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "value",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct Call[]",
+                "name": "calls",
+                "type": "tuple[]"
+              }
+            ],
+            "internalType": "struct Route",
+            "name": "route",
+            "type": "tuple"
+          },
+          {
+            "components": [
+              {
+                "internalType": "bytes32",
+                "name": "creator",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "bytes32",
+                "name": "prover",
+                "type": "bytes32"
+              },
+              {
+                "internalType": "uint256",
+                "name": "deadline",
+                "type": "uint256"
+              },
+              {
+                "internalType": "uint256",
+                "name": "nativeValue",
+                "type": "uint256"
+              },
+              {
+                "components": [
+                  {
+                    "internalType": "bytes32",
+                    "name": "token",
+                    "type": "bytes32"
+                  },
+                  {
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                  }
+                ],
+                "internalType": "struct TokenAmount[]",
+                "name": "tokens",
+                "type": "tuple[]"
+              }
+            ],
+            "internalType": "struct Reward",
+            "name": "reward",
+            "type": "tuple"
+          }
+        ],
+        "internalType": "struct Intent",
+        "name": "intent",
+        "type": "tuple"
+      }
+    ],
+    "name": "getIntentHash",
+    "outputs": [
+      {
+        "internalType": "bytes32",
+        "name": "intentHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "routeHash",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "rewardHash",
+        "type": "bytes32"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "type": "function",
+    "name": "intentVaultAddress",
+    "inputs": [
+      {
+        "name": "intentAndReward",
+        "type": "tuple",
+        "components": [
+          {
+            "name": "route",
+            "type": "tuple",
+            "components": [
+              {"name": "salt", "type": "bytes32"},
+              {"name": "sourceDomainId", "type": "uint256"},
+              {"name": "destinationDomainId", "type": "uint256"},
+              {"name": "inbox", "type": "bytes32"},
+              {
+                "name": "tokens",
+                "type": "tuple[]",
+                "components": [
+                  {"name": "token", "type": "bytes32"},
+                  {"name": "amount", "type": "uint256"}
+                ]
+              },
+              {
+                "name": "calls",
+                "type": "tuple[]",
+                "components": [
+                  {"name": "destination", "type": "bytes32"},
+                  {"name": "calldata", "type": "bytes"},
+                  {"name": "value", "type": "uint256"}
+                ]
+              }
+            ]
+          },
+          {
+            "name": "reward",
+            "type": "tuple",
+            "components": [
+              {"name": "creator", "type": "bytes32"},
+              {"name": "prover", "type": "bytes32"},
+              {"name": "deadline", "type": "uint256"},
+              {"name": "nativeValue", "type": "uint256"},
+              {
+                "name": "tokens",
+                "type": "tuple[]",
+                "components": [
+                  {"name": "token", "type": "bytes32"},
+                  {"name": "amount", "type": "uint256"}
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {"name": "", "type": "address"}
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "IntentCreated",
+    "inputs": [
+      {"name": "intentHash", "type": "bytes32", "indexed": true},
+      {"name": "routeHash", "type": "bytes32", "indexed": true},
+      {"name": "creator", "type": "address", "indexed": true}
+    ]
+  },
+  {
+    "type": "event",
+    "name": "IntentPublished",
+    "inputs": [
+      {"name": "intentHash", "type": "bytes32", "indexed": true},
+      {"name": "routeHash", "type": "bytes32", "indexed": true}
+    ]
+  }
+] 

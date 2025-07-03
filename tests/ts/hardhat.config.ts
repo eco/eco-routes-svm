@@ -5,12 +5,13 @@ import { config as dotenvConfig } from "dotenv";
 dotenvConfig();
 
 const config: HardhatUserConfig = {
-  solidity: {
-    version: "0.8.26",
-    settings: { viaIR: true, optimizer: { enabled: true, runs: 200 } },
-  },
+  // We don't need solidity compilation since we're using ABI files directly
+  // solidity: {
+  //   version: "0.8.26",
+  //   settings: { viaIR: true, optimizer: { enabled: true, runs: 200 } },
+  // },
   paths: {
-    sources: "./evm-contracts",
+    sources: "./abis", // Point to ABI files (not used but required)
     artifacts: "./evm-artifacts",
     cache: "./evm-cache",
   },
@@ -25,6 +26,7 @@ const config: HardhatUserConfig = {
   typechain: {
     outDir: "evm-types",
     target: "ethers-v6",
+    alwaysGenerateOverloads: false,
   },
 };
 

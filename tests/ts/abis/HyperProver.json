@@ -1,0 +1,46 @@
+[
+  {
+    "type": "function",
+    "name": "fetchFee",
+    "inputs": [
+      {"name": "destinationDomain", "type": "uint32"},
+      {"name": "intentHashes", "type": "bytes32[]"},
+      {"name": "claimants", "type": "bytes32[]"},
+      {"name": "data", "type": "bytes"}
+    ],
+    "outputs": [
+      {"name": "", "type": "uint256"}
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "prove",
+    "inputs": [
+      {"name": "intentHash", "type": "bytes32"},
+      {"name": "proof", "type": "bytes"}
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "verify",
+    "inputs": [
+      {"name": "intentHash", "type": "bytes32"},
+      {"name": "proof", "type": "bytes"}
+    ],
+    "outputs": [
+      {"name": "", "type": "bool"}
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "ProofSubmitted",
+    "inputs": [
+      {"name": "intentHash", "type": "bytes32", "indexed": true},
+      {"name": "prover", "type": "address", "indexed": true}
+    ]
+  }
+] 

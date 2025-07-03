@@ -158,6 +158,8 @@ describe("EVM → SVM e2e", () => {
             ],
         };
 
+        console.log("TEST Route: ", route);
+
         const { intentHash, routeHash } = await intentSource[
             "getIntentHash(((bytes32,uint256,uint256,bytes32,(bytes32,uint256)[],(bytes32,bytes,uint256)[]),(bytes32,bytes32,uint256,uint256,(bytes32,uint256)[])))"
         ]({
@@ -242,9 +244,7 @@ describe("EVM → SVM e2e", () => {
 
         const routeSolArg = {
             salt: Array.from(Buffer.from(saltHex.slice(2), "hex")),
-            sourceDomainId: EVM_DOMAIN_ID,
-            destinationDomainId: SOLANA_DOMAIN_ID,
-            inbox: hex32ToNums(route.inbox),
+            destinationChainPortal: hex32ToNums(route.inbox),
             tokens: routeSolTokenArg,
             calls,
         };
