@@ -10,7 +10,7 @@ use solana_sdk::{
 use solana_transaction::Transaction;
 
 const MAILBOX_BIN: &[u8] = include_bytes!("../../../bins/mailbox.so");
-const MULTISIG_ISM_BIN: &[u8] = include_bytes!("../../../bins/multisig_ism.so");
+const DUMMY_ISM_BIN: &[u8] = include_bytes!("../../../bins/dummy_ism.so");
 const ECO_ROUTES_BIN: &[u8] = include_bytes!("../../../target/deploy/eco_routes.so");
 const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
@@ -53,9 +53,9 @@ pub fn init_svm() -> LiteSVM {
 
     svm.airdrop(&Keypair::new().pubkey(), 1).unwrap();
 
-    svm.add_program(eco_routes::ID, &ECO_ROUTES_BIN);
-    svm.add_program(eco_routes::hyperlane::MAILBOX_ID, &MAILBOX_BIN);
-    svm.add_program(eco_routes::hyperlane::MULTISIG_ISM_ID, &MULTISIG_ISM_BIN);
+    svm.add_program(portal::ID, &ECO_ROUTES_BIN);
+    svm.add_program(hyper_prover::hyperlane::MAILBOX_ID, &MAILBOX_BIN);
+    svm.add_program(hyper_prover::hyperlane::MULTISIG_ISM_ID, &DUMMY_ISM_BIN);
     svm.add_program(spl_noop::ID, &SPL_NOOP_BIN);
 
     let inititializer = Keypair::new();
@@ -65,7 +65,7 @@ pub fn init_svm() -> LiteSVM {
         &[&inititializer],
         Message::new(
             &[Instruction::new_with_borsh(
-                eco_routes::hyperlane::MULTISIG_ISM_ID,
+                hyper_prover::hyperlane::MULTISIG_ISM_ID,
                 &TestIsmInstruction::Init,
                 vec![
                     AccountMeta::new_readonly(solana_system_interface::program::ID, false),
@@ -73,7 +73,7 @@ pub fn init_svm() -> LiteSVM {
                     AccountMeta::new(
                         Pubkey::find_program_address(
                             &[b"test_ism", b"-", b"storage"],
-                            &eco_routes::hyperlane::MULTISIG_ISM_ID,
+                            &hyper_prover::hyperlane::MULTISIG_ISM_ID,
                         )
                         .0,
                         false,
@@ -90,10 +90,10 @@ pub fn init_svm() -> LiteSVM {
         &[&inititializer],
         Message::new(
             &[Instruction::new_with_borsh(
-                eco_routes::hyperlane::MAILBOX_ID,
+                hyper_prover::hyperlane::MAILBOX_ID,
                 &MailboxInstruction::Init(Init {
-                    local_domain: eco_routes::hyperlane::DOMAIN_ID,
-                    default_ism: eco_routes::hyperlane::MULTISIG_ISM_ID,
+                            local_domain: hyper_prover::hyperlane::DOMAIN_ID,
+        default_ism: hyper_prover::hyperlane::MULTISIG_ISM_ID,
                     max_protocol_fee: 0,
                     protocol_fee: ProtocolFee {
                         fee: 0,
@@ -106,7 +106,7 @@ pub fn init_svm() -> LiteSVM {
                     AccountMeta::new(
                         Pubkey::find_program_address(
                             &[b"hyperlane", b"-", b"inbox"],
-                            &eco_routes::hyperlane::MAILBOX_ID,
+                            &hyper_prover::hyperlane::MAILBOX_ID,
                         )
                         .0,
                         false,
@@ -114,7 +114,7 @@ pub fn init_svm() -> LiteSVM {
                     AccountMeta::new(
                         Pubkey::find_program_address(
                             &[b"hyperlane", b"-", b"outbox"],
-                            &eco_routes::hyperlane::MAILBOX_ID,
+                            &hyper_prover::hyperlane::MAILBOX_ID,
                         )
                         .0,
                         false,

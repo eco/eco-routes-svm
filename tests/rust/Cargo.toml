@@ -6,7 +6,8 @@ edition = "2021"
 
 [dependencies]
 
-eco-routes = { version = "0.1.0", path = "../../programs/eco-routes" }
+portal = { path = "../../programs/portal" }
+hyper-prover = { path = "../../programs/hyper-prover" }
 
 anchor-lang = "0.31.1"
 solana-sdk = "2.2.1"

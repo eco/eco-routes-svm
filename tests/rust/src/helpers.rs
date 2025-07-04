@@ -1,6 +1,6 @@
 use anchor_lang::{AnchorDeserialize, AnchorSerialize, Discriminator};
 use anyhow::Result;
-use eco_routes::state::EcoRoutes;
+use portal::state::EcoRoutes;
 use litesvm::LiteSVM;
 use rand::Rng;
 use solana_sdk::{account::Account, clock::Clock, pubkey::Pubkey};
@@ -75,13 +75,13 @@ pub fn write_eco_routes_pda(
     authority: Pubkey,
     prover: [u8; 32],
 ) -> anyhow::Result<()> {
-    let (pda, bump) = Pubkey::find_program_address(&[b"eco_routes"], &eco_routes::ID);
+    let (pda, bump) = Pubkey::find_program_address(&[b"eco_routes"], &portal::ID);
 
     let state = EcoRoutes::new(authority, prover, bump);
     let mut data = EcoRoutes::DISCRIMINATOR.to_vec();
     data.extend(state.try_to_vec()?);
 
-    write_account_re(svm, pda, eco_routes::ID, data)
+    write_account_re(svm, pda, portal::ID, data)
 }
 
 pub fn read_account_lamports(svm: &LiteSVM, pubkey: &Pubkey) -> Result<u64> {

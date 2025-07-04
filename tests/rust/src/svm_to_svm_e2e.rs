@@ -1,8 +1,7 @@
 use anchor_lang::{AnchorDeserialize, AnchorSerialize, InstructionData, ToAccountMetas};
 use anyhow::Result;
 use console::{style, Emoji};
-use eco_routes::{
-    hyperlane::{self, MAILBOX_ID},
+use portal::{
     instructions::{
         dispatch_authority_key, execution_authority_key, ClaimIntentNativeArgs, ClaimIntentSplArgs,
         FulfillIntentArgs, FundIntentNativeArgs, FundIntentSplArgs, PublishIntentArgs,
@@ -11,6 +10,7 @@ use eco_routes::{
     },
     state::{Call, Intent, IntentFulfillmentMarker, IntentStatus, Reward, Route, TokenAmount},
 };
+use hyper_prover::hyperlane::{self, MAILBOX_ID};
 use litesvm::LiteSVM;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
@@ -50,7 +50,7 @@ pub const TX_FEE_AMOUNT: u64 = 5_000;
  * 6. Close intent
  *
 */
-pub fn svm_to_svm_e2e(token_program_id: Pubkey) -> Result<()> {
+pub fn old_svm_to_svm_e2e(token_program_id: Pubkey) -> Result<()> {
     let mut source_svm = utils::init_svm();
     let mut destination_svm = utils::init_svm();
     let mut context = initialize_context(&mut source_svm, &mut destination_svm, token_program_id)?;
@@ -300,7 +300,7 @@ impl<'a> Context<'a> {
                     self.intent_hash.as_ref(),
                     self.source_usdc_mint.pubkey().as_ref(),
                 ],
-                &eco_routes::ID,
+                &portal::ID,
             )
             .0,
         );
@@ -538,7 +538,7 @@ impl<'a> Context<'a> {
                     self.intent_hash.as_ref(),
                     self.source_usdc_mint.pubkey().as_ref(),
                 ],
-                &eco_routes::ID,
+                &portal::ID,
             )
             .0,
         );
@@ -700,7 +700,7 @@ fn initialize_context<'a>(
         solver_destination_usdc_token_data.to_vec(),
     )?;
 
-    let inbox_bytes = Pubkey::find_program_address(&[b"dispatch_authority"], &eco_routes::ID)
+    let inbox_bytes = Pubkey::find_program_address(&[b"dispatch_authority"], &portal::ID)
         .0
         .to_bytes();
 
@@ -792,7 +792,7 @@ fn initialize_context<'a>(
 
     let reward = Reward {
         creator: source_user.pubkey(),
-        prover: eco_routes::ID.to_bytes(),
+        prover: portal::ID.to_bytes(),
         tokens: vec![TokenAmount {
             token: source_usdc_mint.pubkey().to_bytes(),
             amount: usdc_amount(5.0),
@@ -801,7 +801,7 @@ fn initialize_context<'a>(
         deadline: 100,
     };
 
-    let intent_hash = eco_routes::encoding::get_intent_hash(&route, &reward);
+    let intent_hash = portal::encoding::get_intent_hash(&route, &reward);
 
     Ok(Context {
         token_program_id,
@@ -822,7 +822,7 @@ fn initialize_context<'a>(
 }
 
 fn create_intent(context: &mut Context) -> Result<()> {
-    let publish_intent_args = eco_routes::instruction::PublishIntent {
+    let publish_intent_args = portal::instruction::PublishIntent {
         args: PublishIntentArgs {
             salt: context.route.salt,
             intent_hash: context.intent_hash,
@@ -840,8 +840,8 @@ fn create_intent(context: &mut Context) -> Result<()> {
         &[&context.fee_payer, &context.source_user],
         Message::new(
             &[Instruction {
-                program_id: eco_routes::ID,
-                accounts: eco_routes::accounts::PublishIntent {
+                program_id: portal::ID,
+                accounts: portal::accounts::PublishIntent {
                     intent: Intent::pda(context.intent_hash).0,
                     creator: context.source_user.pubkey(),
                     payer: context.fee_payer.pubkey(),
@@ -887,13 +887,13 @@ fn create_intent(context: &mut Context) -> Result<()> {
 }
 
 fn fund_intent(context: &mut Context) -> Result<()> {
-    let fund_intent_native_args = eco_routes::instruction::FundIntentNative {
+    let fund_intent_native_args = portal::instruction::FundIntentNative {
         args: FundIntentNativeArgs {
             intent_hash: context.intent_hash,
         },
     };
 
-    let fund_intent_spl_args = eco_routes::instruction::FundIntentSpl {
+    let fund_intent_spl_args = portal::instruction::FundIntentSpl {
         args: FundIntentSplArgs {
             intent_hash: context.intent_hash,
         },
@@ -904,8 +904,8 @@ fn fund_intent(context: &mut Context) -> Result<()> {
         Message::new(
             &[
                 Instruction {
-                    program_id: eco_routes::ID,
-                    accounts: eco_routes::accounts::FundIntentNative {
+                    program_id: portal::ID,
+                    accounts: portal::accounts::FundIntentNative {
                         intent: Intent::pda(context.intent_hash).0,
                         funder: context.source_user.pubkey(),
                         system_program: solana_system_interface::program::ID,
@@ -914,8 +914,8 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                     data: fund_intent_native_args.data(),
                 },
                 Instruction {
-                    program_id: eco_routes::ID,
-                    accounts: eco_routes::accounts::FundIntentSpl {
+                    program_id: portal::ID,
+                    accounts: portal::accounts::FundIntentSpl {
                         intent: Intent::pda(context.intent_hash).0,
                         funder: context.source_user.pubkey(),
                         payer: context.fee_payer.pubkey(),
@@ -931,7 +931,7 @@ fn fund_intent(context: &mut Context) -> Result<()> {
                                 context.intent_hash.as_ref(),
                                 context.source_usdc_mint.pubkey().as_ref(),
                             ],
-                            &eco_routes::ID,
+                            &portal::ID,
                         )
                         .0,
                         mint: context.source_usdc_mint.pubkey(),
@@ -968,7 +968,7 @@ fn fund_intent(context: &mut Context) -> Result<()> {
 fn solve_intent(context: &mut Context) -> Result<()> {
     let (outbox_pda, _) = Pubkey::find_program_address(
         &[b"hyperlane", b"-", b"outbox"],
-        &eco_routes::hyperlane::MAILBOX_ID,
+        &hyper_prover::hyperlane::MAILBOX_ID,
     );
 
     // unique-message account for OutboxDispatch
@@ -982,7 +982,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
             b"-",
             unique_message.pubkey().as_ref(),
         ],
-        &eco_routes::hyperlane::MAILBOX_ID,
+        &hyper_prover::hyperlane::MAILBOX_ID,
     );
 
     // strip account-metas from calldata (optimization for tx size)
@@ -1011,13 +1011,13 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         .collect::<Vec<_>>();
 
     let fulfill_ix = Instruction {
-        program_id: eco_routes::ID,
-        accounts: eco_routes::accounts::FulfillIntent {
+        program_id: portal::ID,
+        accounts: portal::accounts::FulfillIntent {
             payer: context.solver.pubkey(),
             solver: context.solver.pubkey(),
             execution_authority: execution_authority_key(&context.route.salt).0,
             dispatch_authority: dispatch_authority_key().0,
-            mailbox_program: eco_routes::hyperlane::MAILBOX_ID,
+            mailbox_program: hyper_prover::hyperlane::MAILBOX_ID,
             outbox_pda,
             spl_noop_program: spl_noop::id(),
             unique_message: unique_message.pubkey(),
@@ -1090,7 +1090,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
             })
         })
         .collect::<Vec<_>>(),
-        data: eco_routes::instruction::FulfillIntent {
+        data: portal::instruction::FulfillIntent {
             args: FulfillIntentArgs {
                 intent_hash: context.intent_hash,
                 claimant: context.solver.pubkey().to_bytes(),
@@ -1159,11 +1159,11 @@ fn solve_intent(context: &mut Context) -> Result<()> {
 
     let (processed_message_pda, _) = Pubkey::find_program_address(
         &[b"hyperlane", b"-", b"processed_message", b"-", &id],
-        &eco_routes::hyperlane::MAILBOX_ID,
+        &hyper_prover::hyperlane::MAILBOX_ID,
     );
     let (inbox_pda, _) = Pubkey::find_program_address(
         &[b"hyperlane", b"-", b"inbox"],
-        &eco_routes::hyperlane::MAILBOX_ID,
+        &hyper_prover::hyperlane::MAILBOX_ID,
     );
     let (process_authority_pda, _) = Pubkey::find_program_address(
         &[
@@ -1171,11 +1171,11 @@ fn solve_intent(context: &mut Context) -> Result<()> {
             b"-",
             b"process_authority",
             b"-",
-            eco_routes::ID.as_ref(),
+            portal::ID.as_ref(),
         ],
-        &eco_routes::hyperlane::MAILBOX_ID,
+        &hyper_prover::hyperlane::MAILBOX_ID,
     );
-    let (eco_routes_pda, _) = Pubkey::find_program_address(&[b"eco_routes"], &eco_routes::ID);
+    let (eco_routes_pda, _) = Pubkey::find_program_address(&[b"eco_routes"], &portal::ID);
 
     fn build_multisig_metadata() -> Vec<u8> {
         const SIG_LEN: usize = 65;
@@ -1222,7 +1222,7 @@ fn solve_intent(context: &mut Context) -> Result<()> {
                     b"-",
                     b"account_metas",
                 ],
-                &eco_routes::ID,
+                &portal::ID,
             )
             .0,
             false,
@@ -1230,25 +1230,25 @@ fn solve_intent(context: &mut Context) -> Result<()> {
         // N+1 – SPL-noop
         AccountMeta::new_readonly(spl_noop::id(), false),
         // N+2 – ISM program id
-        AccountMeta::new_readonly(eco_routes::hyperlane::MULTISIG_ISM_ID, false),
+        AccountMeta::new_readonly(hyper_prover::hyperlane::MULTISIG_ISM_ID, false),
         // N+3..M – ISM::verify accounts (for Multisig ISM it’s just DomainData)
         AccountMeta::new(
             Pubkey::find_program_address(
                 &[b"test_ism", b"-", b"storage"],
-                &eco_routes::hyperlane::MULTISIG_ISM_ID,
+                &hyper_prover::hyperlane::MULTISIG_ISM_ID,
             )
             .0,
             false,
         ),
         // M+1 – recipient program id
-        AccountMeta::new_readonly(eco_routes::ID, false),
+        AccountMeta::new_readonly(portal::ID, false),
         // M+2..K – recipient::handle accounts
         AccountMeta::new_readonly(eco_routes_pda, false),
         AccountMeta::new(Intent::pda(context.intent_hash).0, false),
     ];
 
     let inbox_process_ix = Instruction {
-        program_id: eco_routes::hyperlane::MAILBOX_ID,
+        program_id: hyper_prover::hyperlane::MAILBOX_ID,
         accounts,
         data: ix_data,
     };
@@ -1282,13 +1282,13 @@ fn solve_intent(context: &mut Context) -> Result<()> {
 }
 
 fn claim_intent(context: &mut Context) -> Result<()> {
-    let claim_intent_native_args = eco_routes::instruction::ClaimIntentNative {
+    let claim_intent_native_args = portal::instruction::ClaimIntentNative {
         args: ClaimIntentNativeArgs {
             intent_hash: context.intent_hash,
         },
     };
 
-    let claim_intent_spl_args = eco_routes::instruction::ClaimIntentSpl {
+    let claim_intent_spl_args = portal::instruction::ClaimIntentSpl {
         args: ClaimIntentSplArgs {
             intent_hash: context.intent_hash,
         },
@@ -1299,8 +1299,8 @@ fn claim_intent(context: &mut Context) -> Result<()> {
         Message::new(
             &[
                 Instruction {
-                    program_id: eco_routes::ID,
-                    accounts: eco_routes::accounts::ClaimIntentNative {
+                    program_id: portal::ID,
+                    accounts: portal::accounts::ClaimIntentNative {
                         intent: Intent::pda(context.intent_hash).0,
                         claimer: context.solver.pubkey(),
                         payer: context.solver.pubkey(),
@@ -1310,8 +1310,8 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                     data: claim_intent_native_args.data(),
                 },
                 Instruction {
-                    program_id: eco_routes::ID,
-                    accounts: eco_routes::accounts::ClaimIntentSpl {
+                    program_id: portal::ID,
+                    accounts: portal::accounts::ClaimIntentSpl {
                         intent: Intent::pda(context.intent_hash).0,
                         claimer: context.solver.pubkey(),
                         payer: context.solver.pubkey(),
@@ -1322,7 +1322,7 @@ fn claim_intent(context: &mut Context) -> Result<()> {
                                 context.intent_hash.as_ref(),
                                 context.source_usdc_mint.pubkey().as_ref(),
                             ],
-                            &eco_routes::ID,
+                            &portal::ID,
                         )
                         .0,
                         claimer_token: spl_associated_token_account::get_associated_token_address_with_program_id(
@@ -1362,14 +1362,14 @@ fn claim_intent(context: &mut Context) -> Result<()> {
 }
 
 fn close_intent(context: &mut Context) -> Result<()> {
-    let close_intent_args = eco_routes::instruction::CloseIntent;
+    let close_intent_args = portal::instruction::CloseIntent;
 
     let transaction = Transaction::new(
         &[&context.fee_payer],
         Message::new(
             &[Instruction {
-                program_id: eco_routes::ID,
-                accounts: eco_routes::accounts::CloseIntent {
+                program_id: portal::ID,
+                accounts: portal::accounts::CloseIntent {
                     intent: Intent::pda(context.intent_hash).0,
                     payer: context.fee_payer.pubkey(),
                     system_program: solana_system_interface::program::ID,
