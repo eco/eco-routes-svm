@@ -129,11 +129,14 @@ anchor build
 
 ### Building
 ```bash
-# Build all programs (localnet/devnet)
-anchor build
+# Build all programs (localnet - includes dummy-ism for testing)
+anchor run build-localnet
+
+# Build for devnet (excludes dummy-ism)
+anchor run build-devnet
 
 # Build with mainnet feature (REQUIRED for mainnet deployment)
-anchor build --features mainnet
+anchor run build-mainnet
 
 # Build specific program
 anchor build --program portal
@@ -178,13 +181,35 @@ anchor test
 cargo test -- --goldie=overwrite
 ```
 
+### Available Anchor Scripts
+
+The project includes convenient Anchor scripts for different environments:
+
+```bash
+# Build scripts
+anchor run build-localnet   # Build for localnet (includes dummy-ism)
+anchor run build-devnet     # Build for devnet (excludes dummy-ism)
+anchor run build-mainnet    # Build for mainnet with mainnet feature
+
+# Deploy scripts
+anchor run deploy-devnet    # Deploy to devnet (excludes dummy-ism)
+anchor run deploy-mainnet   # Deploy to mainnet (excludes dummy-ism)
+
+# Test script
+anchor run test             # Run all tests
+```
+
 ### Development Workflow
 ```bash
 # Start local validator
 solana-test-validator
 
-# Deploy programs
+# Build and deploy programs for localnet (includes dummy-ism for testing)
+anchor run build-localnet
 anchor deploy
+
+# Or use all-in-one test command
+anchor test
 
 # Run integration tests against deployed programs
 anchor test --skip-deploy
@@ -315,25 +340,61 @@ When `mainnet` feature is enabled, it changes:
 
 ### Deployment Commands
 
-#### Localnet/Devnet (Development):
+#### Localnet (Development):
 ```bash
-# Build without mainnet feature
-anchor build
-
-# Deploy to localnet
+# Build and deploy for localnet (includes dummy-ism for testing)
+anchor run build-localnet
 anchor deploy
 
-# Deploy to devnet
+# Or use cluster-specific deployment
+anchor deploy --provider.cluster localnet
+```
+
+#### Devnet (Staging):
+```bash
+# Build and deploy for devnet (excludes dummy-ism)
+anchor run build-devnet
+anchor run deploy-devnet
+
+# Or use cluster-specific deployment
 anchor deploy --provider.cluster devnet
 ```
 
 #### Mainnet (Production):
 ```bash
 # Step 1: Build with mainnet feature (REQUIRED)
-anchor build --features mainnet
+anchor run build-mainnet
 
-# Step 2: Deploy to mainnet
+# Step 2: Deploy to mainnet (excludes dummy-ism)
+anchor run deploy-mainnet
+
+# Or use cluster-specific deployment
 anchor deploy --provider.cluster mainnet
+```
+
+#### Network-Specific Program Configuration
+
+The `Anchor.toml` file includes network-specific program configurations:
+
+- **Localnet**: Includes `dummy-ism` for testing
+- **Devnet**: Excludes `dummy-ism` (production-like environment)
+- **Mainnet**: Excludes `dummy-ism` (production only)
+
+```toml
+[programs.localnet]
+hyper-prover = "..."
+portal = "..."
+dummy-ism = "..."  # Only for testing
+
+[programs.devnet]
+hyper-prover = "..."
+portal = "..."
+# dummy-ism excluded
+
+[programs.mainnet]
+hyper-prover = "..."
+portal = "..."
+# dummy-ism excluded
 ```
 
 ### Environment Configuration
