@@ -10,6 +10,16 @@ hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 
+[programs.devnet]
+hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
+portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
+# dummy-ism excluded for devnet
+
+[programs.mainnet]
+hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
+portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
+# dummy-ism excluded for mainnet
+
 [registry]
 url = "https://api.apr.dev"
 
@@ -19,3 +29,8 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "cargo test --no-fail-fast"
+build-localnet = "anchor build"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover"
+deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover"
+deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover"
