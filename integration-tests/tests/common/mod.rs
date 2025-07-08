@@ -313,6 +313,26 @@ where
     }
 }
 
+pub fn contains_cpi_event<E>(expected: E) -> impl Fn(TransactionMetadata) -> bool
+where
+    E: Event,
+{
+    let expected = expected.data();
+
+    move |actual: TransactionMetadata| {
+        actual
+            .inner_instructions
+            .iter()
+            .flat_map(|inner_ix_list| inner_ix_list.iter())
+            .any(
+                |inner_instruction| match inner_instruction.instruction.data.get(8..) {
+                    Some(data) => data == expected,
+                    None => false,
+                },
+            )
+    }
+}
+
 pub fn contains_event_and_msg<E, M>(expected: E, msg: M) -> impl Fn(TransactionMetadata) -> bool
 where
     E: Event,
@@ -332,7 +352,7 @@ where
     }
 }
 
-pub fn is_portal_error<T, Err>(expected: Err) -> impl Fn(T) -> bool
+pub fn is_error<T, Err>(expected: Err) -> impl Fn(T) -> bool
 where
     T: Deref<Target = FailedTransactionMetadata>,
     Err: Into<u32>,

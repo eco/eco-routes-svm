@@ -326,7 +326,7 @@ fn refund_intent_invalid_creator_fail() {
         wrong_creator,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidCreator
     )));
 }
@@ -351,7 +351,7 @@ fn refund_intent_invalid_vault_fail() {
         creator,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidVault
     )));
 }
@@ -376,7 +376,7 @@ fn refund_intent_invalid_proof_fail() {
         creator,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidProof
     )));
 }
@@ -403,7 +403,7 @@ fn refund_intent_already_fulfilled_fail() {
         creator,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::IntentFulfilledAndNotWithdrawn
     )));
 }
@@ -426,7 +426,7 @@ fn refund_intent_not_expired_fail() {
         creator,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::RewardNotExpired
     )));
 }
@@ -476,7 +476,7 @@ fn refund_intent_invalid_creator_token_fail() {
         creator,
         token_accounts,
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidCreatorToken
     )));
 }

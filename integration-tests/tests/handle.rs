@@ -79,7 +79,9 @@ fn handle_success() {
     let handle_account_metas =
         ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
     let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_ok());
+    assert!(result.is_ok_and(common::contains_cpi_event(
+        hyper_prover::events::IntentFulfilled::new(intent_hash, claimant),
+    )));
 
     let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
     let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
@@ -173,7 +175,7 @@ fn handle_invalid_config_fail() {
     *handle_account_metas.get_mut(0).unwrap() =
         AccountMeta::new_readonly(Pubkey::new_unique(), false);
     let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_err_and(common::is_portal_error(ErrorCode::AccountNotInitialized)))
+    assert!(result.is_err_and(common::is_error(ErrorCode::AccountNotInitialized)))
 }
 
 #[test]
@@ -198,7 +200,7 @@ fn handle_invalid_sender_fail() {
     let handle_account_metas =
         ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
     let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_err_and(common::is_portal_error(HyperProverError::InvalidSender)))
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidSender)))
 }
 
 #[test]
@@ -224,7 +226,7 @@ fn handle_invalid_proof_fail() {
         ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
     *handle_account_metas.get_mut(1).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_err_and(common::is_portal_error(HyperProverError::InvalidProof)))
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidProof)))
 }
 
 #[test]
@@ -250,7 +252,7 @@ fn handle_invalid_pda_payer_fail() {
         ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
     *handle_account_metas.get_mut(3).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_err_and(common::is_portal_error(HyperProverError::InvalidPdaPayer)))
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPdaPayer)))
 }
 
 #[test]
@@ -289,7 +291,5 @@ fn handle_already_proven_fail() {
     let handle_account_metas =
         ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
     let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_err_and(common::is_portal_error(
-        HyperProverError::IntentAlreadyProven
-    )))
+    assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
 }

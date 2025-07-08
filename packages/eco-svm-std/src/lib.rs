@@ -9,6 +9,8 @@ pub const CHAIN_ID: u64 = 1399811149;
 #[cfg(not(feature = "mainnet"))]
 pub const CHAIN_ID: u64 = 1399811150;
 
+const EVENT_AUTHORITY_SEED: &[u8] = b"__event_authority";
+
 #[derive(
     AnchorSerialize, AnchorDeserialize, InitSpace, Deref, Clone, Copy, Debug, PartialEq, Eq,
 )]
@@ -76,5 +78,21 @@ impl From<AccountMeta> for SerializableAccountMeta {
             is_signer: account_meta.is_signer,
             is_writable: account_meta.is_writable,
         }
+    }
+}
+
+pub fn event_authority_pda(program_id: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[EVENT_AUTHORITY_SEED], program_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_authority_pda_deterministic() {
+        let program_id = Pubkey::new_from_array([123u8; 32]);
+
+        goldie::assert_debug!(event_authority_pda(&program_id));
     }
 }

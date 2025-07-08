@@ -375,7 +375,7 @@ fn fulfill_intent_invalid_executor_fail() {
         vec![],
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidExecutor
     )));
 }
@@ -402,7 +402,7 @@ fn fulfill_intent_invalid_token_transfer_accounts_fail() {
         insufficient_token_accounts,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidTokenTransferAccounts
     )));
 }
@@ -454,7 +454,7 @@ fn fulfill_intent_invalid_mint_fail() {
         wrong_token_accounts,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidMint
     )));
 }
@@ -480,7 +480,7 @@ fn fulfill_intent_invalid_fulfill_marker_fail() {
         vec![],
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidFulfillMarker
     )));
 }
@@ -526,7 +526,7 @@ fn fulfill_intent_invalid_calldata_fail() {
         vec![],
         vec![call_accounts[0].clone(), call_accounts[1].clone()],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidCalldata
     )));
 }
@@ -564,7 +564,7 @@ fn fulfill_intent_already_fulfilled_fail() {
         vec![],
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::IntentAlreadyFulfilled
     )));
 }
@@ -593,7 +593,7 @@ fn fulfill_intent_invalid_destination_chain_portal_fail() {
         vec![],
     );
 
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidDestinationChainPortal
     )));
 }
@@ -644,7 +644,5 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
         call_accounts,
         vec![&unique_message],
     );
-    assert!(result.is_err_and(common::is_portal_error(
-        HyperProverError::InvalidPortalDispatcher
-    )));
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPortalDispatcher)));
 }

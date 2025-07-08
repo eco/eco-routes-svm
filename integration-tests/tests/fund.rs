@@ -500,7 +500,7 @@ fn fund_intent_invalid_vault_fails() {
     ctx.airdrop(&funder, fund_amount).unwrap();
 
     let result = ctx.fund_intent(&intent, Pubkey::new_unique(), route_hash, true, vec![]);
-    assert!(result.is_err_and(common::is_portal_error(PortalError::InvalidVault)));
+    assert!(result.is_err_and(common::is_error(PortalError::InvalidVault)));
 }
 
 #[test]
@@ -520,7 +520,7 @@ fn fund_intent_insufficient_native_funds_fails() {
     ctx.airdrop(&funder, insufficient_amount).unwrap();
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, false, vec![]);
-    assert!(result.is_err_and(common::is_portal_error(PortalError::InsufficientFunds)));
+    assert!(result.is_err_and(common::is_error(PortalError::InsufficientFunds)));
 }
 
 #[test]
@@ -565,7 +565,7 @@ fn fund_intent_insufficient_token_funds_fails() {
             ]
         }),
     );
-    assert!(result.is_err_and(common::is_portal_error(PortalError::InsufficientFunds)));
+    assert!(result.is_err_and(common::is_error(PortalError::InsufficientFunds)));
 }
 
 #[test]
@@ -603,7 +603,7 @@ fn fund_intent_invalid_vault_ata_fails() {
             ]
         }),
     );
-    assert!(result.is_err_and(common::is_portal_error(PortalError::InvalidAta)));
+    assert!(result.is_err_and(common::is_error(PortalError::InvalidAta)));
 }
 
 #[test]
@@ -639,7 +639,7 @@ fn fund_intent_invalid_mint_fails() {
             AccountMeta::new_readonly(wrong_mint, false),
         ],
     );
-    assert!(result.is_err_and(common::is_portal_error(PortalError::InvalidMint)));
+    assert!(result.is_err_and(common::is_error(PortalError::InvalidMint)));
 }
 
 #[test]
@@ -689,9 +689,7 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
             })
             .chain(iter::once(AccountMeta::new(Pubkey::new_unique(), false))),
     );
-    assert!(result.is_err_and(common::is_portal_error(
-        PortalError::InvalidTokenTransferAccounts
-    )));
+    assert!(result.is_err_and(common::is_error(PortalError::InvalidTokenTransferAccounts)));
 }
 
 #[test]
@@ -718,5 +716,5 @@ fn fund_intent_token_amount_overflow_fails() {
     .0;
 
     let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
-    assert!(result.is_err_and(common::is_portal_error(PortalError::TokenAmountOverflow)));
+    assert!(result.is_err_and(common::is_error(PortalError::TokenAmountOverflow)));
 }

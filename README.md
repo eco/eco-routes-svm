@@ -372,7 +372,7 @@ Follow existing patterns in `integration-tests/tests/`:
 1. Create test files with descriptive names
 2. Use `common::Context` for test setup
 3. Test both success and failure cases
-4. Follow error validation patterns with `common::is_portal_error()`
+4. Follow error validation patterns with `common::is_error()`
 
 ### Feature Development
 

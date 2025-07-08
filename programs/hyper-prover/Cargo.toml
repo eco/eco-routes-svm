@@ -18,11 +18,10 @@ no-idl = []
 no-log-ix-name = []
 
 [dependencies]
-anchor-lang = "0.31.1"
-derive-new = "0.7.0"
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+derive-new = { workspace = true }
 eco-svm-std = { workspace = true }
-more = "0.0.0"
 portal = { workspace = true, features = ["no-entrypoint"] }
 
 [dev-dependencies]
-goldie = "0.5.0"
+goldie = { workspace = true }

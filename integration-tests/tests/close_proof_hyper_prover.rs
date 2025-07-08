@@ -16,7 +16,5 @@ fn close_proof_invalid_portal_proof_closer_fail() {
     ctx.set_proof(proof_pda, Proof::new(destination_chain, claimant));
 
     let result = ctx.hyper_prover_close_proof(&invalid_proof_closer, proof_pda);
-    assert!(result.is_err_and(common::is_portal_error(
-        HyperProverError::InvalidPortalProofCloser
-    )));
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPortalProofCloser)));
 }

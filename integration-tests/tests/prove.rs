@@ -105,7 +105,7 @@ fn prove_intent_invalid_dispatcher_fail() {
         hyperlane::MAILBOX_ID,
         random::<[u8; 32]>().into(),
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidDispatcher
     )));
 }
@@ -128,7 +128,7 @@ fn prove_intent_unfulfilled_fail() {
         hyperlane::MAILBOX_ID,
         random::<[u8; 32]>().into(),
     );
-    assert!(result.is_err_and(common::is_portal_error(ErrorCode::AccountNotInitialized)));
+    assert!(result.is_err_and(common::is_error(ErrorCode::AccountNotInitialized)));
 }
 
 #[test]
@@ -150,7 +150,7 @@ fn prove_intent_invalid_hyper_prover_dispatcher_fail() {
         random::<[u8; 32]>().into(),
     );
 
-    assert!(result.is_err_and(common::is_portal_error(HyperProverError::InvalidDispatcher)));
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidDispatcher)));
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn prove_intent_invalid_mailbox_not_executable_fail() {
         random::<[u8; 32]>().into(),
     );
 
-    assert!(result.is_err_and(common::is_portal_error(ErrorCode::ConstraintExecutable)));
+    assert!(result.is_err_and(common::is_error(ErrorCode::ConstraintExecutable)));
 }
 
 #[test]
@@ -193,5 +193,5 @@ fn prove_intent_invalid_mailbox_fail() {
         random::<[u8; 32]>().into(),
     );
 
-    assert!(result.is_err_and(common::is_portal_error(HyperProverError::InvalidMailbox)));
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidMailbox)));
 }
