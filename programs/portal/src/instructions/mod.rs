@@ -26,6 +26,7 @@ pub enum PortalError {
     InvalidTokenTransferAccounts,
     TokenAmountOverflow,
     RewardNotExpired,
+    RouteExpired,
     InvalidProof,
     IntentFulfilledAndNotWithdrawn,
     IntentAlreadyWithdrawn,

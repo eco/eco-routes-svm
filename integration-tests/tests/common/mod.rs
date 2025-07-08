@@ -116,6 +116,7 @@ impl Context {
         Intent {
             destination_chain: random::<u32>().into(),
             route: Route {
+                deadline: self.now() + 1800,
                 salt: random::<[u8; 32]>().into(),
                 destination_chain_portal: portal::ID.to_bytes().into(),
                 tokens: route_tokens,
