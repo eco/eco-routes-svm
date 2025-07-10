@@ -14,7 +14,9 @@ fn init_hyper_prover_success() {
     let sender_2: Bytes32 = ctx.sender.pubkey().to_bytes().into();
     let whitelisted_senders = vec![sender_1, sender_2];
 
-    let result = ctx.init_hyper_prover(whitelisted_senders.clone(), Config::pda().0);
+    let result = ctx
+        .hyper_prover()
+        .init(whitelisted_senders.clone(), Config::pda().0);
     assert!(result.is_ok());
 
     let config_pda = Config::pda().0;
@@ -29,7 +31,9 @@ fn init_hyper_prover_invalid_config_fail() {
     let mut ctx = common::Context::default();
     let whitelisted_senders = vec![ctx.sender.pubkey().to_bytes().into()];
 
-    let result = ctx.init_hyper_prover(whitelisted_senders, Pubkey::new_unique());
+    let result = ctx
+        .hyper_prover()
+        .init(whitelisted_senders, Pubkey::new_unique());
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidConfig)));
 }
 
@@ -38,9 +42,12 @@ fn init_hyper_prover_already_initialized_fail() {
     let mut ctx = common::Context::default();
     let whitelisted_senders = vec![ctx.sender.pubkey().to_bytes().into()];
 
-    ctx.init_hyper_prover(whitelisted_senders.clone(), Config::pda().0)
+    ctx.hyper_prover()
+        .init(whitelisted_senders.clone(), Config::pda().0)
         .unwrap();
 
-    let result = ctx.init_hyper_prover(whitelisted_senders, Config::pda().0);
+    let result = ctx
+        .hyper_prover()
+        .init(whitelisted_senders, Config::pda().0);
     assert!(result.is_err_and(common::is_error(ErrorCode::ConstraintZero)));
 }

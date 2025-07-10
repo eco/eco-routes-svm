@@ -37,6 +37,13 @@ pub struct ProveArgs {
     pub claimant: Bytes32,
 }
 
+#[event]
+#[derive(new)]
+pub struct IntentFulfilled {
+    intent_hash: Bytes32,
+    claimant: Bytes32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

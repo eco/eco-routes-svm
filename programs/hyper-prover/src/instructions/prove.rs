@@ -9,7 +9,6 @@ use crate::state::{dispatcher_pda, DISPATCHER_SEED};
 #[derive(Accounts)]
 #[instruction(args: ProveArgs)]
 pub struct Prove<'info> {
-    /// CHECK: address is validated
     #[account(address = portal::state::dispatcher_pda().0 @ HyperProverError::InvalidPortalDispatcher)]
     pub portal_dispatcher: Signer<'info>,
     /// CHECK: address is validated

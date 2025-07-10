@@ -3,7 +3,6 @@ use eco_svm_std::prover;
 
 declare_id!("B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4");
 
-pub mod events;
 pub mod hyperlane;
 pub mod instructions;
 pub mod state;

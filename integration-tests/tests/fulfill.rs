@@ -142,7 +142,7 @@ fn fulfill_intent_token_transfer_success() {
         })
         .collect();
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &destination_route,
         reward_hash,
         claimant,
@@ -270,7 +270,7 @@ fn fulfill_intent_token_2022_transfer_success() {
         })
         .collect();
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &destination_route,
         reward_hash,
         claimant,
@@ -331,7 +331,7 @@ fn fulfill_intent_native_transfer_success() {
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &destination_route,
         reward_hash,
         claimant,
@@ -367,7 +367,7 @@ fn fulfill_intent_invalid_executor_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,
@@ -394,7 +394,7 @@ fn fulfill_intent_invalid_token_transfer_accounts_fail() {
 
     let insufficient_token_accounts = vec![AccountMeta::new(Pubkey::new_unique(), false)];
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,
@@ -446,7 +446,7 @@ fn fulfill_intent_invalid_mint_fail() {
         })
         .collect();
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,
@@ -472,7 +472,7 @@ fn fulfill_intent_invalid_fulfill_marker_fail() {
 
     let wrong_fulfill_marker = Pubkey::new_unique();
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,
@@ -518,7 +518,7 @@ fn fulfill_intent_invalid_calldata_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &destination_route,
         reward_hash,
         claimant,
@@ -545,18 +545,19 @@ fn fulfill_intent_already_fulfilled_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
-    ctx.fulfill_intent(
-        &route,
-        reward_hash,
-        claimant,
-        executor,
-        fulfill_marker,
-        vec![],
-        vec![],
-    )
-    .unwrap();
+    ctx.portal()
+        .fulfill_intent(
+            &route,
+            reward_hash,
+            claimant,
+            executor,
+            fulfill_marker,
+            vec![],
+            vec![],
+        )
+        .unwrap();
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,
@@ -584,7 +585,7 @@ fn fulfill_intent_invalid_destination_chain_portal_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,
@@ -635,7 +636,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &route_with_prover_call.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
-    let result = ctx.fulfill_intent_with_signers(
+    let result = ctx.portal().fulfill_intent_with_signers(
         &route_with_prover_call,
         reward_hash,
         claimant,
@@ -661,7 +662,7 @@ fn fulfill_intent_route_expired_fail() {
 
     route.deadline = ctx.now() - 1;
 
-    let result = ctx.fulfill_intent(
+    let result = ctx.portal().fulfill_intent(
         &route,
         reward_hash,
         claimant,

@@ -1,7 +1,10 @@
+use std::iter;
+
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use eco_svm_std::prover::Proof;
 use eco_svm_std::Bytes32;
+use hyper_prover::state::pda_payer_pda;
 use portal::events::IntentRefunded;
 use portal::state::{self, proof_closer_pda};
 use portal::types::{intent_hash, Intent};
@@ -33,28 +36,32 @@ fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    ctx.fund_intent(
-        &intent,
-        vault_pda,
-        route_hash,
-        false,
-        intent.reward.tokens.iter().flat_map(|token| {
-            let funder_token =
-                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
-            let vault_ata = get_associated_token_address_with_program_id(
-                &vault_pda,
-                &token.token,
-                token_program,
-            );
+    ctx.portal()
+        .fund_intent(
+            &intent,
+            vault_pda,
+            route_hash,
+            false,
+            intent.reward.tokens.iter().flat_map(|token| {
+                let funder_token = get_associated_token_address_with_program_id(
+                    &funder,
+                    &token.token,
+                    token_program,
+                );
+                let vault_ata = get_associated_token_address_with_program_id(
+                    &vault_pda,
+                    &token.token,
+                    token_program,
+                );
 
-            vec![
-                AccountMeta::new(funder_token, false),
-                AccountMeta::new(vault_ata, false),
-                AccountMeta::new_readonly(token.token, false),
-            ]
-        }),
-    )
-    .unwrap();
+                vec![
+                    AccountMeta::new(funder_token, false),
+                    AccountMeta::new(vault_ata, false),
+                    AccountMeta::new_readonly(token.token, false),
+                ]
+            }),
+        )
+        .unwrap();
 
     (ctx, intent, route_hash)
 }
@@ -70,7 +77,7 @@ fn refund_intent_native_success() {
 
     ctx.expire_intent(&intent);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -122,7 +129,7 @@ fn refund_intent_tokens_success() {
             ]
         })
         .collect();
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -173,7 +180,7 @@ fn refund_intent_tokens_2022_success() {
             ]
         })
         .collect();
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -224,7 +231,7 @@ fn refund_intent_native_and_token_success() {
             ]
         })
         .collect();
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -255,10 +262,10 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     let fulfillment_proof = Proof::new(random(), Pubkey::new_unique());
-    ctx.set_proof(proof, fulfillment_proof);
+    ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
     ctx.expire_intent(&intent);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -285,10 +292,10 @@ fn refund_intent_withdrawn_success() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     let fulfillment_proof = Proof::new(intent.destination_chain, Pubkey::new_unique());
-    ctx.set_proof(proof, fulfillment_proof);
+    ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
     ctx.set_withdrawn_marker(withdrawn_marker);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -316,7 +323,7 @@ fn refund_intent_invalid_creator_fail() {
 
     ctx.expire_intent(&intent);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -341,7 +348,7 @@ fn refund_intent_invalid_vault_fail() {
 
     ctx.expire_intent(&intent);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         wrong_vault,
         route_hash,
@@ -366,7 +373,7 @@ fn refund_intent_invalid_proof_fail() {
 
     ctx.expire_intent(&intent);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -390,10 +397,10 @@ fn refund_intent_fulfilled_and_not_withdrawn_fail() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     let fulfillment_proof = Proof::new(intent.destination_chain, Pubkey::new_unique());
-    ctx.set_proof(proof, fulfillment_proof);
+    ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
     ctx.expire_intent(&intent);
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -416,7 +423,7 @@ fn refund_intent_not_expired_fail() {
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -466,7 +473,7 @@ fn refund_intent_invalid_creator_token_fail() {
             ]
         })
         .collect();
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,
@@ -495,7 +502,11 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
     intent.reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &vault, 1000);
     });
-    ctx.set_proof(proof, Proof::new(intent.destination_chain, claimant));
+    ctx.set_proof(
+        proof,
+        Proof::new(intent.destination_chain, claimant),
+        hyper_prover::ID,
+    );
     intent.reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
         ctx.airdrop_token_ata(&token.token, &creator, 0);
@@ -521,17 +532,19 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
             ]
         })
         .collect();
-    ctx.withdraw_intent(
-        &intent,
-        vault,
-        route_hash,
-        claimant,
-        proof,
-        withdrawn_marker,
-        proof_closer_pda().0,
-        token_accounts,
-    )
-    .unwrap();
+    ctx.portal()
+        .withdraw_intent(
+            &intent,
+            vault,
+            route_hash,
+            claimant,
+            proof,
+            withdrawn_marker,
+            proof_closer_pda().0,
+            token_accounts,
+            iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+        )
+        .unwrap();
     ctx.expire_intent(&intent);
 
     let token_accounts: Vec<_> = intent
@@ -551,7 +564,7 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
             ]
         })
         .collect();
-    let result = ctx.refund_intent(
+    let result = ctx.portal().refund_intent(
         &intent,
         vault,
         route_hash,

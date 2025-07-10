@@ -1,7 +1,9 @@
+use std::iter;
+
 use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::system_program;
-use eco_svm_std::prover::Proof;
+use eco_svm_std::prover::{self, Proof};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
 use hyper_prover::state::{pda_payer_pda, Config, ProofAccount};
@@ -22,7 +24,9 @@ fn setup() -> common::Context {
     let pda_payer = pda_payer_pda().0;
     ctx.airdrop(&pda_payer, sol_amount(10.0)).unwrap();
 
-    ctx.init_hyper_prover(vec![ctx.sender.pubkey().to_bytes().into()], Config::pda().0)
+    let sender = ctx.sender.pubkey();
+    ctx.hyper_prover()
+        .init(vec![sender.to_bytes().into()], Config::pda().0)
         .unwrap();
 
     ctx
@@ -76,12 +80,17 @@ fn handle_success() {
     let pda_payer_pda = pda_payer_pda().0;
     let pda_payer_balance = ctx.balance(&pda_payer_pda);
 
+    let sender = ctx.sender.pubkey();
     let handle_account_metas =
-        ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
-    let result = ctx.inbox_process(message, handle_account_metas);
-    assert!(result.is_ok_and(common::contains_cpi_event(
-        hyper_prover::events::IntentFulfilled::new(intent_hash, claimant),
-    )));
+        ctx.hyper_prover()
+            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(
+        result.is_ok_and(common::contains_cpi_event(prover::IntentFulfilled::new(
+            intent_hash,
+            claimant
+        ),))
+    );
 
     let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
     let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
@@ -121,14 +130,17 @@ fn handle_withdraw_success() {
     let pda_payer_pda = pda_payer_pda().0;
     let pda_payer_balance = ctx.balance(&pda_payer_pda);
 
-    let handle_account_metas = ctx.handle_account_metas(
+    let sender = ctx.sender.pubkey();
+    let handle_account_metas = ctx.hyper_prover().handle_account_metas(
         intent.destination_chain.try_into().unwrap(),
-        *ctx.sender.pubkey().as_array(),
+        sender.to_bytes(),
         payload,
     );
-    ctx.inbox_process(message, handle_account_metas).unwrap();
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
 
-    let result = ctx.withdraw_intent(
+    let result = ctx.portal().withdraw_intent(
         &intent,
         vault,
         intent.route.hash(),
@@ -137,6 +149,7 @@ fn handle_withdraw_success() {
         withdrawn_marker,
         proof_closer_pda().0,
         vec![],
+        iter::once(AccountMeta::new(pda_payer_pda, false)),
     );
     assert!(
         result.is_ok_and(common::contains_event(IntentWithdrawn::new(
@@ -170,11 +183,13 @@ fn handle_invalid_config_fail() {
         payload.clone(),
     );
 
+    let sender = ctx.sender.pubkey();
     let mut handle_account_metas =
-        ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
+        ctx.hyper_prover()
+            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
     *handle_account_metas.get_mut(0).unwrap() =
         AccountMeta::new_readonly(Pubkey::new_unique(), false);
-    let result = ctx.inbox_process(message, handle_account_metas);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(ErrorCode::AccountNotInitialized)))
 }
 
@@ -197,9 +212,11 @@ fn handle_invalid_sender_fail() {
         payload.clone(),
     );
 
+    let sender = ctx.sender.pubkey();
     let handle_account_metas =
-        ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
-    let result = ctx.inbox_process(message, handle_account_metas);
+        ctx.hyper_prover()
+            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidSender)))
 }
 
@@ -222,10 +239,12 @@ fn handle_invalid_proof_fail() {
         payload.clone(),
     );
 
+    let sender = ctx.sender.pubkey();
     let mut handle_account_metas =
-        ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
+        ctx.hyper_prover()
+            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
     *handle_account_metas.get_mut(1).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
-    let result = ctx.inbox_process(message, handle_account_metas);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidProof)))
 }
 
@@ -248,10 +267,12 @@ fn handle_invalid_pda_payer_fail() {
         payload.clone(),
     );
 
+    let sender = ctx.sender.pubkey();
     let mut handle_account_metas =
-        ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
+        ctx.hyper_prover()
+            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
     *handle_account_metas.get_mut(3).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
-    let result = ctx.inbox_process(message, handle_account_metas);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPdaPayer)))
 }
 
@@ -274,12 +295,15 @@ fn handle_already_proven_fail() {
         payload.clone(),
     );
 
-    let handle_account_metas = ctx.handle_account_metas(
+    let sender = ctx.sender.pubkey();
+    let handle_account_metas = ctx.hyper_prover().handle_account_metas(
         destination_chain,
-        *ctx.sender.pubkey().as_array(),
+        sender.to_bytes(),
         payload.clone(),
     );
-    ctx.inbox_process(message, handle_account_metas).unwrap();
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
 
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
@@ -289,7 +313,8 @@ fn handle_already_proven_fail() {
         payload.clone(),
     );
     let handle_account_metas =
-        ctx.handle_account_metas(destination_chain, *ctx.sender.pubkey().as_array(), payload);
-    let result = ctx.inbox_process(message, handle_account_metas);
+        ctx.hyper_prover()
+            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
 }

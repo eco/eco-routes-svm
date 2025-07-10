@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use anchor_lang::Event;
+use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -8,8 +8,11 @@ use anchor_spl::token_2022::{self, spl_token_2022};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use derive_more::{Deref, DerefMut};
+use eco_svm_std::prover::Proof;
+use hyper_prover::state::ProofAccount;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
+use portal::state::WithdrawnMarker;
 use portal::types::{Call, Intent, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
@@ -22,13 +25,15 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
-mod hyper_prover_helpers;
-mod hyperlane;
-mod portal_helpers;
+mod hyper_prover_context;
+mod hyperlane_context;
+mod local_prover_context;
+mod portal_context;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
+const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -52,9 +57,10 @@ impl Default for Context {
 
         svm.add_program(portal::ID, PORTAL_BIN);
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
+        svm.add_program(local_prover::ID, LOCAL_PROVER_BIN);
 
-        hyperlane::add_hyperlane_programs(&mut svm);
-        hyperlane::init_hyperlane(&mut svm);
+        hyperlane_context::add_hyperlane_programs(&mut svm);
+        hyperlane_context::init_hyperlane(&mut svm);
 
         let mint_authority = Keypair::new();
         let creator = Keypair::new();
@@ -277,6 +283,43 @@ impl Context {
         self.svm
             .get_account(pubkey)
             .and_then(|account| T::try_deserialize(&mut account.data.as_slice()).ok())
+    }
+
+    pub fn set_proof(&mut self, proof_pda: Pubkey, proof: Proof, owner: Pubkey) {
+        let mut data = Vec::new();
+        data.extend_from_slice(ProofAccount::DISCRIMINATOR);
+        proof.serialize(&mut data).unwrap();
+
+        let account = solana_sdk::account::Account {
+            lamports: self.get_sysvar::<Rent>().minimum_balance(data.len()),
+            data,
+            owner,
+            executable: false,
+            rent_epoch: self
+                .get_sysvar::<Rent>()
+                .minimum_balance(8 + ProofAccount::INIT_SPACE),
+        };
+
+        self.set_account(proof_pda, account).unwrap();
+    }
+
+    pub fn set_withdrawn_marker(&mut self, withdrawn_marker_pda: Pubkey) {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0u8; 8]);
+
+        let account = solana_sdk::account::Account {
+            lamports: WithdrawnMarker::min_balance(self.get_sysvar()),
+            data,
+            owner: portal::ID,
+            executable: false,
+            rent_epoch: 0,
+        };
+
+        self.set_account(withdrawn_marker_pda, account).unwrap();
+    }
+
+    pub fn expire_intent(&mut self, intent: &Intent) {
+        self.warp_to_timestamp(intent.reward.deadline + 1);
     }
 
     fn warp_to_timestamp(&mut self, unix_timestamp: i64) {

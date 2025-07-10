@@ -6,19 +6,20 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
-portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
+hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
+local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
+portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 
 [programs.devnet]
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
-# dummy-ism excluded for devnet
+local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 
 [programs.mainnet]
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
-# dummy-ism excluded for mainnet
+local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 
 [registry]
 url = "https://api.apr.dev"
@@ -28,9 +29,9 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "cargo test --no-fail-fast"
 build-localnet = "anchor build"
-build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet"
-build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover"
-deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover"
-deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet"
+deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover"
+deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover"
+test = "cargo test --no-fail-fast"
