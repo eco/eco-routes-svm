@@ -327,7 +327,7 @@ fn withdraw_intent_not_fulfilled_fail() {
         token_accounts,
     );
     assert!(result.is_err_and(common::is_portal_error(
-        portal::instructions::PortalError::InvalidProof
+        portal::instructions::PortalError::IntentNotFulfilled
     )));
 }
 
@@ -580,7 +580,7 @@ fn withdraw_intent_already_withdrawn_fail() {
         token_accounts,
     );
     assert!(result.is_err_and(common::is_portal_error(
-        portal::instructions::PortalError::InvalidProof
+        portal::instructions::PortalError::IntentNotFulfilled
     )));
 }
 
