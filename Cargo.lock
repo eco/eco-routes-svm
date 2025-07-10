@@ -1933,7 +1933,6 @@ name = "local-prover"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
- "derive-new",
  "eco-svm-std",
  "portal",
 ]

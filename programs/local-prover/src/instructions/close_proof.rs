@@ -6,9 +6,10 @@ use crate::state::ProofAccount;
 #[derive(Accounts)]
 pub struct CloseProof<'info> {
     #[account(address = portal::state::proof_closer_pda().0 @ LocalProverError::InvalidPortalProofCloser)]
-    portal_proof_closer: Signer<'info>,
+    pub portal_proof_closer: Signer<'info>,
     #[account(mut)]
     pub proof: Account<'info, ProofAccount>,
+    #[account(mut)]
     pub payer: Signer<'info>,
 }
 

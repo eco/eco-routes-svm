@@ -359,7 +359,7 @@ impl Portal<'_> {
         fulfill_marker: Pubkey,
         dispatcher: Pubkey,
         data: Vec<u8>,
-        remaing_key_pairs: Vec<Keypair>,
+        remaining_key_pairs: Vec<Keypair>,
         remaining_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::ProveArgs {
@@ -386,7 +386,7 @@ impl Portal<'_> {
         };
 
         let key_pairs = iter::once(&self.payer)
-            .chain(remaing_key_pairs.iter())
+            .chain(remaining_key_pairs.iter())
             .collect::<Vec<_>>();
         let transaction = Transaction::new(
             &key_pairs,

@@ -19,6 +19,5 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
-derive-new = "0.7.0"
 eco-svm-std = { workspace = true }
 portal = { workspace = true, features = ["no-entrypoint"] }
