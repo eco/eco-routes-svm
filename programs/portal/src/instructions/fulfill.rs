@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::system_program;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::{Bytes32, CHAIN_ID};
@@ -55,7 +56,11 @@ pub fn fulfill_intent<'info>(
         PortalError::InvalidDestinationChainPortal
     );
     require!(
-        route.deadline >= Clock::get()?.unix_timestamp,
+        route.deadline
+            >= Clock::get()?
+                .unix_timestamp
+                .try_into()
+                .expect("timestamp must fit in u64"),
         PortalError::RouteExpired
     );
 
@@ -97,6 +102,20 @@ fn fund_executor<'info>(
         funded_tokens.iter().eq(route_token_amounts.keys()),
         PortalError::InvalidMint
     );
+
+    let native_amount = route.calls.iter().fold(0, |acc, call| acc + call.value);
+    if native_amount > 0 {
+        system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.solver.to_account_info(),
+                    to: ctx.accounts.executor.to_account_info(),
+                },
+            ),
+            native_amount,
+        )?;
+    }
 
     Ok(())
 }

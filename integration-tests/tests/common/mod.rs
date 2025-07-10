@@ -94,8 +94,8 @@ impl Context {
         }
     }
 
-    pub fn now(&self) -> i64 {
-        self.svm.get_sysvar::<Clock>().unix_timestamp
+    pub fn now(&self) -> u64 {
+        self.svm.get_sysvar::<Clock>().unix_timestamp as u64
     }
 
     pub fn rand_intent(&mut self) -> Intent {
@@ -127,9 +127,10 @@ impl Context {
                 destination_chain_portal: portal::ID.to_bytes().into(),
                 tokens: route_tokens,
                 calls: (0..3)
-                    .map(|_| Call {
+                    .map(|i| Call {
                         target: random::<[u8; 32]>().into(),
                         data: random::<[u8; 32]>().to_vec(),
+                        value: (i + 1) * 1_000_000_000,
                     })
                     .collect(),
             },
@@ -319,10 +320,10 @@ impl Context {
     }
 
     pub fn expire_intent(&mut self, intent: &Intent) {
-        self.warp_to_timestamp(intent.reward.deadline + 1);
+        self.warp_to_timestamp((intent.reward.deadline + 1).try_into().unwrap());
     }
 
-    fn warp_to_timestamp(&mut self, unix_timestamp: i64) {
+    pub fn warp_to_timestamp(&mut self, unix_timestamp: i64) {
         let mut clock = self.get_sysvar::<Clock>();
         clock.unix_timestamp = unix_timestamp;
 

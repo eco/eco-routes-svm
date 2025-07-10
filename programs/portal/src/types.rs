@@ -225,8 +225,8 @@ pub struct Intent {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Route {
-    pub deadline: i64,
     pub salt: Bytes32,
+    pub deadline: u64,
     pub destination_chain_portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
@@ -251,7 +251,7 @@ impl Route {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Reward {
-    pub deadline: i64,
+    pub deadline: u64,
     pub creator: Pubkey,
     pub prover: Pubkey,
     pub native_amount: u64,
@@ -298,6 +298,7 @@ pub struct TokenAmount {
 pub struct Call {
     pub target: Bytes32,
     pub data: Vec<u8>,
+    pub value: u64,
 }
 
 #[cfg(test)]
@@ -755,10 +756,12 @@ mod tests {
                 Call {
                     target: [5u8; 32].into(),
                     data: vec![1, 2, 3],
+                    value: 0,
                 },
                 Call {
                     target: [6u8; 32].into(),
                     data: vec![4, 5, 6],
+                    value: 1000,
                 },
             ],
         };

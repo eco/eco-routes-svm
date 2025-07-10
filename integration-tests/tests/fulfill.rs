@@ -16,12 +16,13 @@ use solana_sdk::signer::Signer;
 
 pub mod common;
 
-fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata)>) -> Route {
+fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata, u64)>) -> Route {
     route.calls = calldatas
         .into_iter()
-        .map(|(target, calldata)| Call {
+        .map(|(target, calldata, value)| Call {
             target: target.to_bytes().into(),
             data: calldata.try_to_vec().unwrap(),
+            value,
         })
         .collect();
 
@@ -30,13 +31,14 @@ fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata)>) ->
 
 fn route_with_calldatas_with_accounts(
     mut route: Route,
-    calldatas_with_accounts: Vec<(Pubkey, CalldataWithAccounts)>,
+    calldatas_with_accounts: Vec<(Pubkey, CalldataWithAccounts, u64)>,
 ) -> Route {
     route.calls = calldatas_with_accounts
         .into_iter()
-        .map(|(target, calldata_with_accounts)| Call {
+        .map(|(target, calldata_with_accounts, value)| Call {
             target: target.to_bytes().into(),
             data: calldata_with_accounts.try_to_vec().unwrap(),
+            value,
         })
         .collect();
 
@@ -105,14 +107,14 @@ fn fulfill_intent_token_transfer_success() {
         route.clone(),
         calldatas_with_accounts
             .into_iter()
-            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts))
+            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts, 0))
             .collect(),
     );
     let destination_route = route_with_calldatas(
         route,
         calldatas
             .into_iter()
-            .map(|calldata| (*token_program, calldata))
+            .map(|calldata| (*token_program, calldata, 0))
             .collect(),
     );
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
@@ -233,14 +235,14 @@ fn fulfill_intent_token_2022_transfer_success() {
         route.clone(),
         calldatas_with_accounts
             .into_iter()
-            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts))
+            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts, 0))
             .collect(),
     );
     let destination_route = route_with_calldatas(
         route,
         calldatas
             .into_iter()
-            .map(|calldata| (*token_program, calldata))
+            .map(|calldata| (*token_program, calldata, 0))
             .collect(),
     );
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
@@ -308,9 +310,10 @@ fn fulfill_intent_native_transfer_success() {
     let recipient = Pubkey::new_unique();
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
+    let solver = ctx.solver.pubkey();
     let native_amount = 1_000_000_000;
 
-    ctx.airdrop(&executor, native_amount).unwrap();
+    ctx.airdrop(&solver, native_amount).unwrap();
     let calldata = Calldata {
         data: system_instruction::transfer(&executor, &recipient, native_amount).data,
         account_count: 3,
@@ -325,9 +328,10 @@ fn fulfill_intent_native_transfer_success() {
 
     let source_route = route_with_calldatas_with_accounts(
         route.clone(),
-        vec![(system_program::ID, calldata_with_accounts)],
+        vec![(system_program::ID, calldata_with_accounts, native_amount)],
     );
-    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
+    let destination_route =
+        route_with_calldatas(route, vec![(system_program::ID, calldata, native_amount)]);
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
@@ -346,6 +350,7 @@ fn fulfill_intent_native_transfer_success() {
             claimant
         )))
     );
+    assert_eq!(ctx.balance(&solver), 0);
     assert_eq!(ctx.balance(&executor), 0);
     assert_eq!(ctx.balance(&recipient), native_amount);
     assert_eq!(
@@ -512,9 +517,9 @@ fn fulfill_intent_invalid_calldata_fail() {
 
     let source_route = route_with_calldatas_with_accounts(
         route.clone(),
-        vec![(system_program::ID, calldata_with_accounts)],
+        vec![(system_program::ID, calldata_with_accounts, 0)],
     );
-    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
+    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata, 0)]);
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
@@ -632,7 +637,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
         AccountMeta::new_readonly(hyper_prover::hyperlane::MAILBOX_ID, false),
         AccountMeta::new_readonly(hyper_prover::ID, false),
     ];
-    let route_with_prover_call = route_with_calldatas(route, vec![(hyper_prover::ID, calldata)]);
+    let route_with_prover_call = route_with_calldatas(route, vec![(hyper_prover::ID, calldata, 0)]);
     let intent_hash = types::intent_hash(CHAIN_ID, &route_with_prover_call.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
@@ -660,6 +665,7 @@ fn fulfill_intent_route_expired_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
+    ctx.warp_to_timestamp(1000);
     route.deadline = ctx.now() - 1;
 
     let result = ctx.portal().fulfill_intent(
