@@ -1,0 +1,110 @@
+[
+  {
+    "type": "function",
+    "name": "fulfillAndProve",
+    "inputs": [
+      {
+        "name": "route",
+        "type": "tuple",
+        "components": [
+          {"name": "salt", "type": "bytes32"},
+          {"name": "sourceDomainId", "type": "uint256"},
+          {"name": "destinationDomainId", "type": "uint256"},
+          {"name": "inbox", "type": "bytes32"},
+          {
+            "name": "tokens",
+            "type": "tuple[]",
+            "components": [
+              {"name": "token", "type": "bytes32"},
+              {"name": "amount", "type": "uint256"}
+            ]
+          },
+          {
+            "name": "calls",
+            "type": "tuple[]",
+            "components": [
+              {"name": "destination", "type": "bytes32"},
+              {"name": "calldata", "type": "bytes"},
+              {"name": "value", "type": "uint256"}
+            ]
+          }
+        ]
+      },
+      {"name": "rewardHash", "type": "bytes32"},
+      {"name": "claimant", "type": "bytes32"},
+      {"name": "intentHash", "type": "bytes32"},
+      {"name": "prover", "type": "address"},
+      {"name": "proofData", "type": "bytes"}
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "execute",
+    "inputs": [
+      {
+        "name": "route",
+        "type": "tuple",
+        "components": [
+          {"name": "salt", "type": "bytes32"},
+          {"name": "sourceDomainId", "type": "uint256"},
+          {"name": "destinationDomainId", "type": "uint256"},
+          {"name": "inbox", "type": "bytes32"},
+          {
+            "name": "tokens",
+            "type": "tuple[]",
+            "components": [
+              {"name": "token", "type": "bytes32"},
+              {"name": "amount", "type": "uint256"}
+            ]
+          },
+          {
+            "name": "calls",
+            "type": "tuple[]",
+            "components": [
+              {"name": "destination", "type": "bytes32"},
+              {"name": "calldata", "type": "bytes"},
+              {"name": "value", "type": "uint256"}
+            ]
+          }
+        ]
+      },
+      {"name": "routeHash", "type": "bytes32"}
+    ],
+    "outputs": [
+      {"name": "", "type": "bytes[]"}
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "fulfilled",
+    "inputs": [
+      {"name": "intentHash", "type": "bytes32"}
+    ],
+    "outputs": [
+      {"name": "", "type": "bool"}
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "canExecute",
+    "inputs": [
+      {"name": "routeHash", "type": "bytes32"}
+    ],
+    "outputs": [
+      {"name": "", "type": "bool"}
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "RouteExecuted",
+    "inputs": [
+      {"name": "routeHash", "type": "bytes32", "indexed": true},
+      {"name": "executor", "type": "address", "indexed": true}
+    ]
+  }
+] 

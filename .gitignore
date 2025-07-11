@@ -1,4 +1,14 @@
-/target
-.DS_Store
 .anchor
+.DS_Store
+target
+**/*.rs.bk
+node_modules
+test-ledger
+.yarn
+.gitignore
+**/keys/*.json
+**/evm-cache
+**/evm-artifacts
+**/evm-types
+**/.env
 CLAUDE.md

@@ -1,0 +1,17 @@
+{
+    "compilerOptions": {
+        "target": "es2020",
+        "module": "CommonJS",
+        "moduleResolution": "Node",
+        "resolveJsonModule": true,
+        "allowSyntheticDefaultImports": true,
+        "types": ["node", "mocha", "chai"],
+        "lib": ["es2020"],
+        "esModuleInterop": true,
+        "strict": false,
+        "typeRoots": ["./node_modules/@types"],
+        "skipLibCheck": true
+    },
+    "include": ["*.ts", "scripts/*.ts", "evm-types/**/*"],
+    "exclude": ["node_modules", "evm-artifacts", "evm-cache"]
+}
