@@ -26,17 +26,14 @@ pub struct Prove<'info> {
 
 pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
     let ProveArgs {
-        source_chain,
+        source,
         claimant,
         intent_hash,
         ..
     } = args;
     let claimant = Pubkey::new_from_array(claimant.into());
 
-    require!(
-        source_chain == CHAIN_ID,
-        LocalProverError::InvalidSourceChain
-    );
+    require!(source == CHAIN_ID, LocalProverError::InvalidSource);
 
     *ctx.accounts.proof = prover::Proof::new(CHAIN_ID, claimant).into();
 

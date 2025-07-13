@@ -42,14 +42,14 @@ sequenceDiagram
     participant Solver
     participant HyperProver
     participant Hyperlane
-    participant SourceChain
+    participant Source
 
     User->>Portal: Create & Fund Intent
     Solver->>Portal: Fulfill Intent
     Portal->>HyperProver: Prove Intent
     HyperProver->>Hyperlane: Send Proof Message
-    Hyperlane->>SourceChain: Deliver Proof
-    SourceChain->>Solver: Release Rewards
+    Hyperlane->>Source: Deliver Proof
+    Source->>Solver: Release Rewards
 ```
 
 1. **Intent Lifecycle**: Portal manages the full intent creation, funding, and fulfillment process

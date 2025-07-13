@@ -38,7 +38,7 @@ pub enum PortalError {
     InvalidExecutor,
     InvalidCalldata,
     InvalidFulfillMarker,
-    InvalidDestinationChainPortal,
+    InvalidPortal,
     InvalidProver,
     InvalidDispatcher,
     InvalidProofCloser,

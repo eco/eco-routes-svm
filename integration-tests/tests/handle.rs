@@ -62,7 +62,7 @@ fn create_hyperlane_message(
 #[test]
 fn handle_success() {
     let mut ctx = setup();
-    let destination_chain = random();
+    let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
     let payload = claimant
@@ -72,7 +72,7 @@ fn handle_success() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -83,7 +83,7 @@ fn handle_success() {
     let sender = ctx.sender.pubkey();
     let handle_account_metas =
         ctx.hyper_prover()
-            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+            .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(
         result.is_ok_and(common::contains_cpi_event(prover::IntentFulfilled::new(
@@ -94,7 +94,7 @@ fn handle_success() {
 
     let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
     let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
-    assert_eq!(destination_chain as u64, proof.0.destination_chain);
+    assert_eq!(destination as u64, proof.0.destination);
     assert_eq!(claimant, proof.0.claimant);
     assert!(pda_payer_balance > ctx.balance(&pda_payer_pda));
 }
@@ -107,7 +107,7 @@ fn handle_withdraw_success() {
     intent.reward.native_amount = 0;
     let claimant = Pubkey::new_unique();
     let intent_hash = intent_hash(
-        intent.destination_chain,
+        intent.destination,
         &intent.route.hash(),
         &intent.reward.hash(),
     );
@@ -119,7 +119,7 @@ fn handle_withdraw_success() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        intent.destination_chain.try_into().unwrap(),
+        intent.destination.try_into().unwrap(),
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -132,7 +132,7 @@ fn handle_withdraw_success() {
 
     let sender = ctx.sender.pubkey();
     let handle_account_metas = ctx.hyper_prover().handle_account_metas(
-        intent.destination_chain.try_into().unwrap(),
+        intent.destination.try_into().unwrap(),
         sender.to_bytes(),
         payload,
     );
@@ -167,7 +167,7 @@ fn handle_withdraw_success() {
 #[test]
 fn handle_invalid_config_fail() {
     let mut ctx = setup();
-    let destination_chain = random();
+    let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
     let payload = claimant
@@ -177,7 +177,7 @@ fn handle_invalid_config_fail() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -186,7 +186,7 @@ fn handle_invalid_config_fail() {
     let sender = ctx.sender.pubkey();
     let mut handle_account_metas =
         ctx.hyper_prover()
-            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+            .handle_account_metas(destination, sender.to_bytes(), payload);
     *handle_account_metas.get_mut(0).unwrap() =
         AccountMeta::new_readonly(Pubkey::new_unique(), false);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
@@ -196,7 +196,7 @@ fn handle_invalid_config_fail() {
 #[test]
 fn handle_invalid_sender_fail() {
     let mut ctx = setup();
-    let destination_chain = random();
+    let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
     let payload = claimant
@@ -206,7 +206,7 @@ fn handle_invalid_sender_fail() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         Pubkey::new_unique().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -215,7 +215,7 @@ fn handle_invalid_sender_fail() {
     let sender = ctx.sender.pubkey();
     let handle_account_metas =
         ctx.hyper_prover()
-            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+            .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidSender)))
 }
@@ -223,7 +223,7 @@ fn handle_invalid_sender_fail() {
 #[test]
 fn handle_invalid_proof_fail() {
     let mut ctx = setup();
-    let destination_chain = random();
+    let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
     let payload = claimant
@@ -233,7 +233,7 @@ fn handle_invalid_proof_fail() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -242,7 +242,7 @@ fn handle_invalid_proof_fail() {
     let sender = ctx.sender.pubkey();
     let mut handle_account_metas =
         ctx.hyper_prover()
-            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+            .handle_account_metas(destination, sender.to_bytes(), payload);
     *handle_account_metas.get_mut(1).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidProof)))
@@ -251,7 +251,7 @@ fn handle_invalid_proof_fail() {
 #[test]
 fn handle_invalid_pda_payer_fail() {
     let mut ctx = setup();
-    let destination_chain = random();
+    let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
     let payload = claimant
@@ -261,7 +261,7 @@ fn handle_invalid_pda_payer_fail() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -270,7 +270,7 @@ fn handle_invalid_pda_payer_fail() {
     let sender = ctx.sender.pubkey();
     let mut handle_account_metas =
         ctx.hyper_prover()
-            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+            .handle_account_metas(destination, sender.to_bytes(), payload);
     *handle_account_metas.get_mut(3).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPdaPayer)))
@@ -279,7 +279,7 @@ fn handle_invalid_pda_payer_fail() {
 #[test]
 fn handle_already_proven_fail() {
     let mut ctx = setup();
-    let destination_chain = random();
+    let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
     let payload = claimant
@@ -289,32 +289,30 @@ fn handle_already_proven_fail() {
         .collect::<Vec<_>>();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
     );
 
     let sender = ctx.sender.pubkey();
-    let handle_account_metas = ctx.hyper_prover().handle_account_metas(
-        destination_chain,
-        sender.to_bytes(),
-        payload.clone(),
-    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload.clone());
     ctx.hyperlane()
         .inbox_process(message, handle_account_metas)
         .unwrap();
 
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        destination_chain,
+        destination,
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
     );
     let handle_account_metas =
         ctx.hyper_prover()
-            .handle_account_metas(destination_chain, sender.to_bytes(), payload);
+            .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
 }

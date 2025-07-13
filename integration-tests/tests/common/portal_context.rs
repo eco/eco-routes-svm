@@ -56,7 +56,7 @@ impl Portal<'_> {
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::FundArgs {
-            destination_chain: intent.destination_chain,
+            destination: intent.destination,
             route_hash,
             reward: intent.reward.clone(),
             allow_partial,
@@ -108,7 +108,7 @@ impl Portal<'_> {
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::RefundArgs {
-            destination_chain: intent.destination_chain,
+            destination: intent.destination,
             route_hash,
             reward: intent.reward.clone(),
         };
@@ -162,7 +162,7 @@ impl Portal<'_> {
         remaining_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::WithdrawArgs {
-            destination_chain: intent.destination_chain,
+            destination: intent.destination,
             route_hash,
             reward: intent.reward.clone(),
         };
@@ -291,7 +291,7 @@ impl Portal<'_> {
     pub fn prove_intent_via_hyper_prover(
         &mut self,
         intent_hash: Bytes32,
-        source_chain: u64,
+        source: u64,
         fulfill_marker: Pubkey,
         dispatcher: Pubkey,
         prover_dispatcher: Pubkey,
@@ -306,7 +306,7 @@ impl Portal<'_> {
         self.prove_intent(
             intent_hash,
             hyper_prover::ID,
-            source_chain,
+            source,
             fulfill_marker,
             dispatcher,
             data,
@@ -327,7 +327,7 @@ impl Portal<'_> {
     pub fn prove_intent_via_local_prover(
         &mut self,
         intent_hash: Bytes32,
-        source_chain: u64,
+        source: u64,
         fulfill_marker: Pubkey,
         dispatcher: Pubkey,
         proof: Pubkey,
@@ -335,7 +335,7 @@ impl Portal<'_> {
         self.prove_intent(
             intent_hash,
             local_prover::ID,
-            source_chain,
+            source,
             fulfill_marker,
             dispatcher,
             vec![],
@@ -355,7 +355,7 @@ impl Portal<'_> {
         &mut self,
         intent_hash: Bytes32,
         prover: Pubkey,
-        source_chain: u64,
+        source: u64,
         fulfill_marker: Pubkey,
         dispatcher: Pubkey,
         data: Vec<u8>,
@@ -364,7 +364,7 @@ impl Portal<'_> {
     ) -> TransactionResult {
         let args = portal::instructions::ProveArgs {
             prover,
-            source_chain,
+            source,
             intent_hash,
             data,
         };

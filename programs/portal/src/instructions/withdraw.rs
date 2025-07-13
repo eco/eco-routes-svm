@@ -23,7 +23,7 @@ use crate::types::{
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct WithdrawArgs {
-    pub destination_chain: u64,
+    pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
 }
@@ -61,11 +61,11 @@ pub fn withdraw_intent<'info>(
     args: WithdrawArgs,
 ) -> Result<()> {
     let WithdrawArgs {
-        destination_chain,
+        destination,
         route_hash,
         reward,
     } = args;
-    let intent_hash = types::intent_hash(destination_chain, &route_hash, &reward.hash());
+    let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
     let signer_seeds = [VAULT_SEED, intent_hash.as_ref(), &[bump]];
 
@@ -73,7 +73,7 @@ pub fn withdraw_intent<'info>(
         ctx.accounts.vault.key() == vault_pda,
         PortalError::InvalidVault
     );
-    validate_proof(&ctx, destination_chain, &intent_hash, &reward.prover)?;
+    validate_proof(&ctx, destination, &intent_hash, &reward.prover)?;
 
     withdraw_native(&ctx, &reward, &signer_seeds)?;
     let (token_transfer_accounts, remaining_accounts) =
@@ -94,7 +94,7 @@ pub fn withdraw_intent<'info>(
 
 fn validate_proof(
     ctx: &Context<Withdraw>,
-    destination_chain: u64,
+    destination: u64,
     intent_hash: &Bytes32,
     prover: &Pubkey,
 ) -> Result<()> {
@@ -105,8 +105,7 @@ fn validate_proof(
 
     match Proof::try_from_account_info(&ctx.accounts.proof)? {
         Some(proof)
-            if proof.claimant == *ctx.accounts.claimant.key
-                && proof.destination_chain == destination_chain =>
+            if proof.claimant == *ctx.accounts.claimant.key && proof.destination == destination =>
         {
             Ok(())
         }

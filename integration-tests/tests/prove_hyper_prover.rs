@@ -46,8 +46,8 @@ fn prove_intent_success() {
     let (mut ctx, intent_hash) = setup();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = random::<u32>() as u64;
-    let source_chain_prover = random::<[u8; 32]>();
+    let source = random::<u32>() as u64;
+    let source_prover = random::<[u8; 32]>();
     let claimant = ctx
         .account::<state::FulfillMarker>(&fulfill_marker)
         .unwrap()
@@ -55,15 +55,15 @@ fn prove_intent_success() {
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         hyper_prover::state::dispatcher_pda().0,
         hyperlane::MAILBOX_ID,
-        source_chain_prover.into(),
+        source_prover.into(),
     );
     assert!(result.clone().is_ok_and(common::contains_event_and_msg(
-        IntentProven::new(intent_hash, source_chain, CHAIN_ID),
+        IntentProven::new(intent_hash, source, CHAIN_ID),
         "Dispatched message"
     )));
 
@@ -79,8 +79,8 @@ fn prove_intent_success() {
     match mailbox_dispatch.first().unwrap() {
         MailboxInstruction::OutboxDispatch(msg) => {
             assert_eq!(msg.sender, hyper_prover::state::dispatcher_pda().0);
-            assert_eq!(msg.destination_domain, source_chain as u32);
-            assert_eq!(msg.recipient, source_chain_prover);
+            assert_eq!(msg.destination_domain, source as u32);
+            assert_eq!(msg.recipient, source_prover);
             assert_eq!(
                 msg.message_body,
                 claimant.into_iter().chain(intent_hash).collect::<Vec<_>>()
@@ -95,11 +95,11 @@ fn prove_intent_invalid_dispatcher_fail() {
     let (mut ctx, intent_hash) = setup();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let invalid_dispatcher = Pubkey::new_unique();
-    let source_chain = random::<u32>() as u64;
+    let source = random::<u32>() as u64;
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         invalid_dispatcher,
         hyper_prover::state::dispatcher_pda().0,
@@ -117,11 +117,11 @@ fn prove_intent_unfulfilled_fail() {
     let intent_hash = rand::random::<[u8; 32]>().into();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = random::<u32>() as u64;
+    let source = random::<u32>() as u64;
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         hyper_prover::state::dispatcher_pda().0,
@@ -136,12 +136,12 @@ fn prove_intent_invalid_hyper_prover_dispatcher_fail() {
     let (mut ctx, intent_hash) = setup();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = random::<u32>() as u64;
+    let source = random::<u32>() as u64;
     let invalid_hyper_dispatcher = Pubkey::new_unique();
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         invalid_hyper_dispatcher,
@@ -157,12 +157,12 @@ fn prove_intent_invalid_mailbox_not_executable_fail() {
     let (mut ctx, intent_hash) = setup();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = random::<u32>() as u64;
+    let source = random::<u32>() as u64;
     let invalid_mailbox = Pubkey::new_unique();
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         hyper_prover::state::dispatcher_pda().0,
@@ -178,11 +178,11 @@ fn prove_intent_invalid_mailbox_fail() {
     let (mut ctx, intent_hash) = setup();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = random::<u32>() as u64;
+    let source = random::<u32>() as u64;
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         hyper_prover::state::dispatcher_pda().0,

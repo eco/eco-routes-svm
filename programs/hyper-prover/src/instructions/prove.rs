@@ -33,13 +33,13 @@ pub struct Prove<'info> {
 
 pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
     let ProveArgs {
-        source_chain,
+        source,
         intent_hash,
         data,
         claimant,
     } = args;
 
-    let source_chain_prover: Bytes32 = <[u8; 32]>::try_from(data)
+    let source_prover: Bytes32 = <[u8; 32]>::try_from(data)
         .map_err(|_| HyperProverError::InvalidData)?
         .into();
     let (_, bump) = dispatcher_pda();
@@ -47,8 +47,8 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
 
     hyperlane::dispatch_msg(
         &ctx,
-        chain_to_domain(source_chain)?,
-        source_chain_prover,
+        chain_to_domain(source)?,
+        source_prover,
         claimant.into_iter().chain(intent_hash).collect(),
         &signer_seeds,
     )

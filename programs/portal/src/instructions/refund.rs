@@ -13,7 +13,7 @@ use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct RefundArgs {
-    pub destination_chain: u64,
+    pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
 }
@@ -44,11 +44,11 @@ pub fn refund_intent<'info>(
     args: RefundArgs,
 ) -> Result<()> {
     let RefundArgs {
-        destination_chain,
+        destination,
         route_hash,
         reward,
     } = args;
-    let intent_hash = types::intent_hash(destination_chain, &route_hash, &reward.hash());
+    let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
     let signer_seeds = [VAULT_SEED, intent_hash.as_ref(), &[bump]];
 
@@ -65,7 +65,7 @@ pub fn refund_intent<'info>(
         PortalError::InvalidWithdrawnMarker
     );
 
-    validate_intent_status(&ctx, &reward, destination_chain)?;
+    validate_intent_status(&ctx, &reward, destination)?;
 
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds)?;
@@ -79,7 +79,7 @@ pub fn refund_intent<'info>(
 fn validate_intent_status<'info>(
     ctx: &Context<'_, '_, '_, 'info, Refund<'info>>,
     reward: &Reward,
-    destination_chain: u64,
+    destination: u64,
 ) -> Result<()> {
     // already withdrawn
     if !ctx.accounts.withdrawn_marker.data_is_empty() {
@@ -88,7 +88,7 @@ fn validate_intent_status<'info>(
 
     // fulfilled but not withdrawn
     require!(
-        !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination_chain)?,
+        !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination)?,
         PortalError::IntentFulfilledAndNotWithdrawn
     );
 
@@ -105,9 +105,9 @@ fn validate_intent_status<'info>(
     Ok(())
 }
 
-fn is_fulfilled(proof: &AccountInfo, destination_chain: u64) -> Result<bool> {
+fn is_fulfilled(proof: &AccountInfo, destination: u64) -> Result<bool> {
     Ok(Proof::try_from_account_info(proof)?
-        .map(|proof| proof.destination_chain == destination_chain)
+        .map(|proof| proof.destination == destination)
         .unwrap_or_default())
 }
 

@@ -9,6 +9,6 @@ pub use prove::*;
 #[error_code]
 pub enum LocalProverError {
     InvalidPortalDispatcher,
-    InvalidSourceChain,
+    InvalidSource,
     InvalidPortalProofCloser,
 }

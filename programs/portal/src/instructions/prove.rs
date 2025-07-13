@@ -13,7 +13,7 @@ use crate::state::{dispatcher_pda, FulfillMarker, DISPATCHER_SEED, FULFILL_MARKE
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ProveArgs {
     pub prover: Pubkey,
-    pub source_chain: u64,
+    pub source: u64,
     pub intent_hash: Bytes32,
     pub data: Vec<u8>,
 }
@@ -40,26 +40,26 @@ pub fn prove_intent<'info>(
 ) -> Result<()> {
     let ProveArgs {
         prover: _,
-        source_chain,
+        source,
         intent_hash,
         data,
     } = args;
 
-    invoke_prover_prove(&ctx, source_chain, intent_hash, data)?;
+    invoke_prover_prove(&ctx, source, intent_hash, data)?;
 
-    emit!(IntentProven::new(intent_hash, source_chain, CHAIN_ID));
+    emit!(IntentProven::new(intent_hash, source, CHAIN_ID));
 
     Ok(())
 }
 
 fn invoke_prover_prove<'info>(
     ctx: &Context<'_, '_, '_, 'info, Prove<'info>>,
-    source_chain: u64,
+    source: u64,
     intent_hash: Bytes32,
     data: Vec<u8>,
 ) -> Result<()> {
     let claimant = ctx.accounts.fulfill_marker.claimant;
-    let args = prover::ProveArgs::new(source_chain, intent_hash, data, claimant);
+    let args = prover::ProveArgs::new(source, intent_hash, data, claimant);
     let ix_data: Vec<_> = PROVE_DISCRIMINATOR
         .into_iter()
         .chain(args.try_to_vec()?)

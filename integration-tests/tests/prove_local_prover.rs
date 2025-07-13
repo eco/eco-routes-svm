@@ -41,7 +41,7 @@ fn prove_intent_success() {
     let intent_hash = types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash());
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = CHAIN_ID;
+    let source = CHAIN_ID;
     let claimant = ctx
         .account::<state::FulfillMarker>(&fulfill_marker)
         .unwrap()
@@ -50,7 +50,7 @@ fn prove_intent_success() {
 
     let result = ctx.portal().prove_intent_via_local_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         proof,
@@ -64,27 +64,27 @@ fn prove_intent_success() {
 
     let proof_pda = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
     let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
-    assert_eq!(CHAIN_ID, proof.0.destination_chain);
+    assert_eq!(CHAIN_ID, proof.0.destination);
     assert_eq!(claimant, proof.0.claimant);
 }
 
 #[test]
-fn prove_intent_invalid_source_chain_fail() {
+fn prove_intent_invalid_source_fail() {
     let (mut ctx, intent) = setup();
     let intent_hash = types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash());
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let invalid_source_chain = CHAIN_ID + 1;
+    let invalid_source = CHAIN_ID + 1;
     let proof = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
 
     let result = ctx.portal().prove_intent_via_local_prover(
         intent_hash,
-        invalid_source_chain,
+        invalid_source,
         fulfill_marker,
         dispatcher,
         proof,
     );
-    assert!(result.is_err_and(common::is_error(LocalProverError::InvalidSourceChain)));
+    assert!(result.is_err_and(common::is_error(LocalProverError::InvalidSource)));
 }
 
 #[test]
@@ -92,16 +92,12 @@ fn prove_invalid_portal_dispatcher_fail() {
     let mut ctx = common::Context::default();
     let invalid_dispatcher = ctx.payer.insecure_clone();
     let intent_hash = [1u8; 32].into();
-    let source_chain = CHAIN_ID;
+    let source = CHAIN_ID;
     let claimant = [2u8; 32].into();
 
-    let result = ctx.local_prover().prove(
-        &invalid_dispatcher,
-        source_chain,
-        intent_hash,
-        vec![],
-        claimant,
-    );
+    let result =
+        ctx.local_prover()
+            .prove(&invalid_dispatcher, source, intent_hash, vec![], claimant);
     assert!(result.is_err_and(common::is_error(LocalProverError::InvalidPortalDispatcher)));
 }
 
@@ -111,16 +107,16 @@ fn prove_intent_already_proven_fail() {
     let intent_hash = types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash());
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
     let dispatcher = state::dispatcher_pda().0;
-    let source_chain = CHAIN_ID;
+    let source = CHAIN_ID;
     let proof = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
 
     ctx.portal()
-        .prove_intent_via_local_prover(intent_hash, source_chain, fulfill_marker, dispatcher, proof)
+        .prove_intent_via_local_prover(intent_hash, source, fulfill_marker, dispatcher, proof)
         .unwrap();
 
     let result = ctx.portal().prove_intent_via_local_prover(
         intent_hash,
-        source_chain,
+        source,
         fulfill_marker,
         dispatcher,
         proof,
