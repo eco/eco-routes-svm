@@ -34,9 +34,8 @@ pub struct Prove<'info> {
 pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
     let ProveArgs {
         source,
-        intent_hash,
+        intent_hashes_claimants,
         data,
-        claimant,
     } = args;
 
     let source_prover: Bytes32 = <[u8; 32]>::try_from(data)
@@ -49,7 +48,7 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
         &ctx,
         chain_to_domain(source)?,
         source_prover,
-        claimant.into_iter().chain(intent_hash).collect(),
+        intent_hashes_claimants.to_bytes(),
         &signer_seeds,
     )
 }

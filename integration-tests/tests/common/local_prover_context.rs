@@ -1,7 +1,8 @@
+use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::prover::{Proof, ProveArgs};
-use eco_svm_std::{event_authority_pda, Bytes32};
+use eco_svm_std::event_authority_pda;
+use eco_svm_std::prover::{IntentHashesClaimants, ProveArgs};
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -25,29 +26,30 @@ impl LocalProver<'_> {
         &mut self,
         portal_dispatcher: &Keypair,
         source: u64,
-        intent_hash: Bytes32,
+        intent_hashes_claimants: IntentHashesClaimants,
         data: Vec<u8>,
-        claimant: Bytes32,
+        proof_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let args = ProveArgs {
             source,
-            intent_hash,
+            intent_hashes_claimants,
             data,
-            claimant,
         };
         let instruction = local_prover::instruction::Prove { args };
-        let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
         let accounts = local_prover::accounts::Prove {
             portal_dispatcher: portal_dispatcher.pubkey(),
-            proof,
             payer: self.payer.pubkey(),
             system_program: anchor_lang::system_program::ID,
             event_authority: event_authority_pda(&local_prover::ID).0,
             program: local_prover::ID,
-        };
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(proof_accounts)
+        .collect();
         let instruction = Instruction {
             program_id: local_prover::ID,
-            accounts: accounts.to_account_metas(None),
+            accounts,
             data: instruction.data(),
         };
         let transaction = Transaction::new(

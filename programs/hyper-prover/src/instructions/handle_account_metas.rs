@@ -2,11 +2,10 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
 use anchor_lang::system_program;
 use borsh::BorshSerialize;
-use eco_svm_std::prover::Proof;
+use eco_svm_std::prover::{IntentHashesClaimants, Proof};
 use eco_svm_std::{event_authority_pda, SerializableAccountMeta};
 
 use crate::state::{pda_payer_pda, Config};
-use crate::utils::claimant_and_intent_hash;
 
 #[derive(Accounts)]
 pub struct HandleAccountMetas<'info> {
@@ -24,17 +23,20 @@ pub fn handle_account_metas(
     _sender: [u8; 32],
     payload: Vec<u8>,
 ) -> Result<()> {
-    let (_, intent_hash) = claimant_and_intent_hash(payload)?;
+    let intent_hashes_claimants = IntentHashesClaimants::from_bytes(&payload)?;
+    let proof_accounts = intent_hashes_claimants
+        .iter()
+        .map(|(intent_hash, _)| AccountMeta::new(Proof::pda(intent_hash, &crate::ID).0, false));
 
     let account_metas: Vec<SerializableAccountMeta> = vec![
         AccountMeta::new_readonly(Config::pda().0, false),
-        AccountMeta::new(Proof::pda(&intent_hash, &crate::ID).0, false),
         AccountMeta::new_readonly(system_program::ID, false),
         AccountMeta::new(pda_payer_pda().0, false),
         AccountMeta::new_readonly(event_authority_pda(&crate::ID).0, false),
         AccountMeta::new_readonly(crate::ID, false),
     ]
     .into_iter()
+    .chain(proof_accounts)
     .map(Into::into)
     .collect();
 

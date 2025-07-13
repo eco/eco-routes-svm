@@ -1,7 +1,7 @@
 use std::iter;
 
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{system_program, InstructionData, ToAccountMetas};
+use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{event_authority_pda, Bytes32};
 use portal::types::{Intent, Route};
@@ -294,9 +294,9 @@ impl Portal<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn prove_intent_via_hyper_prover(
         &mut self,
-        intent_hash: Bytes32,
+        intent_hashes: Vec<Bytes32>,
         source: u64,
-        fulfill_marker: Pubkey,
+        fulfill_markers: Vec<Pubkey>,
         dispatcher: Pubkey,
         prover_dispatcher: Pubkey,
         mailbox_program: Pubkey,
@@ -308,10 +308,10 @@ impl Portal<'_> {
             hyperlane_context::dispatched_message_pda(&unique_message.pubkey());
 
         self.prove_intent(
-            intent_hash,
+            intent_hashes,
             hyper_prover::ID,
             source,
-            fulfill_marker,
+            fulfill_markers,
             dispatcher,
             data,
             vec![unique_message.insecure_clone()],
@@ -330,37 +330,42 @@ impl Portal<'_> {
 
     pub fn prove_intent_via_local_prover(
         &mut self,
-        intent_hash: Bytes32,
+        intent_hashes: Vec<Bytes32>,
         source: u64,
-        fulfill_marker: Pubkey,
+        fulfill_markers: Vec<Pubkey>,
         dispatcher: Pubkey,
-        proof: Pubkey,
+        proofs: Vec<Pubkey>,
     ) -> TransactionResult {
         self.prove_intent(
-            intent_hash,
+            intent_hashes,
             local_prover::ID,
             source,
-            fulfill_marker,
+            fulfill_markers,
             dispatcher,
             vec![],
             vec![],
             vec![
-                AccountMeta::new(proof, false),
                 AccountMeta::new(self.payer.pubkey(), true),
-                AccountMeta::new_readonly(system_program::ID, false),
+                AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
                 AccountMeta::new_readonly(event_authority_pda(&local_prover::ID).0, false),
                 AccountMeta::new_readonly(local_prover::ID, false),
-            ],
+            ]
+            .into_iter()
+            .chain(
+                proofs
+                    .into_iter()
+                    .map(|proof| AccountMeta::new(proof, false)),
+            ),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
     fn prove_intent(
         &mut self,
-        intent_hash: Bytes32,
+        intent_hashes: Vec<Bytes32>,
         prover: Pubkey,
         source: u64,
-        fulfill_marker: Pubkey,
+        fulfill_markers: Vec<Pubkey>,
         dispatcher: Pubkey,
         data: Vec<u8>,
         remaining_key_pairs: Vec<Keypair>,
@@ -369,20 +374,25 @@ impl Portal<'_> {
         let args = portal::instructions::ProveArgs {
             prover,
             source,
-            intent_hash,
+            intent_hashes,
             data,
         };
 
         let instruction = portal::instruction::Prove { args };
-        let accounts: Vec<_> = portal::accounts::Prove {
-            prover,
-            fulfill_marker,
-            dispatcher,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(remaining_accounts)
-        .collect();
+        let accounts: Vec<_> = portal::accounts::Prove { prover, dispatcher }
+            .to_account_metas(None)
+            .into_iter()
+            .chain(
+                fulfill_markers
+                    .into_iter()
+                    .map(|fulfill_marker| AccountMeta {
+                        pubkey: fulfill_marker,
+                        is_signer: false,
+                        is_writable: false,
+                    }),
+            )
+            .chain(remaining_accounts)
+            .collect();
         let instruction = Instruction {
             program_id: portal::ID,
             accounts,
