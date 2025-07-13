@@ -42,4 +42,5 @@ pub enum PortalError {
     InvalidProver,
     InvalidDispatcher,
     InvalidProofCloser,
+    InvalidIntentHash,
 }

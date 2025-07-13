@@ -28,6 +28,7 @@ fn setup() -> (common::Context, Bytes32) {
 
     ctx.portal()
         .fulfill_intent(
+            intent_hash,
             &route,
             reward_hash,
             claimant,

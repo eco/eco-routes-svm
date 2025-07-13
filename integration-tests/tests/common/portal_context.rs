@@ -208,6 +208,7 @@ impl Portal<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn fulfill_intent(
         &mut self,
+        intent_hash: Bytes32,
         route: &Route,
         reward_hash: Bytes32,
         claimant: Bytes32,
@@ -217,6 +218,7 @@ impl Portal<'_> {
         call_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         self.fulfill_intent_with_signers(
+            intent_hash,
             route,
             reward_hash,
             claimant,
@@ -231,6 +233,7 @@ impl Portal<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn fulfill_intent_with_signers(
         &mut self,
+        intent_hash: Bytes32,
         route: &Route,
         reward_hash: Bytes32,
         claimant: Bytes32,
@@ -241,6 +244,7 @@ impl Portal<'_> {
         additional_signers: Vec<&Keypair>,
     ) -> TransactionResult {
         let args = portal::instructions::FulfillArgs {
+            intent_hash,
             route: route.clone(),
             reward_hash,
             claimant,

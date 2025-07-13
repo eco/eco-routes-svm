@@ -145,6 +145,7 @@ fn fulfill_intent_token_transfer_success() {
         .collect();
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &destination_route,
         reward_hash,
         claimant,
@@ -273,6 +274,7 @@ fn fulfill_intent_token_2022_transfer_success() {
         .collect();
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &destination_route,
         reward_hash,
         claimant,
@@ -336,6 +338,7 @@ fn fulfill_intent_native_transfer_success() {
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &destination_route,
         reward_hash,
         claimant,
@@ -373,6 +376,7 @@ fn fulfill_intent_invalid_executor_fail() {
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &route,
         reward_hash,
         claimant,
@@ -400,6 +404,7 @@ fn fulfill_intent_invalid_token_transfer_accounts_fail() {
     let insufficient_token_accounts = vec![AccountMeta::new(Pubkey::new_unique(), false)];
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &route,
         reward_hash,
         claimant,
@@ -452,6 +457,7 @@ fn fulfill_intent_invalid_mint_fail() {
         .collect();
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &route,
         reward_hash,
         claimant,
@@ -478,6 +484,7 @@ fn fulfill_intent_invalid_fulfill_marker_fail() {
     let wrong_fulfill_marker = Pubkey::new_unique();
 
     let result = ctx.portal().fulfill_intent(
+        types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash),
         &route,
         reward_hash,
         claimant,
@@ -524,6 +531,7 @@ fn fulfill_intent_invalid_calldata_fail() {
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &destination_route,
         reward_hash,
         claimant,
@@ -552,6 +560,7 @@ fn fulfill_intent_already_fulfilled_fail() {
 
     ctx.portal()
         .fulfill_intent(
+            intent_hash,
             &route,
             reward_hash,
             claimant,
@@ -563,6 +572,7 @@ fn fulfill_intent_already_fulfilled_fail() {
         .unwrap();
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &route,
         reward_hash,
         claimant,
@@ -591,6 +601,7 @@ fn fulfill_intent_invalid_portal_fail() {
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &route,
         reward_hash,
         claimant,
@@ -642,6 +653,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
     let result = ctx.portal().fulfill_intent_with_signers(
+        intent_hash,
         &route_with_prover_call,
         reward_hash,
         claimant,
@@ -669,6 +681,7 @@ fn fulfill_intent_route_expired_fail() {
     route.deadline = ctx.now() - 1;
 
     let result = ctx.portal().fulfill_intent(
+        intent_hash,
         &route,
         reward_hash,
         claimant,
@@ -678,4 +691,30 @@ fn fulfill_intent_route_expired_fail() {
         vec![],
     );
     assert!(result.is_err_and(common::is_error(PortalError::RouteExpired)));
+}
+
+#[test]
+fn fulfill_intent_invalid_intent_hash_fail() {
+    let mut ctx = common::Context::default();
+    let mut route = ctx.rand_intent().route;
+    route.tokens.clear();
+    route.calls.clear();
+    let reward_hash = rand::random::<[u8; 32]>().into();
+    let claimant = Pubkey::new_unique().to_bytes().into();
+    let executor = state::executor_pda().0;
+
+    let wrong_intent_hash = rand::random::<[u8; 32]>().into();
+    let fulfill_marker = state::FulfillMarker::pda(&wrong_intent_hash).0;
+
+    let result = ctx.portal().fulfill_intent(
+        wrong_intent_hash,
+        &route,
+        reward_hash,
+        claimant,
+        executor,
+        fulfill_marker,
+        vec![],
+        vec![],
+    );
+    assert!(result.is_err_and(common::is_error(PortalError::InvalidIntentHash)));
 }

@@ -22,6 +22,7 @@ fn setup() -> (common::Context, Intent) {
 
     ctx.portal()
         .fulfill_intent(
+            intent_hash,
             &intent.route,
             intent.reward.hash(),
             claimant,
