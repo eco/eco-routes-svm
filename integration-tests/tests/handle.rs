@@ -3,7 +3,7 @@ use std::iter;
 use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::system_program;
-use eco_svm_std::prover::{self, Proof};
+use eco_svm_std::prover::{self, IntentHashesClaimants, Proof};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
 use hyper_prover::state::{pda_payer_pda, Config, ProofAccount};
@@ -65,11 +65,7 @@ fn handle_success() {
     let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
-    let payload = claimant
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
         destination,
@@ -101,6 +97,57 @@ fn handle_success() {
 }
 
 #[test]
+fn handle_multiple_success() {
+    let mut ctx = setup();
+    let destination = random();
+    let intent_hash_count = 3usize;
+    let claimants: Vec<Bytes32> = (0..intent_hash_count)
+        .map(|_| Pubkey::new_unique().to_bytes().into())
+        .collect();
+    let intent_hashes: Vec<Bytes32> = (0..intent_hash_count)
+        .map(|_| random::<[u8; 32]>().into())
+        .collect();
+    let payload = IntentHashesClaimants::from(
+        intent_hashes
+            .iter()
+            .cloned()
+            .zip(claimants.iter().cloned())
+            .collect::<Vec<_>>(),
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        ctx.sender.pubkey().to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let pda_payer_pda = pda_payer_pda().0;
+    let pda_payer_balance = ctx.balance(&pda_payer_pda);
+
+    let sender = ctx.sender.pubkey();
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+
+    intent_hashes
+        .into_iter()
+        .zip(claimants)
+        .for_each(|(intent_hash, claimant)| {
+            assert!(result.clone().is_ok_and(common::contains_cpi_event(
+                prover::IntentProven::new(intent_hash, CHAIN_ID, destination.into()),
+            )));
+
+            let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
+            let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
+            assert_eq!(destination as u64, proof.0.destination);
+            assert_eq!(claimant, proof.0.claimant);
+            assert!(pda_payer_balance > ctx.balance(&pda_payer_pda));
+        });
+}
+
+#[test]
 fn handle_withdraw_success() {
     let mut ctx = setup();
     let mut intent = ctx.rand_intent();
@@ -112,12 +159,8 @@ fn handle_withdraw_success() {
         &intent.route.hash(),
         &intent.reward.hash(),
     );
-    let payload = claimant
-        .as_array()
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload =
+        IntentHashesClaimants::from(vec![(intent_hash, claimant.to_bytes().into())]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
         intent.destination.try_into().unwrap(),
@@ -171,11 +214,7 @@ fn handle_invalid_config_fail() {
     let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
-    let payload = claimant
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
         destination,
@@ -200,11 +239,7 @@ fn handle_invalid_sender_fail() {
     let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
-    let payload = claimant
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
     let message = create_hyperlane_message(
         Pubkey::new_unique().to_bytes().into(),
         destination,
@@ -227,11 +262,7 @@ fn handle_invalid_proof_fail() {
     let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
-    let payload = claimant
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
         destination,
@@ -244,7 +275,9 @@ fn handle_invalid_proof_fail() {
     let mut handle_account_metas =
         ctx.hyper_prover()
             .handle_account_metas(destination, sender.to_bytes(), payload);
-    *handle_account_metas.get_mut(1).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
+    let proof_index = handle_account_metas.len() - 1;
+    *handle_account_metas.get_mut(proof_index).unwrap() =
+        AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidProof)))
 }
@@ -255,11 +288,7 @@ fn handle_invalid_pda_payer_fail() {
     let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
-    let payload = claimant
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
         destination,
@@ -272,7 +301,7 @@ fn handle_invalid_pda_payer_fail() {
     let mut handle_account_metas =
         ctx.hyper_prover()
             .handle_account_metas(destination, sender.to_bytes(), payload);
-    *handle_account_metas.get_mut(3).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
+    *handle_account_metas.get_mut(2).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPdaPayer)))
 }
@@ -283,11 +312,7 @@ fn handle_already_proven_fail() {
     let destination = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
     let intent_hash: Bytes32 = random::<[u8; 32]>().into();
-    let payload = claimant
-        .iter()
-        .copied()
-        .chain(intent_hash.to_vec())
-        .collect::<Vec<_>>();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
         destination,
@@ -316,4 +341,58 @@ fn handle_already_proven_fail() {
             .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
+}
+
+#[test]
+fn handle_invalid_payload_fail() {
+    let mut ctx = setup();
+    let destination = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let payload = IntentHashesClaimants::from(vec![(intent_hash, claimant)]).to_bytes();
+    let invalid_payload = vec![0u8; 63];
+    let message = create_hyperlane_message(
+        ctx.sender.pubkey().to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        invalid_payload,
+    );
+
+    let sender = ctx.sender.pubkey();
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_err_and(common::is_error(ErrorCode::AccountDidNotDeserialize)))
+}
+
+#[test]
+fn handle_account_proof_mismatch_fail() {
+    let mut ctx = setup();
+    let destination = random();
+    let claimant_1: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let claimant_2: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash_1: Bytes32 = random::<[u8; 32]>().into();
+    let intent_hash_2: Bytes32 = random::<[u8; 32]>().into();
+    let invalid_payload = IntentHashesClaimants::from(vec![(intent_hash_1, claimant_1)]).to_bytes();
+    let payload = IntentHashesClaimants::from(vec![
+        (intent_hash_1, claimant_1),
+        (intent_hash_2, claimant_2),
+    ])
+    .to_bytes();
+    let message = create_hyperlane_message(
+        ctx.sender.pubkey().to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload,
+    );
+
+    let sender = ctx.sender.pubkey();
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), invalid_payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidProof)))
 }

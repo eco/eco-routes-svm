@@ -5,16 +5,17 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use eco_svm_std::prover::{self, PROVE_DISCRIMINATOR};
 use eco_svm_std::{Bytes32, CHAIN_ID};
+use itertools::Itertools;
 
 use crate::events::IntentProven;
 use crate::instructions::PortalError;
-use crate::state::{dispatcher_pda, FulfillMarker, DISPATCHER_SEED, FULFILL_MARKER_SEED};
+use crate::state::{dispatcher_pda, FulfillMarker, DISPATCHER_SEED};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ProveArgs {
     pub prover: Pubkey,
     pub source: u64,
-    pub intent_hash: Bytes32,
+    pub intent_hashes: Vec<Bytes32>,
     pub data: Vec<u8>,
 }
 
@@ -24,11 +25,6 @@ pub struct Prove<'info> {
     /// CHECK: address is validated
     #[account(executable, address = args.prover @ PortalError::InvalidProver)]
     pub prover: UncheckedAccount<'info>,
-    #[account(
-        seeds = [FULFILL_MARKER_SEED, args.intent_hash.as_ref()],
-        bump,
-    )]
-    pub fulfill_marker: Account<'info, FulfillMarker>,
     /// CHECK: address is validated
     #[account(address = dispatcher_pda().0 @ PortalError::InvalidDispatcher)]
     pub dispatcher: UncheckedAccount<'info>,
@@ -41,25 +37,77 @@ pub fn prove_intent<'info>(
     let ProveArgs {
         prover: _,
         source,
-        intent_hash,
+        intent_hashes,
         data,
     } = args;
 
-    invoke_prover_prove(&ctx, source, intent_hash, data)?;
+    require!(!intent_hashes.is_empty(), PortalError::EmptyIntentHashes);
 
-    emit!(IntentProven::new(intent_hash, source, CHAIN_ID));
+    let (intent_hashes_fulfill_markers, prove_accounts) =
+        fulfill_marker_and_prove_accounts(&ctx, intent_hashes)?;
+
+    intent_hashes_fulfill_markers
+        .iter()
+        .for_each(|(intent_hash, _)| {
+            emit!(IntentProven::new(*intent_hash, source, CHAIN_ID));
+        });
+
+    invoke_prover_prove(
+        &ctx,
+        source,
+        intent_hashes_fulfill_markers,
+        prove_accounts,
+        data,
+    )?;
 
     Ok(())
+}
+
+type IntentHashAndFulfillMarker = (Bytes32, FulfillMarker);
+
+fn fulfill_marker_and_prove_accounts<'c, 'info>(
+    ctx: &Context<'_, '_, 'c, 'info, Prove<'info>>,
+    intent_hashes: Vec<Bytes32>,
+) -> Result<(Vec<IntentHashAndFulfillMarker>, &'c [AccountInfo<'info>])> {
+    require!(
+        intent_hashes.len() <= ctx.remaining_accounts.len(),
+        PortalError::InvalidFulfillMarker
+    );
+    let (fulfill_markers, prove_accounts) = ctx.remaining_accounts.split_at(intent_hashes.len());
+
+    let intent_hashes_fulfill_markers = fulfill_markers
+        .iter()
+        .zip(intent_hashes)
+        .map(|(fulfill_marker, intent_hash)| {
+            require!(
+                fulfill_marker.key() == FulfillMarker::pda(&intent_hash).0,
+                PortalError::InvalidFulfillMarker
+            );
+
+            Ok((
+                intent_hash,
+                FulfillMarker::try_deserialize(&mut &fulfill_marker.try_borrow_data()?[..])
+                    .map_err(|_| PortalError::InvalidFulfillMarker)?,
+            ))
+        })
+        .try_collect()?;
+
+    Ok((intent_hashes_fulfill_markers, prove_accounts))
 }
 
 fn invoke_prover_prove<'info>(
     ctx: &Context<'_, '_, '_, 'info, Prove<'info>>,
     source: u64,
-    intent_hash: Bytes32,
+    intent_hashes_fulfill_markers: Vec<(Bytes32, FulfillMarker)>,
+    prove_accounts: &[AccountInfo<'info>],
     data: Vec<u8>,
 ) -> Result<()> {
-    let claimant = ctx.accounts.fulfill_marker.claimant;
-    let args = prover::ProveArgs::new(source, intent_hash, data, claimant);
+    let intent_hashes_claimants = intent_hashes_fulfill_markers
+        .into_iter()
+        .map(|(intent_hash, fulfill_marker)| (intent_hash, fulfill_marker.claimant))
+        .collect::<Vec<_>>()
+        .into();
+    let args = prover::ProveArgs::new(source, intent_hashes_claimants, data);
     let ix_data: Vec<_> = PROVE_DISCRIMINATOR
         .into_iter()
         .chain(args.try_to_vec()?)
@@ -68,15 +116,12 @@ fn invoke_prover_prove<'info>(
     let (_, bump) = dispatcher_pda();
     let signer_seeds = [DISPATCHER_SEED, &[bump]];
 
-    let remaining_account_metas = ctx.remaining_accounts.iter().map(|account| AccountMeta {
+    let prove_account_metas = prove_accounts.iter().map(|account| AccountMeta {
         pubkey: account.key(),
         is_signer: account.is_signer,
         is_writable: account.is_writable,
     });
-    let remaining_account_infos = ctx
-        .remaining_accounts
-        .iter()
-        .map(ToAccountInfo::to_account_info);
+    let prove_account_infos = prove_accounts.iter().map(ToAccountInfo::to_account_info);
 
     let ix = Instruction::new_with_bytes(
         ctx.accounts.prover.key(),
@@ -85,14 +130,14 @@ fn invoke_prover_prove<'info>(
             ctx.accounts.dispatcher.key(),
             true,
         ))
-        .chain(remaining_account_metas)
+        .chain(prove_account_metas)
         .collect(),
     );
 
     invoke_signed(
         &ix,
         iter::once(ctx.accounts.dispatcher.to_account_info())
-            .chain(remaining_account_infos)
+            .chain(prove_account_infos)
             .collect::<Vec<_>>()
             .as_slice(),
         &[&signer_seeds],

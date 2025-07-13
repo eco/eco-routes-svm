@@ -6,7 +6,6 @@ declare_id!("B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4");
 pub mod hyperlane;
 pub mod instructions;
 pub mod state;
-mod utils;
 
 use instructions::*;
 
@@ -27,8 +26,8 @@ pub mod hyper_prover {
     }
 
     #[instruction(discriminator = &hyperlane::HANDLE_DISCRIMINATOR)]
-    pub fn handle(
-        ctx: Context<Handle>,
+    pub fn handle<'info>(
+        ctx: Context<'_, '_, '_, 'info, Handle<'info>>,
         origin: u32,
         sender: [u8; 32],
         payload: Vec<u8>,

@@ -13,7 +13,10 @@ pub mod local_prover {
 
     use super::*;
 
-    pub fn prove(ctx: Context<Prove>, args: prover::ProveArgs) -> Result<()> {
+    pub fn prove<'info>(
+        ctx: Context<'_, '_, '_, 'info, Prove<'info>>,
+        args: prover::ProveArgs,
+    ) -> Result<()> {
         prove_intent(ctx, args)
     }
 
