@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::{self, IntentFulfilled, PROOF_SEED};
-use eco_svm_std::Bytes32;
+use eco_svm_std::prover::{self, IntentProven, PROOF_SEED};
+use eco_svm_std::{Bytes32, CHAIN_ID};
 
 use crate::hyperlane::process_authority_pda;
 use crate::instructions::HyperProverError;
@@ -35,10 +35,7 @@ pub fn handle(ctx: Context<Handle>, origin: u32, sender: [u8; 32], payload: Vec<
 
     mark_proven(&ctx, destination, &claimant, &intent_hash)?;
 
-    emit_cpi!(IntentFulfilled::new(
-        intent_hash,
-        claimant.to_bytes().into()
-    ));
+    emit_cpi!(IntentProven::new(intent_hash, CHAIN_ID, destination));
 
     Ok(())
 }

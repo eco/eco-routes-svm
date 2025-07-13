@@ -56,9 +56,10 @@ fn prove_intent_success() {
         proof,
     );
     assert!(
-        result.is_ok_and(common::contains_cpi_event(prover::IntentFulfilled::new(
+        result.is_ok_and(common::contains_cpi_event(prover::IntentProven::new(
             intent_hash,
-            claimant
+            CHAIN_ID,
+            CHAIN_ID
         )))
     );
 

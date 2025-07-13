@@ -39,9 +39,10 @@ pub struct ProveArgs {
 
 #[event]
 #[derive(new)]
-pub struct IntentFulfilled {
+pub struct IntentProven {
     intent_hash: Bytes32,
-    claimant: Bytes32,
+    source: u64,
+    destination: u64,
 }
 
 #[cfg(test)]
