@@ -15,21 +15,28 @@ pub mod common;
 #[test]
 fn close_proof_should_succeed() {
     let mut ctx = common::Context::default();
-    let mut intent = ctx.rand_intent();
-    intent.destination = CHAIN_ID;
-    intent.reward.prover = local_prover::ID;
-    intent.route.tokens.clear();
-    intent.route.calls.clear();
-    intent.reward.tokens.clear();
-    let route_hash = intent.route.hash();
+    let (mut destination, mut route, mut reward) = ctx.rand_intent();
+    destination = CHAIN_ID;
+    reward.prover = local_prover::ID;
+    route.tokens.clear();
+    route.calls.clear();
+    reward.tokens.clear();
+    let route_hash = route.hash();
 
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault_pda = state::vault_pda(&intent_hash).0;
     let funder = ctx.funder.pubkey();
 
-    ctx.airdrop(&funder, intent.reward.native_amount).unwrap();
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
     ctx.portal()
-        .fund_intent(&intent, vault_pda, route_hash, false, vec![])
+        .fund_intent(
+            destination,
+            reward.clone(),
+            vault_pda,
+            route_hash,
+            false,
+            vec![],
+        )
         .unwrap();
 
     let claimant = Pubkey::new_unique().to_bytes().into();
@@ -39,8 +46,8 @@ fn close_proof_should_succeed() {
     ctx.portal()
         .fulfill_intent(
             intent_hash,
-            &intent.route,
-            intent.reward.hash(),
+            &route,
+            reward.hash(),
             claimant,
             executor,
             fulfill_marker,
@@ -71,7 +78,8 @@ fn close_proof_should_succeed() {
 
     ctx.portal()
         .withdraw_intent(
-            &intent,
+            destination,
+            reward,
             vault_pda,
             route_hash,
             claimant_pubkey,

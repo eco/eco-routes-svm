@@ -2,13 +2,14 @@ use anchor_lang::prelude::*;
 use derive_new::new;
 use eco_svm_std::Bytes32;
 
-use crate::types::{Reward, Route};
+use crate::types::Reward;
 
 #[event]
 #[derive(new)]
 pub struct IntentPublished {
     intent_hash: Bytes32,
-    route: Route,
+    destination: u64,
+    route: Vec<u8>,
     reward: Reward,
 }
 

@@ -20,7 +20,7 @@ fn setup(intent_count: usize) -> (common::Context, Vec<Bytes32>) {
 
     let intent_hashes = (0..intent_count)
         .map(|_| {
-            let mut route = ctx.rand_intent().route;
+            let (_, mut route, _) = ctx.rand_intent();
             route.tokens.clear();
             route.calls.clear();
             let reward_hash = rand::random::<[u8; 32]>().into();
