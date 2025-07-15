@@ -11,22 +11,21 @@ fn setup(intent_count: usize) -> (common::Context, Vec<eco_svm_std::Bytes32>) {
 
     let intent_hashes = (0..intent_count)
         .map(|_| {
-            let mut intent = ctx.rand_intent();
-            intent.route.tokens.clear();
-            intent.route.calls.clear();
-            intent.reward.prover = local_prover::ID;
+            let (_, mut route, mut reward) = ctx.rand_intent();
+            route.tokens.clear();
+            route.calls.clear();
+            reward.prover = local_prover::ID;
             let claimant = Pubkey::new_unique().to_bytes().into();
             let executor = state::executor_pda().0;
 
-            let intent_hash =
-                types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash());
+            let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
             let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
             ctx.portal()
                 .fulfill_intent(
                     intent_hash,
-                    &intent.route,
-                    intent.reward.hash(),
+                    &route,
+                    reward.hash(),
                     claimant,
                     executor,
                     fulfill_marker,

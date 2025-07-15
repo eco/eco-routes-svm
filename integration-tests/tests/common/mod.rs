@@ -13,7 +13,7 @@ use hyper_prover::state::ProofAccount;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
 use portal::state::WithdrawnMarker;
-use portal::types::{Call, Intent, Reward, Route, TokenAmount};
+use portal::types::{Call, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
 use solana_sdk::instruction::InstructionError;
@@ -98,7 +98,7 @@ impl Context {
         self.svm.get_sysvar::<Clock>().unix_timestamp as u64
     }
 
-    pub fn rand_intent(&mut self) -> Intent {
+    pub fn rand_intent(&mut self) -> (u64, Route, Reward) {
         let route_tokens: Vec<_> = (0..2)
             .map(|i| TokenAmount {
                 token: Pubkey::new_unique(),
@@ -119,9 +119,9 @@ impl Context {
             self.set_mint_account(&token.token);
         });
 
-        Intent {
-            destination: random::<u32>().into(),
-            route: Route {
+        (
+            random::<u32>().into(),
+            Route {
                 deadline: self.now() + 1800,
                 salt: random::<[u8; 32]>().into(),
                 portal: portal::ID.to_bytes().into(),
@@ -134,14 +134,14 @@ impl Context {
                     })
                     .collect(),
             },
-            reward: Reward {
+            Reward {
                 deadline: self.now() + 3600,
                 creator: self.creator.pubkey(),
                 prover: hyper_prover::ID,
                 native_amount: sol_amount(1.0),
                 tokens: reward_tokens,
             },
-        }
+        )
     }
 
     pub fn set_mint_account(&mut self, mint: &Pubkey) {
@@ -317,10 +317,6 @@ impl Context {
         };
 
         self.set_account(withdrawn_marker_pda, account).unwrap();
-    }
-
-    pub fn expire_intent(&mut self, intent: &Intent) {
-        self.warp_to_timestamp((intent.reward.deadline + 1).try_into().unwrap());
     }
 
     pub fn warp_to_timestamp(&mut self, unix_timestamp: i64) {
