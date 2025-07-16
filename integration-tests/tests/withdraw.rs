@@ -25,12 +25,7 @@ fn setup(is_token_2022: bool) -> (common::Context, (u64, Route, Reward), Bytes32
     let (destination, _route, reward) = &intent;
     let route_hash = random::<[u8; 32]>().into();
     let funder = ctx.funder.pubkey();
-    let vault_pda = state::vault_pda(&intent_hash(
-        *destination,
-        &route_hash,
-        &reward.hash(),
-    ))
-    .0;
+    let vault_pda = state::vault_pda(&intent_hash(*destination, &route_hash, &reward.hash())).0;
     let token_program = &ctx.token_program.clone();
 
     ctx.airdrop(&funder, reward.native_amount).unwrap();
@@ -80,11 +75,7 @@ fn withdraw_intent_native_and_token_success() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
@@ -151,11 +142,7 @@ fn withdraw_intent_native_and_token_2022_success() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
@@ -221,11 +208,7 @@ fn withdraw_intent_invalid_vault_fail() {
     let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
 
     let result = ctx.portal().withdraw_intent(
         *destination,
@@ -255,11 +238,7 @@ fn withdraw_intent_duplicate_mint_accounts_fail() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
@@ -385,11 +364,7 @@ fn withdraw_intent_wrong_claimant_fail() {
     let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
 
     let result = ctx.portal().withdraw_intent(
         *destination,
@@ -452,11 +427,7 @@ fn withdraw_intent_invalid_token_transfer_accounts() {
     let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
@@ -489,11 +460,7 @@ fn withdraw_intent_invalid_vault_ata_fail() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
@@ -551,11 +518,7 @@ fn withdraw_intent_invalid_claimant_token_fail() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
         ctx.airdrop_token_ata(&token.token, &wrong_owner, 0);
@@ -610,11 +573,7 @@ fn withdraw_intent_already_withdrawn_fail() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
@@ -683,11 +642,7 @@ fn withdraw_intent_invalid_proof_closer_fail() {
     let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.set_proof(
-        proof,
-        Proof::new(*destination, claimant),
-        hyper_prover::ID,
-    );
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
 
     let result = ctx.portal().withdraw_intent(
         *destination,

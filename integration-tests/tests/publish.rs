@@ -1,5 +1,6 @@
 use anchor_lang::AnchorSerialize;
-use portal::{events::IntentPublished, types::intent_hash};
+use portal::events::IntentPublished;
+use portal::types::intent_hash;
 use solana_sdk::signer::Signer;
 use tiny_keccak::{Hasher, Keccak};
 
