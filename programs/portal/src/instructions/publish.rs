@@ -7,6 +7,9 @@ use crate::types::{intent_hash, Reward};
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct PublishArgs {
     pub destination: u64,
+    // The route here is a serialized vector of bytes encoded with the destination
+    // chain's native encoding. For example, if the destination is Ethereum
+    // the route should be the ABI-encoded.
     pub route: Vec<u8>,
     pub reward: Reward,
 }
