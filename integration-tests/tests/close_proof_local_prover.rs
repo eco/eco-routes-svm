@@ -15,8 +15,8 @@ pub mod common;
 #[test]
 fn close_proof_should_succeed() {
     let mut ctx = common::Context::default();
-    let (mut destination, mut route, mut reward) = ctx.rand_intent();
-    destination = CHAIN_ID;
+    let (_, mut route, mut reward) = ctx.rand_intent();
+    let destination = CHAIN_ID;
     reward.prover = local_prover::ID;
     route.tokens.clear();
     route.calls.clear();
