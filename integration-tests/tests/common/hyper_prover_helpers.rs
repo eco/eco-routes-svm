@@ -111,7 +111,6 @@ impl Context {
             &hyper_prover::ID,
         )
         .0;
-
         let instruction = hyper_prover::instruction::HandleAccountMetas {
             origin,
             sender,
@@ -120,19 +119,14 @@ impl Context {
         let accounts = hyper_prover::accounts::HandleAccountMetas {
             handle_account_metas: handle_account_metas_pda,
         };
-
         let instruction = Instruction {
             program_id: hyper_prover::ID,
             accounts: accounts.to_account_metas(None),
             data: instruction.data(),
         };
-
-        let payer = Keypair::new();
-        self.airdrop(&payer.pubkey(), sol_amount(1.0)).unwrap();
-
         let transaction = Transaction::new(
-            &[&payer],
-            Message::new(&[instruction], Some(&payer.pubkey())),
+            &[&self.payer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );
 

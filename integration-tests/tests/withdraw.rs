@@ -209,7 +209,7 @@ fn withdraw_intent_invalid_vault_fail() {
         proof_closer_pda().0,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidVault
     )));
 }
@@ -257,7 +257,7 @@ fn withdraw_intent_duplicate_mint_accounts_fail() {
         proof_closer_pda().0,
         token_accounts,
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidMint
     )));
 }
@@ -281,7 +281,7 @@ fn withdraw_intent_invalid_proof_fail() {
         proof_closer_pda().0,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidProof
     )));
 }
@@ -326,7 +326,7 @@ fn withdraw_intent_not_fulfilled_fail() {
         proof_closer_pda().0,
         token_accounts,
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::IntentNotFulfilled
     )));
 }
@@ -353,7 +353,7 @@ fn withdraw_intent_wrong_claimant_fail() {
         proof_closer_pda().0,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::IntentNotFulfilled
     )));
 }
@@ -380,7 +380,7 @@ fn withdraw_intent_wrong_destination_chain_fail() {
         proof_closer_pda().0,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::IntentNotFulfilled
     )));
 }
@@ -409,7 +409,7 @@ fn withdraw_intent_invalid_token_transfer_accounts() {
         proof_closer_pda().0,
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidTokenTransferAccounts
     )));
 }
@@ -463,7 +463,7 @@ fn withdraw_intent_invalid_vault_ata_fail() {
         proof_closer_pda().0,
         token_accounts,
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidAta
     )));
 }
@@ -516,7 +516,7 @@ fn withdraw_intent_invalid_claimant_token_fail() {
         proof_closer_pda().0,
         token_accounts,
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidClaimantToken
     )));
 }
@@ -579,7 +579,7 @@ fn withdraw_intent_already_withdrawn_fail() {
         proof_closer_pda().0,
         token_accounts,
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::IntentNotFulfilled
     )));
 }
@@ -605,7 +605,7 @@ fn withdraw_intent_invalid_proof_closer_fail() {
         Pubkey::new_unique(),
         vec![],
     );
-    assert!(result.is_err_and(common::is_portal_error(
+    assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidProofCloser
     )));
 }

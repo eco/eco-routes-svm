@@ -30,7 +30,7 @@ fn init_hyper_prover_invalid_config_fail() {
     let whitelisted_senders = vec![ctx.sender.pubkey().to_bytes().into()];
 
     let result = ctx.init_hyper_prover(whitelisted_senders, Pubkey::new_unique());
-    assert!(result.is_err_and(common::is_portal_error(HyperProverError::InvalidConfig)));
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidConfig)));
 }
 
 #[test]
@@ -42,5 +42,5 @@ fn init_hyper_prover_already_initialized_fail() {
         .unwrap();
 
     let result = ctx.init_hyper_prover(whitelisted_senders, Config::pda().0);
-    assert!(result.is_err_and(common::is_portal_error(ErrorCode::ConstraintZero)));
+    assert!(result.is_err_and(common::is_error(ErrorCode::ConstraintZero)));
 }

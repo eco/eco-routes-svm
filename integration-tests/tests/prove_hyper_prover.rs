@@ -34,7 +34,5 @@ fn prove_invalid_portal_dispatcher_fail() {
         &unique_message,
         dispatched_message_pda,
     );
-    assert!(result.is_err_and(common::is_portal_error(
-        HyperProverError::InvalidPortalDispatcher
-    )));
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPortalDispatcher)));
 }

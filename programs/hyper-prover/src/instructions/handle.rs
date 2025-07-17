@@ -9,6 +9,7 @@ use crate::instructions::HyperProverError;
 use crate::state::{pda_payer_pda, Config, ProofAccount, PDA_PAYER_SEED};
 use crate::utils::claimant_and_intent_hash;
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct Handle<'info> {
     #[account(address = process_authority_pda().0 @ HyperProverError::InvalidProcessAuthority)]
@@ -35,7 +36,7 @@ pub fn handle(ctx: Context<Handle>, origin: u32, sender: [u8; 32], payload: Vec<
 
     mark_proven(&ctx, destination_chain, &claimant, &intent_hash)?;
 
-    emit!(IntentFulfilled::new(
+    emit_cpi!(IntentFulfilled::new(
         intent_hash,
         claimant.to_bytes().into()
     ));

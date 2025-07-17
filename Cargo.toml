@@ -3,11 +3,15 @@ members = ["integration-tests", "packages/*", "programs/*"]
 resolver = "2"
 
 [workspace.dependencies]
+anchor-lang = "0.31.1"
+derive-new = "0.7.0"
 dummy-ism = { path = "programs/dummy-ism" }
 eco-svm-std = { path = "packages/eco-svm-std" }
+goldie = "0.5.0"
 hyper-prover = { path = "programs/hyper-prover" }
-portal = { path = "programs/portal" }
 
+more = "0.0.0"
+portal = { path = "programs/portal" }
 [profile.release]
 overflow-checks = true
 lto = "fat"
