@@ -64,22 +64,39 @@ pub fn refund_intent<'info>(
         ctx.accounts.withdrawn_marker.key() == WithdrawnMarker::pda(&intent_hash).0,
         PortalError::InvalidWithdrawnMarker
     );
-    // require intent not fulfilled or already withdrawn
-    // TODO: allow early recover if the token specified is not a reward token (before anything)
-    require!(
-        !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination_chain)?
-            || !ctx.accounts.withdrawn_marker.data_is_empty(),
-        PortalError::IntentFulfilledAndNotWithdrawn
-    );
-    require!(
-        reward.deadline <= Clock::get()?.unix_timestamp, // TODO: allow early refund if already withdrawn
-        PortalError::RewardNotExpired
-    );
+
+    validate_intent_status(&ctx, &reward, destination_chain)?;
 
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds)?;
 
     emit!(IntentRefunded::new(intent_hash, reward.creator));
+
+    Ok(())
+}
+
+// TODO: allow early recover if the token specified is not a reward token (before anything)
+fn validate_intent_status<'info>(
+    ctx: &Context<'_, '_, '_, 'info, Refund<'info>>,
+    reward: &Reward,
+    destination_chain: u64,
+) -> Result<()> {
+    // already withdrawn
+    if !ctx.accounts.withdrawn_marker.data_is_empty() {
+        return Ok(());
+    }
+
+    // fulfilled but not withdrawn
+    require!(
+        !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination_chain)?,
+        PortalError::IntentFulfilledAndNotWithdrawn
+    );
+
+    // not fulfilled and not expired
+    require!(
+        reward.deadline <= Clock::get()?.unix_timestamp,
+        PortalError::RewardNotExpired
+    );
 
     Ok(())
 }

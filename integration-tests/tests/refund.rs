@@ -287,7 +287,6 @@ fn refund_intent_withdrawn_success() {
     let fulfillment_proof = Proof::new(intent.destination_chain, Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof);
     ctx.set_withdrawn_marker(withdrawn_marker);
-    ctx.expire_intent(&intent);
 
     let result = ctx.refund_intent(
         &intent,
@@ -382,7 +381,7 @@ fn refund_intent_invalid_proof_fail() {
 }
 
 #[test]
-fn refund_intent_already_fulfilled_fail() {
+fn refund_intent_fulfilled_and_not_withdrawn_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let creator = intent.reward.creator;
     let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
