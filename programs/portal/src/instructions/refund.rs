@@ -87,9 +87,10 @@ fn validate_intent_status<'info>(
     }
 
     // fulfilled but not withdrawn
-    if is_fulfilled(&ctx.accounts.proof.to_account_info(), destination_chain)? {
-        return Err(PortalError::IntentFulfilledAndNotWithdrawn.into());
-    }
+    require!(
+        !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination_chain)?,
+        PortalError::IntentFulfilledAndNotWithdrawn
+    );
 
     // not fulfilled and not expired
     require!(
