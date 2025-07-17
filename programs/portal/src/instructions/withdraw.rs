@@ -102,15 +102,6 @@ fn validate_proof(
         ctx.accounts.proof.key() == Proof::pda(intent_hash, prover).0,
         PortalError::InvalidProof
     );
-    require!(
-        ctx.accounts.proof.owner == prover,
-        PortalError::InvalidProof
-    );
-
-    msg!(
-        "Proof::try_from_account_info(&ctx.accounts.proof) {:?}",
-        Proof::try_from_account_info(&ctx.accounts.proof)
-    );
 
     match Proof::try_from_account_info(&ctx.accounts.proof)? {
         Some(proof)
