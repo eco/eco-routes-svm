@@ -94,7 +94,11 @@ fn validate_intent_status<'info>(
 
     // not fulfilled and not expired
     require!(
-        reward.deadline <= Clock::get()?.unix_timestamp,
+        reward.deadline
+            <= Clock::get()?
+                .unix_timestamp
+                .try_into()
+                .expect("timestamp must fit in u64"),
         PortalError::RewardNotExpired
     );
 
