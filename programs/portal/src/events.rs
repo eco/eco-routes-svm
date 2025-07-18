@@ -45,6 +45,6 @@ pub struct IntentFulfilled {
 #[derive(new)]
 pub struct IntentProven {
     intent_hash: Bytes32,
-    source_chain: u64,
-    destination_chain: u64,
+    source: u64,
+    destination: u64,
 }

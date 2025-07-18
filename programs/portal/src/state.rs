@@ -64,12 +64,12 @@ mod tests {
 
     #[test]
     fn vault_pda_deterministic() {
-        let destination_chain = 1000;
+        let destination = 1000;
         let route_hash = [6u8; 32].into();
         let reward_hash = [8u8; 32].into();
 
         goldie::assert_json!(vault_pda(&types::intent_hash(
-            destination_chain,
+            destination,
             &route_hash,
             &reward_hash,
         )));
@@ -77,12 +77,12 @@ mod tests {
 
     #[test]
     fn withdrawn_marker_pda_deterministic() {
-        let destination_chain = 1000;
+        let destination = 1000;
         let route_hash = [6u8; 32].into();
         let reward_hash = [8u8; 32].into();
 
         goldie::assert_json!(WithdrawnMarker::pda(&types::intent_hash(
-            destination_chain,
+            destination,
             &route_hash,
             &reward_hash,
         )));
@@ -111,12 +111,12 @@ mod tests {
 
     #[test]
     fn fulfill_marker_pda_deterministic() {
-        let destination_chain = 1000;
+        let destination = 1000;
         let route_hash = [6u8; 32].into();
         let reward_hash = [8u8; 32].into();
 
         goldie::assert_json!(FulfillMarker::pda(&types::intent_hash(
-            destination_chain,
+            destination,
             &route_hash,
             &reward_hash,
         )));

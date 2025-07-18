@@ -30,10 +30,10 @@ pub fn handle(ctx: Context<Handle>, origin: u32, sender: [u8; 32], payload: Vec<
         HyperProverError::InvalidSender,
     );
 
-    let destination_chain = domain_to_chain(origin);
+    let destination = domain_to_chain(origin);
     let (claimant, intent_hash) = claimant_and_intent_hash(payload)?;
 
-    mark_proven(&ctx, destination_chain, &claimant, &intent_hash)?;
+    mark_proven(&ctx, destination, &claimant, &intent_hash)?;
 
     emit_cpi!(IntentFulfilled::new(
         intent_hash,
@@ -51,7 +51,7 @@ fn domain_to_chain(chain: u32) -> u64 {
 
 fn mark_proven(
     ctx: &Context<Handle>,
-    destination_chain: u64,
+    destination: u64,
     claimant: &Pubkey,
     intent_hash: &Bytes32,
 ) -> Result<()> {
@@ -69,7 +69,7 @@ fn mark_proven(
     );
     let pda_payer_signer_seeds = [PDA_PAYER_SEED, &[bump]];
 
-    ProofAccount::from(prover::Proof::new(destination_chain, *claimant))
+    ProofAccount::from(prover::Proof::new(destination, *claimant))
         .init(
             &ctx.accounts.proof,
             &ctx.accounts.pda_payer,

@@ -9,7 +9,7 @@ pub const CLOSE_PROOF_DISCRIMINATOR: [u8; 8] = [64, 76, 168, 8, 126, 109, 164, 1
 
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug)]
 pub struct Proof {
-    pub destination_chain: u64,
+    pub destination: u64,
     pub claimant: Pubkey,
 }
 
@@ -31,7 +31,7 @@ impl Proof {
 
 #[derive(AnchorSerialize, AnchorDeserialize, new)]
 pub struct ProveArgs {
-    pub source_chain: u64,
+    pub source: u64,
     pub intent_hash: Bytes32,
     pub data: Vec<u8>,
     pub claimant: Bytes32,

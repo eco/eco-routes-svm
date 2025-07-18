@@ -24,13 +24,13 @@ impl LocalProver<'_> {
     pub fn prove(
         &mut self,
         portal_dispatcher: &Keypair,
-        source_chain: u64,
+        source: u64,
         intent_hash: Bytes32,
         data: Vec<u8>,
         claimant: Bytes32,
     ) -> TransactionResult {
         let args = ProveArgs {
-            source_chain,
+            source,
             intent_hash,
             data,
             claimant,

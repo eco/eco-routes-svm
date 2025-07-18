@@ -10,12 +10,12 @@ fn close_proof_invalid_portal_proof_closer_fail() {
     let invalid_proof_closer = ctx.payer.insecure_clone();
     let intent_hash = [1u8; 32].into();
     let claimant = ctx.payer.pubkey();
-    let destination_chain = 1u64;
+    let destination = 1u64;
     let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
 
     ctx.set_proof(
         proof_pda,
-        Proof::new(destination_chain, claimant),
+        Proof::new(destination, claimant),
         hyper_prover::ID,
     );
 

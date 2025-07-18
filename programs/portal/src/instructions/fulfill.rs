@@ -51,10 +51,7 @@ pub fn fulfill_intent<'info>(
         claimant,
     } = args;
 
-    require!(
-        route.destination_chain_portal == crate::ID,
-        PortalError::InvalidDestinationChainPortal
-    );
+    require!(route.portal == crate::ID, PortalError::InvalidPortal);
     require!(
         route.deadline
             >= Clock::get()?

@@ -25,7 +25,7 @@ fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
     let route_hash = random::<[u8; 32]>().into();
     let funder = ctx.funder.pubkey();
     let vault_pda = state::vault_pda(&intent_hash(
-        intent.destination_chain,
+        intent.destination,
         &route_hash,
         &intent.reward.hash(),
     ))
@@ -70,7 +70,7 @@ fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
 #[test]
 fn withdraw_intent_native_and_token_success() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -79,7 +79,7 @@ fn withdraw_intent_native_and_token_success() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -139,7 +139,7 @@ fn withdraw_intent_native_and_token_success() {
 #[test]
 fn withdraw_intent_native_and_token_2022_success() {
     let (mut ctx, intent, route_hash) = setup(true);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -148,7 +148,7 @@ fn withdraw_intent_native_and_token_2022_success() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -208,7 +208,7 @@ fn withdraw_intent_native_and_token_2022_success() {
 #[test]
 fn withdraw_intent_invalid_vault_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let wrong_vault = Pubkey::new_unique();
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -216,7 +216,7 @@ fn withdraw_intent_invalid_vault_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
 
@@ -239,7 +239,7 @@ fn withdraw_intent_invalid_vault_fail() {
 #[test]
 fn withdraw_intent_duplicate_mint_accounts_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -248,7 +248,7 @@ fn withdraw_intent_duplicate_mint_accounts_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -292,7 +292,7 @@ fn withdraw_intent_duplicate_mint_accounts_fail() {
 #[test]
 fn withdraw_intent_invalid_proof_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let wrong_proof = Pubkey::new_unique();
@@ -317,7 +317,7 @@ fn withdraw_intent_invalid_proof_fail() {
 #[test]
 fn withdraw_intent_not_fulfilled_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -363,7 +363,7 @@ fn withdraw_intent_not_fulfilled_fail() {
 #[test]
 fn withdraw_intent_wrong_claimant_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let wrong_claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
@@ -372,7 +372,7 @@ fn withdraw_intent_wrong_claimant_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
 
@@ -393,18 +393,18 @@ fn withdraw_intent_wrong_claimant_fail() {
 }
 
 #[test]
-fn withdraw_intent_wrong_destination_chain_fail() {
+fn withdraw_intent_wrong_destination_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
-    let wrong_destination_chain = random();
+    let wrong_destination = random();
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     ctx.set_proof(
         proof,
-        Proof::new(wrong_destination_chain, claimant),
+        Proof::new(wrong_destination, claimant),
         hyper_prover::ID,
     );
 
@@ -427,7 +427,7 @@ fn withdraw_intent_wrong_destination_chain_fail() {
 #[test]
 fn withdraw_intent_invalid_token_transfer_accounts() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -435,7 +435,7 @@ fn withdraw_intent_invalid_token_transfer_accounts() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -461,7 +461,7 @@ fn withdraw_intent_invalid_token_transfer_accounts() {
 #[test]
 fn withdraw_intent_invalid_vault_ata_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -470,7 +470,7 @@ fn withdraw_intent_invalid_vault_ata_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -520,7 +520,7 @@ fn withdraw_intent_invalid_vault_ata_fail() {
 #[test]
 fn withdraw_intent_invalid_claimant_token_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let wrong_owner = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
@@ -530,7 +530,7 @@ fn withdraw_intent_invalid_claimant_token_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -578,7 +578,7 @@ fn withdraw_intent_invalid_claimant_token_fail() {
 #[test]
 fn withdraw_intent_already_withdrawn_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -587,7 +587,7 @@ fn withdraw_intent_already_withdrawn_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
     intent.reward.tokens.iter().for_each(|token| {
@@ -648,7 +648,7 @@ fn withdraw_intent_already_withdrawn_fail() {
 #[test]
 fn withdraw_intent_invalid_proof_closer_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let claimant = Pubkey::new_unique();
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
@@ -656,7 +656,7 @@ fn withdraw_intent_invalid_proof_closer_fail() {
 
     ctx.set_proof(
         proof,
-        Proof::new(intent.destination_chain, claimant),
+        Proof::new(intent.destination, claimant),
         hyper_prover::ID,
     );
 

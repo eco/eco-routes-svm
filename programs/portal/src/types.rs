@@ -203,11 +203,11 @@ impl CalldataWithAccounts {
     }
 }
 
-pub fn intent_hash(destination_chain: u64, route_hash: &Bytes32, reward_hash: &Bytes32) -> Bytes32 {
+pub fn intent_hash(destination: u64, route_hash: &Bytes32, reward_hash: &Bytes32) -> Bytes32 {
     let mut hasher = Keccak::v256();
     let mut hash = [0u8; 32];
 
-    hasher.update(destination_chain.to_be_bytes().as_slice());
+    hasher.update(destination.to_be_bytes().as_slice());
     hasher.update(route_hash.as_ref());
     hasher.update(reward_hash.as_ref());
 
@@ -218,7 +218,7 @@ pub fn intent_hash(destination_chain: u64, route_hash: &Bytes32, reward_hash: &B
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Intent {
-    pub destination_chain: u64,
+    pub destination: u64,
     pub route: Route,
     pub reward: Reward,
 }
@@ -227,7 +227,7 @@ pub struct Intent {
 pub struct Route {
     pub salt: Bytes32,
     pub deadline: u64,
-    pub destination_chain_portal: Bytes32,
+    pub portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
 }
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn intent_hash_deterministic() {
-        let destination_chain = 1000;
+        let destination = 1000;
         let route_hash = [6u8; 32].into();
         let reward = Reward {
             deadline: 1500000,
@@ -326,8 +326,8 @@ mod tests {
             ],
         };
 
-        let hash_1 = intent_hash(destination_chain, &route_hash, &reward.hash());
-        let hash_2 = intent_hash(destination_chain, &route_hash, &reward.hash());
+        let hash_1 = intent_hash(destination, &route_hash, &reward.hash());
+        let hash_2 = intent_hash(destination, &route_hash, &reward.hash());
 
         assert_eq!(hash_1, hash_2);
         goldie::assert_json!(hash_1.as_ref());
@@ -741,7 +741,7 @@ mod tests {
         let route = Route {
             deadline: 1700000000,
             salt: [1u8; 32].into(),
-            destination_chain_portal: [2u8; 32].into(),
+            portal: [2u8; 32].into(),
             tokens: vec![
                 TokenAmount {
                     token: Pubkey::new_from_array([3u8; 32]),
@@ -774,7 +774,7 @@ mod tests {
         let route = Route {
             deadline: 1700000000,
             salt: [1u8; 32].into(),
-            destination_chain_portal: [2u8; 32].into(),
+            portal: [2u8; 32].into(),
             tokens: vec![
                 TokenAmount {
                     token: Pubkey::new_from_array([3u8; 32]),

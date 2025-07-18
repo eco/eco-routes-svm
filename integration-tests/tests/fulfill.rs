@@ -577,12 +577,12 @@ fn fulfill_intent_already_fulfilled_fail() {
 }
 
 #[test]
-fn fulfill_intent_invalid_destination_chain_portal_fail() {
+fn fulfill_intent_invalid_portal_fail() {
     let mut ctx = common::Context::default();
     let mut route = ctx.rand_intent().route;
     route.tokens.clear();
     route.calls.clear();
-    route.destination_chain_portal = rand::random::<[u8; 32]>().into();
+    route.portal = rand::random::<[u8; 32]>().into();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
@@ -601,7 +601,7 @@ fn fulfill_intent_invalid_destination_chain_portal_fail() {
     );
 
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidDestinationChainPortal
+        portal::instructions::PortalError::InvalidPortal
     )));
 }
 
@@ -614,7 +614,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let prove_data = eco_svm_std::prover::ProveArgs {
-        source_chain: 1,
+        source: 1,
         intent_hash: rand::random::<[u8; 32]>().into(),
         data: rand::random::<[u8; 32]>().to_vec(),
         claimant: rand::random::<[u8; 32]>().into(),

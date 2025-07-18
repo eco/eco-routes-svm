@@ -16,14 +16,14 @@ pub mod common;
 fn close_proof_should_succeed() {
     let mut ctx = common::Context::default();
     let mut intent = ctx.rand_intent();
-    intent.destination_chain = CHAIN_ID;
+    intent.destination = CHAIN_ID;
     intent.reward.prover = local_prover::ID;
     intent.route.tokens.clear();
     intent.route.calls.clear();
     intent.reward.tokens.clear();
     let route_hash = intent.route.hash();
 
-    let intent_hash = intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
     let vault_pda = state::vault_pda(&intent_hash).0;
     let funder = ctx.funder.pubkey();
 
@@ -86,12 +86,12 @@ fn close_proof_invalid_portal_proof_closer_fail() {
     let invalid_proof_closer = ctx.payer.insecure_clone();
     let intent_hash = [1u8; 32].into();
     let claimant = ctx.payer.pubkey();
-    let destination_chain = CHAIN_ID;
+    let destination = CHAIN_ID;
     let proof_pda = Proof::pda(&intent_hash, &local_prover::ID).0;
 
     ctx.set_proof(
         proof_pda,
-        Proof::new(destination_chain, claimant),
+        Proof::new(destination, claimant),
         local_prover::ID,
     );
 

@@ -155,7 +155,7 @@ impl HyperProver<'_> {
     pub fn prove(
         &mut self,
         portal_dispatcher: &Keypair,
-        source_chain: u64,
+        source: u64,
         intent_hash: Bytes32,
         data: Vec<u8>,
         claimant: Bytes32,
@@ -164,7 +164,7 @@ impl HyperProver<'_> {
         dispatched_message_pda: Pubkey,
     ) -> TransactionResult {
         let args = ProveArgs {
-            source_chain,
+            source,
             intent_hash,
             data,
             claimant,
