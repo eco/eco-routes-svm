@@ -7,6 +7,7 @@ use anchor_spl::token_2022::spl_token_2022;
 use eco_svm_std::CHAIN_ID;
 use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentFulfilled;
+use portal::instructions::PortalError;
 use portal::state::FulfillMarker;
 use portal::types::{Call, Calldata, CalldataWithAccounts, Route};
 use portal::{state, types};
@@ -645,4 +646,29 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
         vec![&unique_message],
     );
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPortalDispatcher)));
+}
+
+#[test]
+fn fulfill_intent_route_expired_fail() {
+    let mut ctx = common::Context::default();
+    let mut route = ctx.rand_intent().route;
+    route.tokens.clear();
+    let reward_hash = rand::random::<[u8; 32]>().into();
+    let claimant = Pubkey::new_unique().to_bytes().into();
+    let executor = state::executor_pda().0;
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
+    let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
+
+    route.deadline = ctx.now() - 1;
+
+    let result = ctx.fulfill_intent(
+        &route,
+        reward_hash,
+        claimant,
+        executor,
+        fulfill_marker,
+        vec![],
+        vec![],
+    );
+    assert!(result.is_err_and(common::is_error(PortalError::RouteExpired)));
 }

@@ -225,6 +225,7 @@ pub struct Intent {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Route {
+    pub deadline: i64,
     pub salt: Bytes32,
     pub destination_chain_portal: Bytes32,
     pub tokens: Vec<TokenAmount>,
@@ -737,6 +738,7 @@ mod tests {
     #[test]
     fn route_hash_deterministic() {
         let route = Route {
+            deadline: 1700000000,
             salt: [1u8; 32].into(),
             destination_chain_portal: [2u8; 32].into(),
             tokens: vec![
@@ -767,6 +769,7 @@ mod tests {
     #[test]
     fn route_token_amounts_deterministic() {
         let route = Route {
+            deadline: 1700000000,
             salt: [1u8; 32].into(),
             destination_chain_portal: [2u8; 32].into(),
             tokens: vec![

@@ -54,6 +54,10 @@ pub fn fulfill_intent<'info>(
         route.destination_chain_portal == crate::ID,
         PortalError::InvalidDestinationChainPortal
     );
+    require!(
+        route.deadline >= Clock::get()?.unix_timestamp,
+        PortalError::RouteExpired
+    );
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
