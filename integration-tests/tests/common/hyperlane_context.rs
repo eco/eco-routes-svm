@@ -1,6 +1,7 @@
 use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
 use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::{InstructionData, ToAccountMetas};
+use derive_more::{Deref, DerefMut};
 use eco_svm_std::CHAIN_ID;
 use hyper_prover::hyperlane::{process_authority_pda, MAILBOX_ID, MULTISIG_ISM_MESSAGE_ID};
 use litesvm::LiteSVM;
@@ -129,11 +130,11 @@ fn init_mailbox(svm: &mut LiteSVM, default_ism: Pubkey) {
     svm.send_transaction(transaction).unwrap();
 }
 
-pub fn get_outbox_pda() -> Pubkey {
+pub fn outbox_pda() -> Pubkey {
     Pubkey::find_program_address(&[b"hyperlane", b"-", b"outbox"], &MAILBOX_ID).0
 }
 
-pub fn get_dispatched_message_pda(unique_message: &Pubkey) -> Pubkey {
+pub fn dispatched_message_pda(unique_message: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
         &[
             b"hyperlane",
@@ -147,52 +148,16 @@ pub fn get_dispatched_message_pda(unique_message: &Pubkey) -> Pubkey {
     .0
 }
 
+#[derive(Deref, DerefMut)]
+pub struct Hyperlane<'a>(&'a mut Context);
+
 impl Context {
-    pub fn outbox_dispatch(
-        &mut self,
-        destination_domain: u32,
-        recipient: eco_svm_std::Bytes32,
-        message_body: Vec<u8>,
-    ) -> crate::common::TransactionResult {
-        let payer_pubkey = self.payer.pubkey();
-        let outbox_pda = get_outbox_pda();
-
-        // Create a unique message ID
-        let unique_message = solana_sdk::signature::Keypair::new();
-        let dispatched_message_pda = get_dispatched_message_pda(&unique_message.pubkey());
-
-        // Create the OutboxDispatch instruction
-        let instruction_data = OutboxDispatch {
-            sender: payer_pubkey,
-            destination_domain,
-            recipient: *recipient,
-            message_body,
-        };
-
-        let accounts = vec![
-            AccountMeta::new_readonly(anchor_lang::system_program::ID, false), // system_program
-            AccountMeta::new(payer_pubkey, true),                              // payer
-            AccountMeta::new(outbox_pda, false),                               // outbox
-            AccountMeta::new_readonly(spl_noop::ID, false),                    // spl_noop
-            AccountMeta::new_readonly(unique_message.pubkey(), true),          // unique_message
-            AccountMeta::new(dispatched_message_pda, false),                   // dispatched_message
-        ];
-
-        let instruction = Instruction {
-            program_id: MAILBOX_ID,
-            accounts,
-            data: borsh::to_vec(&MailboxInstruction::OutboxDispatch(instruction_data)).unwrap(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer, &unique_message],
-            Message::new(&[instruction], Some(&payer_pubkey)),
-            self.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+    pub fn hyperlane(&mut self) -> Hyperlane {
+        Hyperlane(self)
     }
+}
 
+impl Hyperlane<'_> {
     pub fn inbox_process(
         &mut self,
         message: Vec<u8>,
@@ -228,7 +193,7 @@ impl Context {
         ];
         accounts.extend(
             // 5: ISM account metas
-            self.ism_account_metas(),
+            self.hyper_prover().ism_account_metas(),
         );
         accounts.extend(vec![
             // 6: SPL-noop

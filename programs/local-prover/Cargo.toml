@@ -1,0 +1,23 @@
+[package]
+name = "local-prover"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "local_prover"
+
+[features]
+mainnet = ["eco-svm-std/mainnet"]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+eco-svm-std = { workspace = true }
+portal = { workspace = true, features = ["no-entrypoint"] }

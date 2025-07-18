@@ -1,6 +1,7 @@
 use anchor_lang::prelude::borsh::BorshDeserialize;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
+use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::ProveArgs;
 use eco_svm_std::{Bytes32, SerializableAccountMeta};
 use hyper_prover::hyperlane;
@@ -15,12 +16,17 @@ use solana_sdk::transaction::Transaction;
 
 use crate::common::{sol_amount, Context, TransactionResult};
 
+#[derive(Deref, DerefMut)]
+pub struct HyperProver<'a>(&'a mut Context);
+
 impl Context {
-    pub fn init_hyper_prover(
-        &mut self,
-        whitelisted_senders: Vec<Bytes32>,
-        config: Pubkey,
-    ) -> TransactionResult {
+    pub fn hyper_prover(&mut self) -> HyperProver {
+        HyperProver(self)
+    }
+}
+
+impl HyperProver<'_> {
+    pub fn init(&mut self, whitelisted_senders: Vec<Bytes32>, config: Pubkey) -> TransactionResult {
         let args = hyper_prover::instructions::InitArgs {
             whitelisted_senders,
         };
@@ -146,7 +152,7 @@ impl Context {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn hyper_prover_prove(
+    pub fn prove(
         &mut self,
         portal_dispatcher: &Keypair,
         source_chain: u64,
@@ -189,7 +195,7 @@ impl Context {
         self.send_transaction(transaction)
     }
 
-    pub fn hyper_prover_close_proof(
+    pub fn close_proof(
         &mut self,
         portal_proof_closer: &Keypair,
         proof: Pubkey,

@@ -30,7 +30,9 @@ fn fund_intent_native_success() {
 
     ctx.airdrop(&funder, fund_amount).unwrap();
 
-    let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
+    let result = ctx
+        .portal()
+        .fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
         intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash()),
         ctx.funder.pubkey(),
@@ -60,7 +62,7 @@ fn fund_intent_tokens_success() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -115,7 +117,7 @@ fn fund_intent_tokens_2022_success() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -173,7 +175,7 @@ fn fund_intent_native_and_token_success() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -234,7 +236,7 @@ fn fund_intent_native_and_token_with_zero_amounts_success() {
         ctx.airdrop_token_ata(&token.token, &funder, 0);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -304,7 +306,7 @@ fn fund_intent_duplicate_tokens_success() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -360,7 +362,7 @@ fn fund_intent_with_existing_vault_funds_success() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount - token.amount / 2);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -415,7 +417,9 @@ fn fund_intent_already_funded_success() {
         ctx.airdrop_token_ata(&token.token, &vault_pda, token.amount);
     });
 
-    let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
+    let result = ctx
+        .portal()
+        .fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
         intent_hash(intent.destination_chain, &route_hash, &intent.reward.hash()),
         ctx.funder.pubkey(),
@@ -452,7 +456,7 @@ fn fund_intent_insufficient_funds_partial_allowed_success() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount / 2);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -499,7 +503,9 @@ fn fund_intent_invalid_vault_fails() {
 
     ctx.airdrop(&funder, fund_amount).unwrap();
 
-    let result = ctx.fund_intent(&intent, Pubkey::new_unique(), route_hash, true, vec![]);
+    let result = ctx
+        .portal()
+        .fund_intent(&intent, Pubkey::new_unique(), route_hash, true, vec![]);
     assert!(result.is_err_and(common::is_error(PortalError::InvalidVault)));
 }
 
@@ -519,7 +525,9 @@ fn fund_intent_insufficient_native_funds_fails() {
     let insufficient_amount = intent.reward.native_amount / 2;
     ctx.airdrop(&funder, insufficient_amount).unwrap();
 
-    let result = ctx.fund_intent(&intent, vault_pda, route_hash, false, vec![]);
+    let result = ctx
+        .portal()
+        .fund_intent(&intent, vault_pda, route_hash, false, vec![]);
     assert!(result.is_err_and(common::is_error(PortalError::InsufficientFunds)));
 }
 
@@ -544,7 +552,7 @@ fn fund_intent_insufficient_token_funds_fails() {
         ctx.airdrop_token_ata(&token.token, &funder, insufficient_token_amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -586,7 +594,7 @@ fn fund_intent_invalid_vault_ata_fails() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -628,7 +636,7 @@ fn fund_intent_invalid_mint_fails() {
     ctx.set_mint_account(&wrong_mint);
     ctx.airdrop_token_ata(&wrong_mint, &funder, 1000);
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -660,7 +668,7 @@ fn fund_intent_invalid_token_transfer_accounts_fails() {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
-    let result = ctx.fund_intent(
+    let result = ctx.portal().fund_intent(
         &intent,
         vault_pda,
         route_hash,
@@ -715,6 +723,8 @@ fn fund_intent_token_amount_overflow_fails() {
     ))
     .0;
 
-    let result = ctx.fund_intent(&intent, vault_pda, route_hash, true, vec![]);
+    let result = ctx
+        .portal()
+        .fund_intent(&intent, vault_pda, route_hash, true, vec![]);
     assert!(result.is_err_and(common::is_error(PortalError::TokenAmountOverflow)));
 }

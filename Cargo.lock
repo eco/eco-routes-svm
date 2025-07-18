@@ -1722,6 +1722,7 @@ dependencies = [
  "eco-svm-std",
  "hyper-prover",
  "litesvm",
+ "local-prover",
  "portal",
  "rand 0.9.1",
  "solana-sdk",
@@ -1925,6 +1926,15 @@ dependencies = [
  "solana-transaction-error",
  "solana-vote-program",
  "thiserror 2.0.12",
+]
+
+[[package]]
+name = "local-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "eco-svm-std",
+ "portal",
 ]
 
 [[package]]

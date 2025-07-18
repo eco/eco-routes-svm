@@ -1,9 +1,8 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::{self, PROOF_SEED};
+use eco_svm_std::prover::{self, IntentFulfilled, PROOF_SEED};
 use eco_svm_std::Bytes32;
 
-use crate::events::IntentFulfilled;
 use crate::hyperlane::process_authority_pda;
 use crate::instructions::HyperProverError;
 use crate::state::{pda_payer_pda, Config, ProofAccount, PDA_PAYER_SEED};

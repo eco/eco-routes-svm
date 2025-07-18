@@ -9,9 +9,9 @@ dummy-ism = { path = "programs/dummy-ism" }
 eco-svm-std = { path = "packages/eco-svm-std" }
 goldie = "0.5.0"
 hyper-prover = { path = "programs/hyper-prover" }
-
-more = "0.0.0"
+local-prover = { path = "programs/local-prover" }
 portal = { path = "programs/portal" }
+
 [profile.release]
 overflow-checks = true
 lto = "fat"

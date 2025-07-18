@@ -1,61 +1,30 @@
 use std::iter;
 
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{AnchorSerialize, Discriminator, InstructionData, Space, ToAccountMetas};
-use eco_svm_std::prover::Proof;
-use eco_svm_std::Bytes32;
-use hyper_prover::state::{pda_payer_pda, ProofAccount};
-use portal::state::WithdrawnMarker;
+use anchor_lang::{system_program, InstructionData, ToAccountMetas};
+use derive_more::{Deref, DerefMut};
+use eco_svm_std::{event_authority_pda, Bytes32};
 use portal::types::{Intent, Route};
 use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{hyperlane, Context, TransactionResult, COMPUTE_UNIT_LIMIT};
+use crate::common::{hyperlane_context, Context, TransactionResult, COMPUTE_UNIT_LIMIT};
+
+#[derive(Deref, DerefMut)]
+pub struct Portal<'a>(&'a mut Context);
 
 impl Context {
-    pub fn set_proof(&mut self, proof_pda: Pubkey, proof: Proof) {
-        let mut data = Vec::new();
-        data.extend_from_slice(ProofAccount::DISCRIMINATOR);
-        proof.serialize(&mut data).unwrap();
-
-        let account = solana_sdk::account::Account {
-            lamports: self.get_sysvar::<Rent>().minimum_balance(data.len()),
-            data,
-            owner: hyper_prover::ID,
-            executable: false,
-            rent_epoch: self
-                .get_sysvar::<Rent>()
-                .minimum_balance(8 + ProofAccount::INIT_SPACE),
-        };
-
-        self.set_account(proof_pda, account).unwrap();
+    pub fn portal(&mut self) -> Portal {
+        Portal(self)
     }
+}
 
-    pub fn set_withdrawn_marker(&mut self, withdrawn_marker_pda: Pubkey) {
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0u8; 8]);
-
-        let account = solana_sdk::account::Account {
-            lamports: WithdrawnMarker::min_balance(self.get_sysvar()),
-            data,
-            owner: portal::ID,
-            executable: false,
-            rent_epoch: 0,
-        };
-
-        self.set_account(withdrawn_marker_pda, account).unwrap();
-    }
-
-    pub fn expire_intent(&mut self, intent: &Intent) {
-        self.warp_to_timestamp(intent.reward.deadline + 1);
-    }
-
+impl Portal<'_> {
     pub fn publish_intent(&mut self, intent: &Intent, route_hash: Bytes32) -> TransactionResult {
         let args = portal::instructions::PublishArgs {
             intent: intent.clone(),
@@ -190,6 +159,7 @@ impl Context {
         withdrawn_marker: Pubkey,
         proof_closer: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::WithdrawArgs {
             destination_chain: intent.destination_chain,
@@ -203,7 +173,7 @@ impl Context {
             vault,
             proof,
             proof_closer,
-            prover: hyper_prover::ID,
+            prover: intent.reward.prover,
             withdrawn_marker,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,
@@ -212,7 +182,7 @@ impl Context {
         .to_account_metas(None)
         .into_iter()
         .chain(token_transfer_accounts)
-        .chain(iter::once(AccountMeta::new(pda_payer_pda().0, false)))
+        .chain(remaining_accounts)
         .collect();
         let instruction = Instruction {
             program_id: portal::ID,
@@ -318,16 +288,79 @@ impl Context {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn prove_intent(
+    pub fn prove_intent_via_hyper_prover(
         &mut self,
         intent_hash: Bytes32,
         source_chain: u64,
-        prover: Pubkey,
         fulfill_marker: Pubkey,
         dispatcher: Pubkey,
         prover_dispatcher: Pubkey,
         mailbox_program: Pubkey,
         data: Vec<u8>,
+    ) -> TransactionResult {
+        let outbox_pda = hyperlane_context::outbox_pda();
+        let unique_message = Keypair::new();
+        let dispatched_message_pda =
+            hyperlane_context::dispatched_message_pda(&unique_message.pubkey());
+
+        self.prove_intent(
+            intent_hash,
+            hyper_prover::ID,
+            source_chain,
+            fulfill_marker,
+            dispatcher,
+            data,
+            vec![unique_message.insecure_clone()],
+            vec![
+                AccountMeta::new_readonly(prover_dispatcher, false),
+                AccountMeta::new(self.payer.pubkey(), true),
+                AccountMeta::new(outbox_pda, false),
+                AccountMeta::new_readonly(spl_noop::ID, false),
+                AccountMeta::new_readonly(unique_message.pubkey(), true),
+                AccountMeta::new(dispatched_message_pda, false),
+                AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+                AccountMeta::new_readonly(mailbox_program, false),
+            ],
+        )
+    }
+
+    pub fn prove_intent_via_local_prover(
+        &mut self,
+        intent_hash: Bytes32,
+        source_chain: u64,
+        fulfill_marker: Pubkey,
+        dispatcher: Pubkey,
+        proof: Pubkey,
+    ) -> TransactionResult {
+        self.prove_intent(
+            intent_hash,
+            local_prover::ID,
+            source_chain,
+            fulfill_marker,
+            dispatcher,
+            vec![],
+            vec![],
+            vec![
+                AccountMeta::new(proof, false),
+                AccountMeta::new(self.payer.pubkey(), true),
+                AccountMeta::new_readonly(system_program::ID, false),
+                AccountMeta::new_readonly(event_authority_pda(&local_prover::ID).0, false),
+                AccountMeta::new_readonly(local_prover::ID, false),
+            ],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prove_intent(
+        &mut self,
+        intent_hash: Bytes32,
+        prover: Pubkey,
+        source_chain: u64,
+        fulfill_marker: Pubkey,
+        dispatcher: Pubkey,
+        data: Vec<u8>,
+        remaining_key_pairs: Vec<Keypair>,
+        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::ProveArgs {
             prover,
@@ -335,10 +368,6 @@ impl Context {
             intent_hash,
             data,
         };
-        let outbox_pda = hyperlane::get_outbox_pda();
-        let unique_message = Keypair::new();
-        let dispatched_message_pda =
-            hyperlane::get_dispatched_message_pda(&unique_message.pubkey());
 
         let instruction = portal::instruction::Prove { args };
         let accounts: Vec<_> = portal::accounts::Prove {
@@ -348,16 +377,7 @@ impl Context {
         }
         .to_account_metas(None)
         .into_iter()
-        .chain(vec![
-            AccountMeta::new_readonly(prover_dispatcher, false),
-            AccountMeta::new(self.payer.pubkey(), true),
-            AccountMeta::new(outbox_pda, false),
-            AccountMeta::new_readonly(spl_noop::ID, false),
-            AccountMeta::new_readonly(unique_message.pubkey(), true),
-            AccountMeta::new(dispatched_message_pda, false),
-            AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
-            AccountMeta::new_readonly(mailbox_program, false),
-        ])
+        .chain(remaining_accounts)
         .collect();
         let instruction = Instruction {
             program_id: portal::ID,
@@ -365,8 +385,11 @@ impl Context {
             data: instruction.data(),
         };
 
+        let key_pairs = iter::once(&self.payer)
+            .chain(remaining_key_pairs.iter())
+            .collect::<Vec<_>>();
         let transaction = Transaction::new(
-            &[&self.payer, &unique_message],
+            &key_pairs,
             Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
         );

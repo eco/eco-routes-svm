@@ -13,8 +13,14 @@ fn close_proof_invalid_portal_proof_closer_fail() {
     let destination_chain = 1u64;
     let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
 
-    ctx.set_proof(proof_pda, Proof::new(destination_chain, claimant));
+    ctx.set_proof(
+        proof_pda,
+        Proof::new(destination_chain, claimant),
+        hyper_prover::ID,
+    );
 
-    let result = ctx.hyper_prover_close_proof(&invalid_proof_closer, proof_pda);
+    let result = ctx
+        .hyper_prover()
+        .close_proof(&invalid_proof_closer, proof_pda);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPortalProofCloser)));
 }
