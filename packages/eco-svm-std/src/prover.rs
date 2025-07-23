@@ -87,7 +87,7 @@ pub struct ProveArgs {
 #[derive(new)]
 pub struct IntentProven {
     intent_hash: Bytes32,
-    source: u64,
+    claimant: Pubkey,
     destination: u64,
 }
 

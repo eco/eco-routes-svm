@@ -1,13 +1,17 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::Bytes32;
+use tiny_keccak::{Hasher, Keccak};
 
 use crate::events::IntentPublished;
-use crate::types::{intent_hash, Intent};
+use crate::types::{intent_hash, Reward};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct PublishArgs {
-    pub intent: Intent,
-    pub route_hash: Bytes32,
+    pub destination: u64,
+    // The route here is a serialized vector of bytes encoded with the destination
+    // chain's native encoding. For example, if the destination is Ethereum
+    // the route should be the ABI-encoded.
+    pub route: Vec<u8>,
+    pub reward: Reward,
 }
 
 #[derive(Accounts)]
@@ -15,15 +19,24 @@ pub struct PublishArgs {
 pub struct Publish {}
 
 pub fn publish_intent(_: Context<Publish>, args: PublishArgs) -> Result<()> {
-    let PublishArgs { intent, route_hash } = args;
-    let Intent {
+    let PublishArgs {
         destination,
         route,
         reward,
-    } = intent;
+    } = args;
 
-    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
-    emit!(IntentPublished::new(intent_hash, route, reward));
+    let mut hasher = Keccak::v256();
+    let mut route_hash = [0u8; 32];
+    hasher.update(&route);
+    hasher.finalize(&mut route_hash);
+
+    let intent_hash = intent_hash(destination, &route_hash.into(), &reward.hash());
+    emit!(IntentPublished::new(
+        intent_hash,
+        destination,
+        route,
+        reward
+    ));
 
     Ok(())
 }

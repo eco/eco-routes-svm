@@ -48,7 +48,7 @@ fn route_with_calldatas_with_accounts(
 #[test]
 fn fulfill_intent_token_transfer_success() {
     let mut ctx = common::Context::default();
-    let route = ctx.rand_intent().route;
+    let (_, route, _) = ctx.rand_intent();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let token_program = &ctx.token_program.clone();
     let recipient = Pubkey::new_unique();
@@ -177,7 +177,7 @@ fn fulfill_intent_token_transfer_success() {
 #[test]
 fn fulfill_intent_token_2022_transfer_success() {
     let mut ctx = common::Context::new_with_token_2022();
-    let route = ctx.rand_intent().route;
+    let (_, route, _) = ctx.rand_intent();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let token_program = &ctx.token_program.clone();
     let recipient = Pubkey::new_unique();
@@ -306,7 +306,7 @@ fn fulfill_intent_token_2022_transfer_success() {
 #[test]
 fn fulfill_intent_native_transfer_success() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let recipient = Pubkey::new_unique();
@@ -365,7 +365,7 @@ fn fulfill_intent_native_transfer_success() {
 #[test]
 fn fulfill_intent_invalid_executor_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
@@ -393,7 +393,7 @@ fn fulfill_intent_invalid_executor_fail() {
 #[test]
 fn fulfill_intent_invalid_token_transfer_accounts_fail() {
     let mut ctx = common::Context::default();
-    let route = ctx.rand_intent().route;
+    let (_, route, _) = ctx.rand_intent();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
@@ -421,7 +421,7 @@ fn fulfill_intent_invalid_token_transfer_accounts_fail() {
 #[test]
 fn fulfill_intent_invalid_mint_fail() {
     let mut ctx = common::Context::default();
-    let route = ctx.rand_intent().route;
+    let (_, route, _) = ctx.rand_intent();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
@@ -474,7 +474,7 @@ fn fulfill_intent_invalid_mint_fail() {
 #[test]
 fn fulfill_intent_invalid_fulfill_marker_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
@@ -501,7 +501,7 @@ fn fulfill_intent_invalid_fulfill_marker_fail() {
 #[test]
 fn fulfill_intent_invalid_calldata_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let recipient = Pubkey::new_unique();
@@ -548,7 +548,7 @@ fn fulfill_intent_invalid_calldata_fail() {
 #[test]
 fn fulfill_intent_already_fulfilled_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
@@ -589,7 +589,7 @@ fn fulfill_intent_already_fulfilled_fail() {
 #[test]
 fn fulfill_intent_invalid_portal_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     route.calls.clear();
     route.portal = rand::random::<[u8; 32]>().into();
@@ -619,7 +619,7 @@ fn fulfill_intent_invalid_portal_fail() {
 #[test]
 fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
@@ -672,7 +672,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
 #[test]
 fn fulfill_intent_route_expired_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
@@ -699,7 +699,7 @@ fn fulfill_intent_route_expired_fail() {
 #[test]
 fn fulfill_intent_invalid_intent_hash_fail() {
     let mut ctx = common::Context::default();
-    let mut route = ctx.rand_intent().route;
+    let (_, mut route, _) = ctx.rand_intent();
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();

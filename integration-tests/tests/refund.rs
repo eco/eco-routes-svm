@@ -7,42 +7,38 @@ use eco_svm_std::Bytes32;
 use hyper_prover::state::pda_payer_pda;
 use portal::events::IntentRefunded;
 use portal::state::{self, proof_closer_pda};
-use portal::types::{intent_hash, Intent};
+use portal::types::{intent_hash, Reward};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 
 pub mod common;
 
-fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
+fn setup(is_token_2022: bool) -> (common::Context, u64, Reward, Bytes32) {
     let mut ctx = if is_token_2022 {
         common::Context::new_with_token_2022()
     } else {
         common::Context::default()
     };
-    let intent = ctx.rand_intent();
+    let (destination, _, reward) = ctx.rand_intent();
     let route_hash = random::<[u8; 32]>().into();
     let funder = ctx.funder.pubkey();
-    let vault_pda = state::vault_pda(&intent_hash(
-        intent.destination,
-        &route_hash,
-        &intent.reward.hash(),
-    ))
-    .0;
+    let vault_pda = state::vault_pda(&intent_hash(destination, &route_hash, &reward.hash())).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.airdrop(&funder, intent.reward.native_amount).unwrap();
-    intent.reward.tokens.iter().for_each(|token| {
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &funder, token.amount);
     });
 
     ctx.portal()
         .fund_intent(
-            &intent,
+            destination,
+            reward.clone(),
             vault_pda,
             route_hash,
             false,
-            intent.reward.tokens.iter().flat_map(|token| {
+            reward.tokens.iter().flat_map(|token| {
                 let funder_token = get_associated_token_address_with_program_id(
                     &funder,
                     &token.token,
@@ -63,22 +59,23 @@ fn setup(is_token_2022: bool) -> (common::Context, Intent, Bytes32) {
         )
         .unwrap();
 
-    (ctx, intent, route_hash)
+    (ctx, destination, reward, route_hash)
 }
 
 #[test]
 fn refund_intent_native_success() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
-    let creator = intent.reward.creator;
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let creator = reward.creator;
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -88,32 +85,28 @@ fn refund_intent_native_success() {
     );
     assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
         intent_hash,
-        intent.reward.creator,
+        reward.creator,
     ))));
-    assert_eq!(
-        ctx.balance(&intent.reward.creator),
-        intent.reward.native_amount
-    );
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
     assert_eq!(ctx.balance(&vault), 0);
 }
 
 #[test]
 fn refund_intent_tokens_success() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
-    let creator = intent.reward.creator;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let creator = reward.creator;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &creator, 0);
     });
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
-    let token_accounts: Vec<_> = intent
-        .reward
+    let token_accounts: Vec<_> = reward
         .tokens
         .iter()
         .flat_map(|token| {
@@ -130,7 +123,8 @@ fn refund_intent_tokens_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -142,7 +136,7 @@ fn refund_intent_tokens_success() {
         intent_hash,
         creator,
     ))));
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &creator), token.amount);
     });
@@ -150,21 +144,20 @@ fn refund_intent_tokens_success() {
 
 #[test]
 fn refund_intent_tokens_2022_success() {
-    let (mut ctx, intent, route_hash) = setup(true);
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(true);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
-    let creator = intent.reward.creator;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let creator = reward.creator;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &creator, 0);
     });
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
-    let token_accounts: Vec<_> = intent
-        .reward
+    let token_accounts: Vec<_> = reward
         .tokens
         .iter()
         .flat_map(|token| {
@@ -181,7 +174,8 @@ fn refund_intent_tokens_2022_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -193,7 +187,7 @@ fn refund_intent_tokens_2022_success() {
         intent_hash,
         creator,
     ))));
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &creator), token.amount);
     });
@@ -201,21 +195,20 @@ fn refund_intent_tokens_2022_success() {
 
 #[test]
 fn refund_intent_native_and_token_success() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &creator, 0);
     });
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
-    let token_accounts: Vec<_> = intent
-        .reward
+    let token_accounts: Vec<_> = reward
         .tokens
         .iter()
         .flat_map(|token| {
@@ -232,7 +225,8 @@ fn refund_intent_native_and_token_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -245,8 +239,8 @@ fn refund_intent_native_and_token_success() {
         creator,
     ))));
     assert_eq!(ctx.balance(&vault), 0);
-    assert_eq!(ctx.balance(&creator), intent.reward.native_amount);
-    intent.reward.tokens.iter().for_each(|token| {
+    assert_eq!(ctx.balance(&creator), reward.native_amount);
+    reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &creator), token.amount);
     });
@@ -254,19 +248,20 @@ fn refund_intent_native_and_token_success() {
 
 #[test]
 fn refund_intent_fulfilled_on_wrong_chain_success() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     let fulfillment_proof = Proof::new(random(), Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -278,25 +273,26 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
         intent_hash,
         creator,
     ))));
-    assert_eq!(ctx.balance(&creator), intent.reward.native_amount);
+    assert_eq!(ctx.balance(&creator), reward.native_amount);
     assert_eq!(ctx.balance(&vault), 0);
 }
 
 #[test]
 fn refund_intent_withdrawn_success() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    let fulfillment_proof = Proof::new(intent.destination, Pubkey::new_unique());
+    let fulfillment_proof = Proof::new(destination, Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
     ctx.set_withdrawn_marker(withdrawn_marker);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -308,23 +304,24 @@ fn refund_intent_withdrawn_success() {
         intent_hash,
         creator,
     ))));
-    assert_eq!(ctx.balance(&creator), intent.reward.native_amount);
+    assert_eq!(ctx.balance(&creator), reward.native_amount);
     assert_eq!(ctx.balance(&vault), 0);
 }
 
 #[test]
 fn refund_intent_invalid_creator_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
+    let (mut ctx, destination, reward, route_hash) = setup(false);
     let wrong_creator = Pubkey::new_unique();
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -339,17 +336,18 @@ fn refund_intent_invalid_creator_fail() {
 
 #[test]
 fn refund_intent_invalid_vault_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
     let wrong_vault = Pubkey::new_unique();
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         wrong_vault,
         route_hash,
         proof,
@@ -364,17 +362,18 @@ fn refund_intent_invalid_vault_fail() {
 
 #[test]
 fn refund_intent_invalid_proof_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
     let wrong_proof = Pubkey::new_unique();
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         wrong_proof,
@@ -389,19 +388,20 @@ fn refund_intent_invalid_proof_fail() {
 
 #[test]
 fn refund_intent_fulfilled_and_not_withdrawn_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    let fulfillment_proof = Proof::new(intent.destination, Pubkey::new_unique());
+    let fulfillment_proof = Proof::new(destination, Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -416,15 +416,16 @@ fn refund_intent_fulfilled_and_not_withdrawn_fail() {
 
 #[test]
 fn refund_intent_not_expired_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -439,22 +440,21 @@ fn refund_intent_not_expired_fail() {
 
 #[test]
 fn refund_intent_invalid_creator_token_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
     let wrong_owner = Pubkey::new_unique();
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &wrong_owner, 0);
     });
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
-    let token_accounts: Vec<_> = intent
-        .reward
+    let token_accounts: Vec<_> = reward
         .tokens
         .iter()
         .flat_map(|token| {
@@ -474,7 +474,8 @@ fn refund_intent_invalid_creator_token_fail() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -489,31 +490,26 @@ fn refund_intent_invalid_creator_token_fail() {
 
 #[test]
 fn refund_intent_after_withdraw_excessive_funding_success() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let creator = intent.reward.creator;
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let creator = reward.creator;
     let claimant = Pubkey::new_unique();
-    let intent_hash = intent_hash(intent.destination, &route_hash, &intent.reward.hash());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &intent.reward.prover).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
     ctx.airdrop(&vault, 50_000).unwrap();
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &vault, 1000);
     });
-    ctx.set_proof(
-        proof,
-        Proof::new(intent.destination, claimant),
-        hyper_prover::ID,
-    );
-    intent.reward.tokens.iter().for_each(|token| {
+    ctx.set_proof(proof, Proof::new(destination, claimant), hyper_prover::ID);
+    reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
         ctx.airdrop_token_ata(&token.token, &creator, 0);
     });
 
-    let token_accounts: Vec<_> = intent
-        .reward
+    let token_accounts: Vec<_> = reward
         .tokens
         .iter()
         .flat_map(|token| {
@@ -534,7 +530,8 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
         .collect();
     ctx.portal()
         .withdraw_intent(
-            &intent,
+            destination,
+            reward.clone(),
             vault,
             route_hash,
             claimant,
@@ -545,10 +542,9 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
             iter::once(AccountMeta::new(pda_payer_pda().0, false)),
         )
         .unwrap();
-    ctx.expire_intent(&intent);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
-    let token_accounts: Vec<_> = intent
-        .reward
+    let token_accounts: Vec<_> = reward
         .tokens
         .iter()
         .flat_map(|token| {
@@ -565,7 +561,8 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
         route_hash,
         proof,
@@ -579,7 +576,7 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
     ))));
     assert_eq!(ctx.balance(&creator), 50_000);
     assert_eq!(ctx.balance(&vault), 0);
-    intent.reward.tokens.iter().for_each(|token| {
+    reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &creator), 1000);
     });

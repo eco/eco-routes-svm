@@ -4,7 +4,7 @@ use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{event_authority_pda, Bytes32};
-use portal::types::{Intent, Route};
+use portal::types::{Reward, Route};
 use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
@@ -25,10 +25,16 @@ impl Context {
 }
 
 impl Portal<'_> {
-    pub fn publish_intent(&mut self, intent: &Intent, route_hash: Bytes32) -> TransactionResult {
+    pub fn publish_intent(
+        &mut self,
+        destination: u64,
+        route: Vec<u8>,
+        reward: Reward,
+    ) -> TransactionResult {
         let args = portal::instructions::PublishArgs {
-            intent: intent.clone(),
-            route_hash,
+            destination,
+            route,
+            reward,
         };
         let instruction = portal::instruction::Publish { args };
         let accounts: Vec<_> = portal::accounts::Publish {}.to_account_metas(None);
@@ -49,16 +55,17 @@ impl Portal<'_> {
 
     pub fn fund_intent(
         &mut self,
-        intent: &Intent,
+        destination: u64,
+        reward: Reward,
         vault: Pubkey,
         route_hash: Bytes32,
         allow_partial: bool,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::FundArgs {
-            destination: intent.destination,
+            destination,
             route_hash,
-            reward: intent.reward.clone(),
+            reward,
             allow_partial,
         };
         let instruction = portal::instruction::Fund { args };
@@ -99,7 +106,8 @@ impl Portal<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
-        intent: &Intent,
+        destination: u64,
+        reward: Reward,
         vault: Pubkey,
         route_hash: Bytes32,
         proof: Pubkey,
@@ -108,9 +116,9 @@ impl Portal<'_> {
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
         let args = portal::instructions::RefundArgs {
-            destination: intent.destination,
+            destination,
             route_hash,
-            reward: intent.reward.clone(),
+            reward,
         };
         let instruction = portal::instruction::Refund { args };
         let accounts: Vec<_> = portal::accounts::Refund {
@@ -151,7 +159,8 @@ impl Portal<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn withdraw_intent(
         &mut self,
-        intent: &Intent,
+        destination: u64,
+        reward: Reward,
         vault: Pubkey,
         route_hash: Bytes32,
         claimant: Pubkey,
@@ -161,10 +170,11 @@ impl Portal<'_> {
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
         remaining_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
+        let prover = reward.prover;
         let args = portal::instructions::WithdrawArgs {
-            destination: intent.destination,
+            destination,
             route_hash,
-            reward: intent.reward.clone(),
+            reward,
         };
         let instruction = portal::instruction::Withdraw { args };
         let accounts: Vec<_> = portal::accounts::Withdraw {
@@ -173,7 +183,7 @@ impl Portal<'_> {
             vault,
             proof,
             proof_closer,
-            prover: intent.reward.prover,
+            prover,
             withdrawn_marker,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,

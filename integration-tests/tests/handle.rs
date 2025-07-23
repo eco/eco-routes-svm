@@ -84,7 +84,7 @@ fn handle_success() {
     assert!(
         result.is_ok_and(common::contains_cpi_event(prover::IntentProven::new(
             intent_hash,
-            CHAIN_ID,
+            Pubkey::new_from_array(claimant.into()),
             destination.into()
         ),))
     );
@@ -136,7 +136,11 @@ fn handle_multiple_success() {
         .zip(claimants)
         .for_each(|(intent_hash, claimant)| {
             assert!(result.clone().is_ok_and(common::contains_cpi_event(
-                prover::IntentProven::new(intent_hash, CHAIN_ID, destination.into()),
+                prover::IntentProven::new(
+                    intent_hash,
+                    Pubkey::new_from_array(claimant.into()),
+                    destination.into()
+                ),
             )));
 
             let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
@@ -150,20 +154,16 @@ fn handle_multiple_success() {
 #[test]
 fn handle_withdraw_success() {
     let mut ctx = setup();
-    let mut intent = ctx.rand_intent();
-    intent.reward.tokens.clear();
-    intent.reward.native_amount = 0;
+    let (destination, route, mut reward) = ctx.rand_intent();
+    reward.tokens.clear();
+    reward.native_amount = 0;
     let claimant = Pubkey::new_unique();
-    let intent_hash = intent_hash(
-        intent.destination,
-        &intent.route.hash(),
-        &intent.reward.hash(),
-    );
+    let intent_hash = intent_hash(destination, &route.hash(), &reward.hash());
     let payload =
         IntentHashesClaimants::from(vec![(intent_hash, claimant.to_bytes().into())]).to_bytes();
     let message = create_hyperlane_message(
         ctx.sender.pubkey().to_bytes().into(),
-        intent.destination.try_into().unwrap(),
+        destination.try_into().unwrap(),
         CHAIN_ID.try_into().unwrap(),
         hyper_prover::ID.to_bytes().into(),
         payload.clone(),
@@ -176,7 +176,7 @@ fn handle_withdraw_success() {
 
     let sender = ctx.sender.pubkey();
     let handle_account_metas = ctx.hyper_prover().handle_account_metas(
-        intent.destination.try_into().unwrap(),
+        destination.try_into().unwrap(),
         sender.to_bytes(),
         payload,
     );
@@ -185,9 +185,10 @@ fn handle_withdraw_success() {
         .unwrap();
 
     let result = ctx.portal().withdraw_intent(
-        &intent,
+        destination,
+        reward.clone(),
         vault,
-        intent.route.hash(),
+        route.hash(),
         claimant,
         proof,
         withdrawn_marker,

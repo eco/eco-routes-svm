@@ -20,7 +20,7 @@ fn setup(intent_count: usize) -> (common::Context, Vec<Bytes32>) {
 
     let intent_hashes = (0..intent_count)
         .map(|_| {
-            let mut route = ctx.rand_intent().route;
+            let (_, mut route, _) = ctx.rand_intent();
             route.tokens.clear();
             route.calls.clear();
             let reward_hash = rand::random::<[u8; 32]>().into();
@@ -78,12 +78,15 @@ fn prove_intent_success() {
         hyperlane::MAILBOX_ID,
         source_prover.into(),
     );
-    intent_hashes.iter().for_each(|intent_hash| {
-        assert!(result.clone().is_ok_and(common::contains_event_and_msg(
-            IntentProven::new(*intent_hash, source, CHAIN_ID),
-            "Dispatched message"
-        )));
-    });
+    intent_hashes
+        .iter()
+        .zip(claimants.clone())
+        .for_each(|(intent_hash, claimant)| {
+            assert!(result.clone().is_ok_and(common::contains_event_and_msg(
+                IntentProven::new(*intent_hash, claimant, source),
+                "Dispatched message"
+            )));
+        });
 
     let tx = result.unwrap();
     let mailbox_dispatch: Vec<_> = tx
@@ -135,12 +138,15 @@ fn prove_intent_multiple_success() {
         hyperlane::MAILBOX_ID,
         source_prover.into(),
     );
-    intent_hashes.iter().for_each(|intent_hash| {
-        assert!(result.clone().is_ok_and(common::contains_event_and_msg(
-            IntentProven::new(*intent_hash, source, CHAIN_ID),
-            "Dispatched message"
-        )));
-    });
+    intent_hashes
+        .iter()
+        .zip(claimants.clone())
+        .for_each(|(intent_hash, claimant)| {
+            assert!(result.clone().is_ok_and(common::contains_event_and_msg(
+                IntentProven::new(*intent_hash, claimant, source),
+                "Dispatched message"
+            )));
+        });
 
     let tx = result.unwrap();
     let mailbox_dispatch: Vec<_> = tx

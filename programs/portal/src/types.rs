@@ -217,13 +217,6 @@ pub fn intent_hash(destination: u64, route_hash: &Bytes32, reward_hash: &Bytes32
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
-pub struct Intent {
-    pub destination: u64,
-    pub route: Route,
-    pub reward: Reward,
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Route {
     pub salt: Bytes32,
     pub deadline: u64,
