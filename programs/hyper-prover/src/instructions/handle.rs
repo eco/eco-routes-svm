@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::prover::{self, IntentHashesClaimants, IntentProven, PROOF_SEED};
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::Bytes32;
 
 use crate::hyperlane::process_authority_pda;
 use crate::instructions::HyperProverError;
@@ -94,7 +94,7 @@ fn mark_intent_hash_proven<'info>(
         )
         .map_err(|_| HyperProverError::IntentAlreadyProven)?;
 
-    emit_cpi!(IntentProven::new(intent_hash, CHAIN_ID, destination));
+    emit_cpi!(IntentProven::new(intent_hash, claimant, destination));
 
     Ok(())
 }

@@ -74,7 +74,7 @@ fn mark_intent_hash_proven<'info>(
         )
         .map_err(|_| LocalProverError::IntentAlreadyProven)?;
 
-    emit_cpi!(IntentProven::new(intent_hash, CHAIN_ID, CHAIN_ID));
+    emit_cpi!(IntentProven::new(intent_hash, claimant, CHAIN_ID));
 
     Ok(())
 }

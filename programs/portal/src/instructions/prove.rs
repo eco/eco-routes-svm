@@ -4,7 +4,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use eco_svm_std::prover::{self, PROVE_DISCRIMINATOR};
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::Bytes32;
 use itertools::Itertools;
 
 use crate::events::IntentProven;
@@ -48,8 +48,12 @@ pub fn prove_intent<'info>(
 
     intent_hashes_fulfill_markers
         .iter()
-        .for_each(|(intent_hash, _)| {
-            emit!(IntentProven::new(*intent_hash, source, CHAIN_ID));
+        .for_each(|(intent_hash, fulfill_marker)| {
+            emit!(IntentProven::new(
+                *intent_hash,
+                fulfill_marker.claimant,
+                source
+            ));
         });
 
     invoke_prover_prove(

@@ -75,7 +75,11 @@ fn prove_intent_success() {
         .zip(claimants)
         .for_each(|(intent_hash, claimant)| {
             assert!(result.clone().is_ok_and(common::contains_cpi_event(
-                prover::IntentProven::new(intent_hash, CHAIN_ID, CHAIN_ID)
+                prover::IntentProven::new(
+                    intent_hash,
+                    Pubkey::new_from_array(claimant.into()),
+                    CHAIN_ID
+                )
             )));
 
             let proof_pda = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
@@ -122,7 +126,11 @@ fn prove_intent_multiple_success() {
         .zip(claimants)
         .for_each(|(intent_hash, claimant)| {
             assert!(result.clone().is_ok_and(common::contains_cpi_event(
-                prover::IntentProven::new(intent_hash, CHAIN_ID, CHAIN_ID)
+                prover::IntentProven::new(
+                    intent_hash,
+                    Pubkey::new_from_array(claimant.into()),
+                    CHAIN_ID
+                )
             )));
 
             let proof_pda = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
