@@ -84,7 +84,7 @@ fn handle_success() {
     assert!(
         result.is_ok_and(common::contains_cpi_event(prover::IntentProven::new(
             intent_hash,
-            CHAIN_ID,
+            Pubkey::new_from_array(claimant.into()),
             destination.into()
         ),))
     );
@@ -136,7 +136,11 @@ fn handle_multiple_success() {
         .zip(claimants)
         .for_each(|(intent_hash, claimant)| {
             assert!(result.clone().is_ok_and(common::contains_cpi_event(
-                prover::IntentProven::new(intent_hash, CHAIN_ID, destination.into()),
+                prover::IntentProven::new(
+                    intent_hash,
+                    Pubkey::new_from_array(claimant.into()),
+                    destination.into()
+                ),
             )));
 
             let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
