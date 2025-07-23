@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::prover::{self, IntentFulfilled, ProveArgs, PROOF_SEED};
+use eco_svm_std::prover::{self, IntentProven, ProveArgs, PROOF_SEED};
 use eco_svm_std::CHAIN_ID;
 
 use crate::instructions::LocalProverError;
@@ -37,10 +37,7 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
 
     *ctx.accounts.proof = prover::Proof::new(CHAIN_ID, claimant).into();
 
-    emit_cpi!(IntentFulfilled::new(
-        intent_hash,
-        claimant.to_bytes().into()
-    ));
+    emit_cpi!(IntentProven::new(intent_hash, CHAIN_ID, CHAIN_ID));
 
     Ok(())
 }

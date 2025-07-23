@@ -86,9 +86,10 @@ fn handle_success() {
             .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(
-        result.is_ok_and(common::contains_cpi_event(prover::IntentFulfilled::new(
+        result.is_ok_and(common::contains_cpi_event(prover::IntentProven::new(
             intent_hash,
-            claimant
+            CHAIN_ID,
+            destination.into()
         ),))
     );
 
