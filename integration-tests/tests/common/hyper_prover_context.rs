@@ -2,7 +2,7 @@ use anchor_lang::prelude::borsh::BorshDeserialize;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::prover::ProveArgs;
+use eco_svm_std::prover::{IntentHashesClaimants, ProveArgs};
 use eco_svm_std::{Bytes32, SerializableAccountMeta};
 use hyper_prover::hyperlane;
 use hyper_prover::state::dispatcher_pda;
@@ -156,18 +156,17 @@ impl HyperProver<'_> {
         &mut self,
         portal_dispatcher: &Keypair,
         source: u64,
-        intent_hash: Bytes32,
+        intent_hashes_claimants: IntentHashesClaimants,
         data: Vec<u8>,
-        claimant: Bytes32,
         outbox_pda: Pubkey,
         unique_message: &Keypair,
         dispatched_message_pda: Pubkey,
+        proof_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let args = ProveArgs {
             source,
-            intent_hash,
+            intent_hashes_claimants,
             data,
-            claimant,
         };
         let instruction = hyper_prover::instruction::Prove { args };
         let accounts = hyper_prover::accounts::Prove {
@@ -180,10 +179,14 @@ impl HyperProver<'_> {
             dispatched_message_pda,
             system_program: anchor_lang::system_program::ID,
             mailbox_program: hyperlane::MAILBOX_ID,
-        };
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(proof_accounts)
+        .collect();
         let instruction = Instruction {
             program_id: hyper_prover::ID,
-            accounts: accounts.to_account_metas(None),
+            accounts,
             data: instruction.data(),
         };
         let transaction = Transaction::new(

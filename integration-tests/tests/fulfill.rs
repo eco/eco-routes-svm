@@ -626,9 +626,12 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let executor = state::executor_pda().0;
     let prove_data = eco_svm_std::prover::ProveArgs {
         source: 1,
-        intent_hash: rand::random::<[u8; 32]>().into(),
+        intent_hashes_claimants: vec![(
+            rand::random::<[u8; 32]>().into(),
+            rand::random::<[u8; 32]>().into(),
+        )]
+        .into(),
         data: rand::random::<[u8; 32]>().to_vec(),
-        claimant: rand::random::<[u8; 32]>().into(),
     };
     let calldata = Calldata {
         data: hyper_prover::instruction::Prove { args: prove_data }.data(),

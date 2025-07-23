@@ -50,17 +50,23 @@ fn close_proof_should_succeed() {
         .unwrap();
 
     let dispatcher = state::dispatcher_pda().0;
-    let proof_pda = Proof::pda(&intent_hash, &local_prover::ID).0;
+    let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
 
     ctx.portal()
-        .prove_intent_via_local_prover(intent_hash, CHAIN_ID, fulfill_marker, dispatcher, proof_pda)
+        .prove_intent_via_local_prover(
+            vec![intent_hash],
+            CHAIN_ID,
+            vec![fulfill_marker],
+            dispatcher,
+            vec![proof],
+        )
         .unwrap();
 
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let claimant_pubkey = Pubkey::try_from(claimant.as_ref()).unwrap();
     let payer = ctx.payer.pubkey();
 
-    let proof_account = ctx.account::<ProofAccount>(&proof_pda);
+    let proof_account = ctx.account::<ProofAccount>(&proof);
     assert!(proof_account.is_some());
 
     ctx.portal()
@@ -69,7 +75,7 @@ fn close_proof_should_succeed() {
             vault_pda,
             route_hash,
             claimant_pubkey,
-            proof_pda,
+            proof,
             withdrawn_marker,
             state::proof_closer_pda().0,
             vec![],
@@ -77,7 +83,7 @@ fn close_proof_should_succeed() {
         )
         .unwrap();
 
-    let proof_account = ctx.account::<ProofAccount>(&proof_pda);
+    let proof_account = ctx.account::<ProofAccount>(&proof);
     assert!(proof_account.is_none());
 }
 
