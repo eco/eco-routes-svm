@@ -38,6 +38,7 @@ fn close_proof_should_succeed() {
 
     ctx.portal()
         .fulfill_intent(
+            intent_hash,
             &intent.route,
             intent.reward.hash(),
             claimant,

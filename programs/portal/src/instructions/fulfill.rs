@@ -17,6 +17,7 @@ use crate::types::{
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FulfillArgs {
+    pub intent_hash: Bytes32,
     pub route: Route,
     pub reward_hash: Bytes32,
     pub claimant: Bytes32,
@@ -46,6 +47,7 @@ pub fn fulfill_intent<'info>(
     args: FulfillArgs,
 ) -> Result<()> {
     let FulfillArgs {
+        intent_hash: expected_intent_hash,
         route,
         reward_hash,
         claimant,
@@ -66,6 +68,10 @@ pub fn fulfill_intent<'info>(
     let route = execute_route_calls(ctx.accounts.executor.key, route, call_accounts)?;
 
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
+    require!(
+        intent_hash == expected_intent_hash,
+        PortalError::InvalidIntentHash
+    );
     mark_fulfilled(&ctx, &intent_hash, &claimant)?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
