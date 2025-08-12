@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use derive_more::Deref;
 use derive_new::new;
 
 use crate::Bytes32;
@@ -30,36 +29,45 @@ impl Proof {
     }
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Deref, PartialEq, Clone, Debug)]
-pub struct IntentHashesClaimants(Vec<(Bytes32, Bytes32)>);
-
-impl From<Vec<(Bytes32, Bytes32)>> for IntentHashesClaimants {
-    fn from(value: Vec<(Bytes32, Bytes32)>) -> Self {
-        Self(value)
-    }
+#[derive(new, AnchorSerialize, AnchorDeserialize, PartialEq, Clone, Debug)]
+pub struct ProofData {
+    pub destination: u64,
+    pub intent_hashes_claimants: Vec<IntentHashClaimant>,
 }
 
-impl From<IntentHashesClaimants> for Vec<(Bytes32, Bytes32)> {
-    fn from(value: IntentHashesClaimants) -> Self {
-        value.0
-    }
-}
-
-impl IntentHashesClaimants {
+impl ProofData {
     pub fn to_bytes(self) -> Vec<u8> {
-        self.0
+        let Self {
+            destination,
+            intent_hashes_claimants,
+        } = self;
+
+        destination
+            .to_be_bytes()
             .into_iter()
-            .flat_map(|(intent_hash, claimant)| intent_hash.into_iter().chain(claimant))
+            .chain(intent_hashes_claimants.into_iter().flat_map(
+                |IntentHashClaimant {
+                     intent_hash,
+                     claimant,
+                 }| { intent_hash.into_iter().chain(claimant) },
+            ))
             .collect()
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         require!(
-            bytes.len() % 64 == 0,
-            anchor_lang::error::ErrorCode::AccountDidNotDeserialize
+            bytes.len() >= 8,
+            anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
+        );
+        require!(
+            (bytes.len() - 8) % 64 == 0,
+            anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
         );
 
-        Ok(bytes
+        let (destination, intent_hashes_claimants) = bytes.split_at(8);
+
+        let destination = u64::from_be_bytes(destination.try_into().expect("slice is 8 bytes"));
+        let intent_hashes_claimants = intent_hashes_claimants
             .chunks_exact(64)
             .map(|chunk| {
                 let intent_hash = <[u8; 32]>::try_from(&chunk[..32])
@@ -69,17 +77,24 @@ impl IntentHashesClaimants {
                     .expect("slice is 32 bytes")
                     .into();
 
-                (intent_hash, claimant)
+                IntentHashClaimant::new(intent_hash, claimant)
             })
-            .collect::<Vec<(Bytes32, Bytes32)>>()
-            .into())
+            .collect();
+
+        Ok(ProofData::new(destination, intent_hashes_claimants))
     }
+}
+
+#[derive(new, AnchorSerialize, AnchorDeserialize, PartialEq, Clone, Debug)]
+pub struct IntentHashClaimant {
+    pub intent_hash: Bytes32,
+    pub claimant: Bytes32,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, new)]
 pub struct ProveArgs {
-    pub source: u64,
-    pub intent_hashes_claimants: IntentHashesClaimants,
+    pub domain_id: u64,
+    pub proof_data: ProofData,
     pub data: Vec<u8>,
 }
 
@@ -107,25 +122,29 @@ mod tests {
     fn intent_hashes_claimants_to_bytes_single() {
         let intent_hash: Bytes32 = Bytes32::from([0x11; 32]);
         let claimant: Bytes32 = Bytes32::from([0x22; 32]);
-        let intent_hashes_claimants = IntentHashesClaimants::from(vec![(intent_hash, claimant)]);
+        let intent_hashes_claimants =
+            ProofData::new(8u64, vec![IntentHashClaimant::new(intent_hash, claimant)]);
 
         goldie::assert_debug!(intent_hashes_claimants.to_bytes());
     }
 
     #[test]
     fn intent_hashes_claimants_to_bytes_multiple() {
-        let intent_hashes_claimants = IntentHashesClaimants::from(vec![
-            (Bytes32::from([0xaa; 32]), Bytes32::from([0xbb; 32])),
-            (Bytes32::from([0xcc; 32]), Bytes32::from([0xdd; 32])),
-            (Bytes32::from([0xee; 32]), Bytes32::from([0xff; 32])),
-        ]);
+        let intent_hashes_claimants = ProofData::new(
+            8u64,
+            vec![
+                IntentHashClaimant::new(Bytes32::from([0xaa; 32]), Bytes32::from([0xbb; 32])),
+                IntentHashClaimant::new(Bytes32::from([0xcc; 32]), Bytes32::from([0xdd; 32])),
+                IntentHashClaimant::new(Bytes32::from([0xee; 32]), Bytes32::from([0xff; 32])),
+            ],
+        );
 
         goldie::assert_debug!(intent_hashes_claimants.to_bytes());
     }
 
     #[test]
     fn intent_hashes_claimants_to_bytes_empty() {
-        let intent_hashes_claimants = IntentHashesClaimants::from(vec![]);
+        let intent_hashes_claimants = ProofData::new(8u64, vec![]);
 
         goldie::assert_debug!(intent_hashes_claimants.to_bytes());
     }
@@ -133,32 +152,35 @@ mod tests {
     #[test]
     fn intent_hashes_claimants_from_bytes_single() {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[0x11; 32]);
-        bytes.extend_from_slice(&[0x22; 32]);
+        bytes.extend_from_slice(&8u64.to_be_bytes()); // destination
+        bytes.extend_from_slice(&[0x11; 32]); // intent_hash
+        bytes.extend_from_slice(&[0x22; 32]); // claimant
 
-        let result = IntentHashesClaimants::from_bytes(&bytes).unwrap();
+        let result = ProofData::from_bytes(&bytes).unwrap();
         goldie::assert_debug!(result);
     }
 
     #[test]
     fn intent_hashes_claimants_from_bytes_multiple() {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&[0xaa; 32]);
-        bytes.extend_from_slice(&[0xbb; 32]);
-        bytes.extend_from_slice(&[0xcc; 32]);
-        bytes.extend_from_slice(&[0xdd; 32]);
-        bytes.extend_from_slice(&[0xee; 32]);
-        bytes.extend_from_slice(&[0xff; 32]);
+        bytes.extend_from_slice(&8u64.to_be_bytes()); // destination
+        bytes.extend_from_slice(&[0xaa; 32]); // intent_hash 1
+        bytes.extend_from_slice(&[0xbb; 32]); // claimant 1
+        bytes.extend_from_slice(&[0xcc; 32]); // intent_hash 2
+        bytes.extend_from_slice(&[0xdd; 32]); // claimant 2
+        bytes.extend_from_slice(&[0xee; 32]); // intent_hash 3
+        bytes.extend_from_slice(&[0xff; 32]); // claimant 3
 
-        let result = IntentHashesClaimants::from_bytes(&bytes).unwrap();
+        let result = ProofData::from_bytes(&bytes).unwrap();
         goldie::assert_debug!(result);
     }
 
     #[test]
     fn intent_hashes_claimants_from_bytes_empty() {
-        let bytes = Vec::new();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&8u64.to_be_bytes()); // destination only
 
-        let result = IntentHashesClaimants::from_bytes(&bytes).unwrap();
+        let result = ProofData::from_bytes(&bytes).unwrap();
         goldie::assert_debug!(result);
     }
 
@@ -166,19 +188,22 @@ mod tests {
     fn intent_hashes_claimants_from_bytes_invalid_length() {
         let bytes = vec![0u8; 63];
 
-        let result = IntentHashesClaimants::from_bytes(&bytes);
+        let result = ProofData::from_bytes(&bytes);
         assert!(result.is_err());
     }
 
     #[test]
     fn intent_hashes_claimants_roundtrip() {
-        let expected = IntentHashesClaimants::from(vec![
-            (Bytes32::from([0x01; 32]), Bytes32::from([0x02; 32])),
-            (Bytes32::from([0x03; 32]), Bytes32::from([0x04; 32])),
-        ]);
+        let expected = ProofData::new(
+            8u64,
+            vec![
+                IntentHashClaimant::new(Bytes32::from([0x01; 32]), Bytes32::from([0x02; 32])),
+                IntentHashClaimant::new(Bytes32::from([0x03; 32]), Bytes32::from([0x04; 32])),
+            ],
+        );
 
         let bytes = expected.clone().to_bytes();
-        let actual = IntentHashesClaimants::from_bytes(&bytes).unwrap();
+        let actual = ProofData::from_bytes(&bytes).unwrap();
 
         assert_eq!(expected, actual);
     }

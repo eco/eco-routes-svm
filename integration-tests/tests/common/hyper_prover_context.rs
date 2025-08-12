@@ -2,7 +2,7 @@ use anchor_lang::prelude::borsh::BorshDeserialize;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::prover::{IntentHashesClaimants, ProveArgs};
+use eco_svm_std::prover::{ProofData, ProveArgs};
 use eco_svm_std::{Bytes32, SerializableAccountMeta};
 use hyper_prover::hyperlane;
 use hyper_prover::state::dispatcher_pda;
@@ -155,8 +155,8 @@ impl HyperProver<'_> {
     pub fn prove(
         &mut self,
         portal_dispatcher: &Keypair,
-        source: u64,
-        intent_hashes_claimants: IntentHashesClaimants,
+        domain_id: u64,
+        intent_hashes_claimants: ProofData,
         data: Vec<u8>,
         outbox_pda: Pubkey,
         unique_message: &Keypair,
@@ -164,8 +164,8 @@ impl HyperProver<'_> {
         proof_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let args = ProveArgs {
-            source,
-            intent_hashes_claimants,
+            domain_id,
+            proof_data: intent_hashes_claimants,
             data,
         };
         let instruction = hyper_prover::instruction::Prove { args };

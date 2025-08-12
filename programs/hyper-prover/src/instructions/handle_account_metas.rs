@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
 use anchor_lang::system_program;
 use borsh::BorshSerialize;
-use eco_svm_std::prover::{IntentHashesClaimants, Proof};
+use eco_svm_std::prover::{Proof, ProofData};
 use eco_svm_std::{event_authority_pda, SerializableAccountMeta};
 
 use crate::state::{pda_payer_pda, Config};
@@ -23,10 +23,17 @@ pub fn handle_account_metas(
     _sender: [u8; 32],
     payload: Vec<u8>,
 ) -> Result<()> {
-    let intent_hashes_claimants = IntentHashesClaimants::from_bytes(&payload)?;
-    let proof_accounts = intent_hashes_claimants
-        .iter()
-        .map(|(intent_hash, _)| AccountMeta::new(Proof::pda(intent_hash, &crate::ID).0, false));
+    let proof_data = ProofData::from_bytes(&payload)?;
+    let proof_accounts =
+        proof_data
+            .intent_hashes_claimants
+            .into_iter()
+            .map(|intent_hash_claimant| {
+                AccountMeta::new(
+                    Proof::pda(&intent_hash_claimant.intent_hash, &crate::ID).0,
+                    false,
+                )
+            });
 
     let account_metas: Vec<SerializableAccountMeta> = vec![
         AccountMeta::new_readonly(Config::pda().0, false),

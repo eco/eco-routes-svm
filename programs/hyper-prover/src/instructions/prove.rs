@@ -33,8 +33,8 @@ pub struct Prove<'info> {
 
 pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
     let ProveArgs {
-        source,
-        intent_hashes_claimants,
+        domain_id,
+        proof_data: intent_hashes_claimants,
         data,
     } = args;
 
@@ -46,17 +46,11 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
 
     hyperlane::dispatch_msg(
         &ctx,
-        chain_to_domain(source)?,
+        domain_id
+            .try_into()
+            .map_err(|_| HyperProverError::InvalidDomainId)?,
         source_prover,
         intent_hashes_claimants.to_bytes(),
         &signer_seeds,
     )
-}
-
-// TODO: We need to maintain a map here later for the transformation.
-// This works now only because we use Hyperlane's domain IDs directly as chain IDs.
-fn chain_to_domain(chain: u64) -> Result<u32> {
-    chain
-        .try_into()
-        .map_err(|_| HyperProverError::InvalidChainId.into())
 }

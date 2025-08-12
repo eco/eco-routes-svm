@@ -2,7 +2,7 @@ use std::vec;
 
 use anchor_lang::error::ErrorCode;
 use anchor_lang::AnchorDeserialize;
-use eco_svm_std::prover::IntentHashesClaimants;
+use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::hyperlane::{self, MailboxInstruction, MAILBOX_ID};
 use hyper_prover::instructions::HyperProverError;
@@ -83,7 +83,7 @@ fn prove_intent_success() {
         .zip(claimants.clone())
         .for_each(|(intent_hash, claimant)| {
             assert!(result.clone().is_ok_and(common::contains_event_and_msg(
-                IntentProven::new(*intent_hash, claimant, source),
+                IntentProven::new(*intent_hash, claimant),
                 "Dispatched message"
             )));
         });
@@ -96,15 +96,23 @@ fn prove_intent_success() {
         .filter_map(|ix| MailboxInstruction::try_from_slice(ix.instruction.data.as_slice()).ok())
         .collect();
     assert_eq!(mailbox_dispatch.len(), 1);
-    let intent_hashes_claimants =
-        IntentHashesClaimants::from(intent_hashes.into_iter().zip(claimants).collect::<Vec<_>>());
+    let proof_data = ProofData::new(
+        CHAIN_ID,
+        intent_hashes
+            .into_iter()
+            .zip(claimants)
+            .map(|(intent_hash, claimant)| {
+                eco_svm_std::prover::IntentHashClaimant::new(intent_hash, claimant)
+            })
+            .collect(),
+    );
 
     match mailbox_dispatch.first().unwrap() {
         MailboxInstruction::OutboxDispatch(msg) => {
             assert_eq!(msg.sender, hyper_prover::state::dispatcher_pda().0);
             assert_eq!(msg.destination_domain, source as u32);
             assert_eq!(msg.recipient, source_prover);
-            assert_eq!(msg.message_body, intent_hashes_claimants.to_bytes());
+            assert_eq!(msg.message_body, proof_data.to_bytes());
         }
         _ => panic!("expected OutboxDispatch instruction"),
     }
@@ -143,7 +151,7 @@ fn prove_intent_multiple_success() {
         .zip(claimants.clone())
         .for_each(|(intent_hash, claimant)| {
             assert!(result.clone().is_ok_and(common::contains_event_and_msg(
-                IntentProven::new(*intent_hash, claimant, source),
+                IntentProven::new(*intent_hash, claimant),
                 "Dispatched message"
             )));
         });
@@ -156,15 +164,21 @@ fn prove_intent_multiple_success() {
         .filter_map(|ix| MailboxInstruction::try_from_slice(ix.instruction.data.as_slice()).ok())
         .collect();
     assert_eq!(mailbox_dispatch.len(), 1);
-    let intent_hashes_claimants =
-        IntentHashesClaimants::from(intent_hashes.into_iter().zip(claimants).collect::<Vec<_>>());
+    let proof_data = ProofData::new(
+        CHAIN_ID,
+        intent_hashes
+            .into_iter()
+            .zip(claimants)
+            .map(|(intent_hash, claimant)| IntentHashClaimant::new(intent_hash, claimant))
+            .collect(),
+    );
 
     match mailbox_dispatch.first().unwrap() {
         MailboxInstruction::OutboxDispatch(msg) => {
             assert_eq!(msg.sender, hyper_prover::state::dispatcher_pda().0);
             assert_eq!(msg.destination_domain, source as u32);
             assert_eq!(msg.recipient, source_prover);
-            assert_eq!(msg.message_body, intent_hashes_claimants.to_bytes());
+            assert_eq!(msg.message_body, proof_data.to_bytes());
         }
         _ => panic!("expected OutboxDispatch instruction"),
     }
@@ -347,7 +361,10 @@ fn prove_invalid_portal_dispatcher_fail() {
     let result = ctx.hyper_prover().prove(
         &invalid_dispatcher,
         1,
-        vec![([0u8; 32].into(), [1u8; 32].into())].into(),
+        ProofData::new(
+            1,
+            vec![IntentHashClaimant::new([0u8; 32].into(), [1u8; 32].into())],
+        ),
         vec![0u8; 32],
         outbox_pda,
         &unique_message,

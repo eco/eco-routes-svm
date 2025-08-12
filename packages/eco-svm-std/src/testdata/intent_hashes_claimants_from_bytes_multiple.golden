@@ -1,7 +1,8 @@
-IntentHashesClaimants(
-    [
-        (
-            Bytes32(
+ProofData {
+    destination: 8,
+    intent_hashes_claimants: [
+        IntentHashClaimant {
+            intent_hash: Bytes32(
                 [
                     170,
                     170,
@@ -37,7 +38,7 @@ IntentHashesClaimants(
                     170,
                 ],
             ),
-            Bytes32(
+            claimant: Bytes32(
                 [
                     187,
                     187,
@@ -73,9 +74,9 @@ IntentHashesClaimants(
                     187,
                 ],
             ),
-        ),
-        (
-            Bytes32(
+        },
+        IntentHashClaimant {
+            intent_hash: Bytes32(
                 [
                     204,
                     204,
@@ -111,7 +112,7 @@ IntentHashesClaimants(
                     204,
                 ],
             ),
-            Bytes32(
+            claimant: Bytes32(
                 [
                     221,
                     221,
@@ -147,9 +148,9 @@ IntentHashesClaimants(
                     221,
                 ],
             ),
-        ),
-        (
-            Bytes32(
+        },
+        IntentHashClaimant {
+            intent_hash: Bytes32(
                 [
                     238,
                     238,
@@ -185,7 +186,7 @@ IntentHashesClaimants(
                     238,
                 ],
             ),
-            Bytes32(
+            claimant: Bytes32(
                 [
                     255,
                     255,
@@ -221,6 +222,6 @@ IntentHashesClaimants(
                     255,
                 ],
             ),
-        ),
+        },
     ],
-)
+}
