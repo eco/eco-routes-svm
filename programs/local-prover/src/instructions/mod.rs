@@ -9,7 +9,8 @@ pub use prove::*;
 #[error_code]
 pub enum LocalProverError {
     InvalidPortalDispatcher,
-    InvalidSource,
+    InvalidDomainId,
+    InvalidDestination,
     InvalidPortalProofCloser,
     InvalidProof,
     IntentAlreadyProven,

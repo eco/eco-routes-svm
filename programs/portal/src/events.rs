@@ -47,5 +47,4 @@ pub struct IntentFulfilled {
 pub struct IntentProven {
     intent_hash: Bytes32,
     claimant: Bytes32,
-    source: u64,
 }

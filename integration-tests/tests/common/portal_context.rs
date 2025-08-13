@@ -305,7 +305,7 @@ impl Portal<'_> {
     pub fn prove_intent_via_hyper_prover(
         &mut self,
         intent_hashes: Vec<Bytes32>,
-        source: u64,
+        source_chain_domain_id: u64,
         fulfill_markers: Vec<Pubkey>,
         dispatcher: Pubkey,
         prover_dispatcher: Pubkey,
@@ -320,7 +320,7 @@ impl Portal<'_> {
         self.prove_intent(
             intent_hashes,
             hyper_prover::ID,
-            source,
+            source_chain_domain_id,
             fulfill_markers,
             dispatcher,
             data,
@@ -341,7 +341,7 @@ impl Portal<'_> {
     pub fn prove_intent_via_local_prover(
         &mut self,
         intent_hashes: Vec<Bytes32>,
-        source: u64,
+        source_chain_domain_id: u64,
         fulfill_markers: Vec<Pubkey>,
         dispatcher: Pubkey,
         proofs: Vec<Pubkey>,
@@ -349,7 +349,7 @@ impl Portal<'_> {
         self.prove_intent(
             intent_hashes,
             local_prover::ID,
-            source,
+            source_chain_domain_id,
             fulfill_markers,
             dispatcher,
             vec![],
@@ -374,7 +374,7 @@ impl Portal<'_> {
         &mut self,
         intent_hashes: Vec<Bytes32>,
         prover: Pubkey,
-        source: u64,
+        source_chain_domain_id: u64,
         fulfill_markers: Vec<Pubkey>,
         dispatcher: Pubkey,
         data: Vec<u8>,
@@ -383,7 +383,7 @@ impl Portal<'_> {
     ) -> TransactionResult {
         let args = portal::instructions::ProveArgs {
             prover,
-            source,
+            source_chain_domain_id,
             intent_hashes,
             data,
         };

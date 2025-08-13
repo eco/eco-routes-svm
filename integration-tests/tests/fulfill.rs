@@ -4,6 +4,7 @@ use anchor_lang::{system_program, AnchorSerialize, InstructionData};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022;
+use eco_svm_std::prover::{IntentHashClaimant, ProofData, ProveArgs};
 use eco_svm_std::CHAIN_ID;
 use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentFulfilled;
@@ -624,13 +625,15 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
-    let prove_data = eco_svm_std::prover::ProveArgs {
-        source: 1,
-        intent_hashes_claimants: vec![(
-            rand::random::<[u8; 32]>().into(),
-            rand::random::<[u8; 32]>().into(),
-        )]
-        .into(),
+    let prove_data = ProveArgs {
+        domain_id: 1,
+        proof_data: ProofData::new(
+            1,
+            vec![IntentHashClaimant::new(
+                rand::random::<[u8; 32]>().into(),
+                rand::random::<[u8; 32]>().into(),
+            )],
+        ),
         data: rand::random::<[u8; 32]>().to_vec(),
     };
     let calldata = Calldata {

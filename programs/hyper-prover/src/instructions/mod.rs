@@ -23,7 +23,7 @@ pub enum HyperProverError {
     InvalidDispatcher,
     InvalidData,
     InvalidMailbox,
-    InvalidChainId,
+    InvalidDomainId,
     InvalidProcessAuthority,
     InvalidConfig,
     TooManyWhitelistedSenders,

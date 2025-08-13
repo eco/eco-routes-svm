@@ -1,7 +1,8 @@
-IntentHashesClaimants(
-    [
-        (
-            Bytes32(
+ProofData {
+    destination: 8,
+    intent_hashes_claimants: [
+        IntentHashClaimant {
+            intent_hash: Bytes32(
                 [
                     17,
                     17,
@@ -37,7 +38,7 @@ IntentHashesClaimants(
                     17,
                 ],
             ),
-            Bytes32(
+            claimant: Bytes32(
                 [
                     34,
                     34,
@@ -73,6 +74,6 @@ IntentHashesClaimants(
                     34,
                 ],
             ),
-        ),
+        },
     ],
-)
+}

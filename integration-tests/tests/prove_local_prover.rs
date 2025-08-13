@@ -159,7 +159,7 @@ fn prove_intent_invalid_source_fail() {
         dispatcher,
         vec![proof],
     );
-    assert!(result.is_err_and(common::is_error(LocalProverError::InvalidSource)));
+    assert!(result.is_err_and(common::is_error(LocalProverError::InvalidDomainId)));
 }
 
 #[test]
@@ -173,7 +173,10 @@ fn prove_invalid_portal_dispatcher_fail() {
     let result = ctx.local_prover().prove(
         &invalid_dispatcher,
         source,
-        vec![(intent_hash, claimant)].into(),
+        prover::ProofData::new(
+            source,
+            vec![prover::IntentHashClaimant::new(intent_hash, claimant)],
+        ),
         vec![],
         vec![],
     );

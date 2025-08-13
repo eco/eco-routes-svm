@@ -2,7 +2,7 @@ use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::event_authority_pda;
-use eco_svm_std::prover::{IntentHashesClaimants, ProveArgs};
+use eco_svm_std::prover::{ProofData, ProveArgs};
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -25,14 +25,14 @@ impl LocalProver<'_> {
     pub fn prove(
         &mut self,
         portal_dispatcher: &Keypair,
-        source: u64,
-        intent_hashes_claimants: IntentHashesClaimants,
+        domain_id: u64,
+        intent_hashes_claimants: ProofData,
         data: Vec<u8>,
         proof_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let args = ProveArgs {
-            source,
-            intent_hashes_claimants,
+            domain_id,
+            proof_data: intent_hashes_claimants,
             data,
         };
         let instruction = local_prover::instruction::Prove { args };

@@ -3,8 +3,8 @@ use std::iter;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
-use eco_svm_std::prover::{self, PROVE_DISCRIMINATOR};
-use eco_svm_std::Bytes32;
+use eco_svm_std::prover::{self, IntentHashClaimant, ProofData, PROVE_DISCRIMINATOR};
+use eco_svm_std::{Bytes32, CHAIN_ID};
 use itertools::Itertools;
 
 use crate::events::IntentProven;
@@ -14,7 +14,7 @@ use crate::state::{dispatcher_pda, FulfillMarker, DISPATCHER_SEED};
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ProveArgs {
     pub prover: Pubkey,
-    pub source: u64,
+    pub source_chain_domain_id: u64,
     pub intent_hashes: Vec<Bytes32>,
     pub data: Vec<u8>,
 }
@@ -36,7 +36,7 @@ pub fn prove_intent<'info>(
 ) -> Result<()> {
     let ProveArgs {
         prover: _,
-        source,
+        source_chain_domain_id,
         intent_hashes,
         data,
     } = args;
@@ -49,16 +49,12 @@ pub fn prove_intent<'info>(
     intent_hashes_fulfill_markers
         .iter()
         .for_each(|(intent_hash, fulfill_marker)| {
-            emit!(IntentProven::new(
-                *intent_hash,
-                fulfill_marker.claimant,
-                source
-            ));
+            emit!(IntentProven::new(*intent_hash, fulfill_marker.claimant));
         });
 
     invoke_prover_prove(
         &ctx,
-        source,
+        source_chain_domain_id,
         intent_hashes_fulfill_markers,
         prove_accounts,
         data,
@@ -101,17 +97,19 @@ fn fulfill_marker_and_prove_accounts<'c, 'info>(
 
 fn invoke_prover_prove<'info>(
     ctx: &Context<'_, '_, '_, 'info, Prove<'info>>,
-    source: u64,
+    source_chain_domain_id: u64,
     intent_hashes_fulfill_markers: Vec<(Bytes32, FulfillMarker)>,
     prove_accounts: &[AccountInfo<'info>],
     data: Vec<u8>,
 ) -> Result<()> {
     let intent_hashes_claimants = intent_hashes_fulfill_markers
         .into_iter()
-        .map(|(intent_hash, fulfill_marker)| (intent_hash, fulfill_marker.claimant))
-        .collect::<Vec<_>>()
-        .into();
-    let args = prover::ProveArgs::new(source, intent_hashes_claimants, data);
+        .map(|(intent_hash, fulfill_marker)| {
+            IntentHashClaimant::new(intent_hash, fulfill_marker.claimant)
+        })
+        .collect::<Vec<_>>();
+    let proof_data = ProofData::new(CHAIN_ID, intent_hashes_claimants);
+    let args = prover::ProveArgs::new(source_chain_domain_id, proof_data, data);
     let ix_data: Vec<_> = PROVE_DISCRIMINATOR
         .into_iter()
         .chain(args.try_to_vec()?)
