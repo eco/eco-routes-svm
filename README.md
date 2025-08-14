@@ -33,6 +33,14 @@ A specialized prover that integrates with Hyperlane for cross-chain proof delive
 - **Message Validation**: Implements ISM (Interchain Security Module) for security
 - **Account Management**: Manages proof accounts and cleanup operations
 
+#### **Local-Prover Program** (`programs/local-prover/`)
+A lightweight prover for same-chain (Solana) intent fulfillment validation:
+
+- **Same-Chain Proofs**: Creates proof accounts for intents fulfilled on Solana itself
+- **Direct Validation**: Bypasses cross-chain messaging for Solana-to-Solana intents
+- **Rent Optimization**: Efficient proof account lifecycle management
+- **Event Emission**: Emits IntentProven events for off-chain indexing
+
 ### How They Work Together
 
 ```mermaid
@@ -41,21 +49,31 @@ sequenceDiagram
     participant Portal
     participant Solver
     participant HyperProver
+    participant LocalProver
     participant Hyperlane
     participant Source
 
     User->>Portal: Create & Fund Intent
-    Solver->>Portal: Fulfill Intent
-    Portal->>HyperProver: Prove Intent
-    HyperProver->>Hyperlane: Send Proof Message
-    Hyperlane->>Source: Deliver Proof
-    Source->>Solver: Release Rewards
+    
+    alt Cross-Chain Intent
+        Solver->>Portal: Fulfill Intent
+        Portal->>HyperProver: Prove Intent
+        HyperProver->>Hyperlane: Send Proof Message
+        Hyperlane->>Source: Deliver Proof
+        Source->>Solver: Release Rewards
+    else Same-Chain Intent (Solana)
+        Solver->>Portal: Fulfill Intent
+        Portal->>LocalProver: Prove Intent
+        LocalProver->>Portal: Create Proof Account
+        Portal->>Solver: Release Rewards
+    end
 ```
 
 1. **Intent Lifecycle**: Portal manages the full intent creation, funding, and fulfillment process
-2. **Cross-Chain Proof**: HyperProver generates and transmits proof of fulfillment to origin chains
-3. **Security**: Hyperlane's ISM validates cross-chain messages for security
-4. **Cleanup**: Proof accounts are closed after successful validation to reclaim rent
+2. **Cross-Chain Proof**: HyperProver generates and transmits proof of fulfillment to origin chains via Hyperlane
+3. **Same-Chain Proof**: LocalProver creates proof accounts directly on Solana for local intents
+4. **Security**: Hyperlane's ISM validates cross-chain messages; LocalProver validates same-chain proofs
+5. **Cleanup**: Proof accounts are closed after successful validation to reclaim rent
 
 ### Key Features
 
@@ -64,6 +82,46 @@ sequenceDiagram
 - **Solver Incentives**: Reward-based system encourages solver participation
 - **Gas Optimization**: Efficient account management and rent reclamation
 - **Security**: Multi-layered validation through Portal and Hyperlane
+
+## Shared Libraries
+
+### eco-svm-std
+
+A shared library package that provides common types, utilities, and abstractions used across all programs in the eco-routes-svm workspace.
+
+#### Key Components:
+
+**Core Types:**
+- `Bytes32` - 32-byte array wrapper with serialization and cross-chain compatibility
+- `SerializableAccountMeta` - Cross-chain serializable version of Solana's AccountMeta
+
+**Prover Utilities (`prover` module):**
+- `Proof` - Standard proof structure with destination chain and claimant
+- `ProofData` - Container for multiple intent hash-claimant pairs
+- `IntentHashClaimant` - Intent fulfillment validation data
+- `ProveArgs` - Arguments for proof generation instructions
+- `IntentProven` - Event emitted when intents are proven
+
+**Account Management (`account` module):**
+- `AccountExt` trait - Extended account initialization with PDA support
+- Automated account creation, funding, and ownership assignment
+- Rent-exempt account initialization with proper size allocation
+
+**Configuration:**
+- `CHAIN_ID` - Environment-specific chain identifiers (mainnet vs non-mainnet)
+- `EVENT_AUTHORITY_SEED` - Standard seed for event authority PDAs
+
+#### Cross-Program Usage:
+- **Portal Program**: Uses `Bytes32` for intent hashes and `SerializableAccountMeta` for cross-chain account data
+- **Hyper-Prover**: Leverages `ProofData` and `IntentProven` events for Hyperlane integration
+- **Local-Prover**: Implements `Proof` structure and `AccountExt` for account management
+- **Integration Tests**: Common types and utilities for test data generation
+
+#### Benefits:
+- **Consistency**: Ensures uniform data structures across all programs
+- **Cross-Chain Compatibility**: Provides serialization for off-chain and cross-chain communication
+- **Code Reuse**: Eliminates duplication of common patterns and utilities
+- **Maintainability**: Centralized location for shared logic and types
 
 ## Setup & Installation
 
@@ -219,13 +277,13 @@ anchor test --skip-deploy
 
 ### Portal Program
 
-**Program ID**: `8zy9vW3HKKvBNgV6UKdGKFZDyY9J7r1cN5jcYd2mwGFA` (localnet)
+**Program ID**: `52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F`
 
 #### Key Instructions:
-- `fund_intent` - Fund an intent with reward tokens
-- `fulfill_intent` - Execute intent operations and mark as fulfilled
-- `prove_intent` - Submit proof of fulfillment from destination chain
-- `refund_intent` - Refund intent if not fulfilled within timeout
+- `fund` - Fund an intent with reward tokens
+- `fulfill` - Execute intent operations and mark as fulfilled
+- `prove` - Submit proof of fulfillment from destination chain
+- `refund` - Refund intent if not fulfilled within timeout
 - `withdraw` - Withdraw rewards after successful proof validation
 
 #### Key Accounts:
@@ -245,6 +303,28 @@ anchor test --skip-deploy
 #### Key Accounts:
 - `ProofAccount` - Stores proof data for intent fulfillment
 - `Config` - Prover configuration and whitelisted senders
+
+### Local-Prover Program
+
+**Program ID**: `34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j`
+
+A lightweight proof generation program for same-chain (Solana) intent fulfillment validation. Unlike the Hyper-Prover which handles cross-chain scenarios, the Local-Prover creates proofs for intents fulfilled on Solana itself.
+
+#### Key Instructions:
+- `prove` - Create proof accounts for validated intent hash-claimant pairs
+- `close_proof` - Clean up proof accounts to reclaim rent
+
+#### Key Accounts:
+- `ProofAccount` - Stores proof data with destination chain and claimant information
+
+#### Architecture:
+- **Same-Chain Proofs**: Validates intent fulfillment within Solana ecosystem
+- **Deterministic PDAs**: Uses consistent seeds (`proof` + intent_hash) for proof account derivation
+- **Event Emission**: Emits `IntentProven` events for off-chain indexing
+- **Rent Optimization**: Provides cleanup mechanism to reclaim account rent
+
+#### Use Case:
+When intents are fulfilled on Solana (destination chain ID = 1), the Local-Prover creates proof accounts that can be validated by the Portal program for reward settlement, without requiring cross-chain messaging infrastructure.
 
 ### Dummy ISM Program
 
