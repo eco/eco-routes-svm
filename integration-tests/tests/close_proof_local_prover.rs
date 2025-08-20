@@ -20,6 +20,7 @@ fn close_proof_should_succeed() {
     reward.prover = local_prover::ID;
     route.tokens.clear();
     route.calls.clear();
+    route.native_amount = 0;
     reward.tokens.clear();
     let route_hash = route.hash();
 

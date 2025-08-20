@@ -106,8 +106,7 @@ fn fund_executor<'info>(
         PortalError::InvalidMint
     );
 
-    let native_amount = route.calls.iter().fold(0, |acc, call| acc + call.value);
-    if native_amount > 0 {
+    if route.native_amount > 0 {
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -116,7 +115,7 @@ fn fund_executor<'info>(
                     to: ctx.accounts.executor.to_account_info(),
                 },
             ),
-            native_amount,
+            route.native_amount,
         )?;
     }
 
