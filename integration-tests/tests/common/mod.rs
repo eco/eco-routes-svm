@@ -119,20 +119,22 @@ impl Context {
             self.set_mint_account(&token.token);
         });
 
+        let calls: Vec<_> = (0..3)
+            .map(|_| Call {
+                target: random::<[u8; 32]>().into(),
+                data: random::<[u8; 32]>().to_vec(),
+            })
+            .collect();
+
         (
             random::<u32>().into(),
             Route {
                 deadline: self.now() + 1800,
                 salt: random::<[u8; 32]>().into(),
                 portal: portal::ID.to_bytes().into(),
+                native_amount: sol_amount(1.0),
                 tokens: route_tokens,
-                calls: (0..3)
-                    .map(|i| Call {
-                        target: random::<[u8; 32]>().into(),
-                        data: random::<[u8; 32]>().to_vec(),
-                        value: (i + 1) * 1_000_000_000,
-                    })
-                    .collect(),
+                calls,
             },
             Reward {
                 deadline: self.now() + 3600,

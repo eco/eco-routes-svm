@@ -17,13 +17,12 @@ use solana_sdk::signer::Signer;
 
 pub mod common;
 
-fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata, u64)>) -> Route {
+fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata)>) -> Route {
     route.calls = calldatas
         .into_iter()
-        .map(|(target, calldata, value)| Call {
+        .map(|(target, calldata)| Call {
             target: target.to_bytes().into(),
             data: calldata.try_to_vec().unwrap(),
-            value,
         })
         .collect();
 
@@ -32,14 +31,13 @@ fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata, u64)
 
 fn route_with_calldatas_with_accounts(
     mut route: Route,
-    calldatas_with_accounts: Vec<(Pubkey, CalldataWithAccounts, u64)>,
+    calldatas_with_accounts: Vec<(Pubkey, CalldataWithAccounts)>,
 ) -> Route {
     route.calls = calldatas_with_accounts
         .into_iter()
-        .map(|(target, calldata_with_accounts, value)| Call {
+        .map(|(target, calldata_with_accounts)| Call {
             target: target.to_bytes().into(),
             data: calldata_with_accounts.try_to_vec().unwrap(),
-            value,
         })
         .collect();
 
@@ -49,7 +47,8 @@ fn route_with_calldatas_with_accounts(
 #[test]
 fn fulfill_intent_token_transfer_success() {
     let mut ctx = common::Context::default();
-    let (_, route, _) = ctx.rand_intent();
+    let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     let reward_hash = rand::random::<[u8; 32]>().into();
     let token_program = &ctx.token_program.clone();
     let recipient = Pubkey::new_unique();
@@ -108,14 +107,14 @@ fn fulfill_intent_token_transfer_success() {
         route.clone(),
         calldatas_with_accounts
             .into_iter()
-            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts, 0))
+            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts))
             .collect(),
     );
     let destination_route = route_with_calldatas(
         route,
         calldatas
             .into_iter()
-            .map(|calldata| (*token_program, calldata, 0))
+            .map(|calldata| (*token_program, calldata))
             .collect(),
     );
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
@@ -178,7 +177,8 @@ fn fulfill_intent_token_transfer_success() {
 #[test]
 fn fulfill_intent_token_2022_transfer_success() {
     let mut ctx = common::Context::new_with_token_2022();
-    let (_, route, _) = ctx.rand_intent();
+    let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     let reward_hash = rand::random::<[u8; 32]>().into();
     let token_program = &ctx.token_program.clone();
     let recipient = Pubkey::new_unique();
@@ -237,14 +237,14 @@ fn fulfill_intent_token_2022_transfer_success() {
         route.clone(),
         calldatas_with_accounts
             .into_iter()
-            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts, 0))
+            .map(|calldata_with_accounts| (*token_program, calldata_with_accounts))
             .collect(),
     );
     let destination_route = route_with_calldatas(
         route,
         calldatas
             .into_iter()
-            .map(|calldata| (*token_program, calldata, 0))
+            .map(|calldata| (*token_program, calldata))
             .collect(),
     );
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
@@ -314,11 +314,10 @@ fn fulfill_intent_native_transfer_success() {
     let claimant = Pubkey::new_unique().to_bytes().into();
     let executor = state::executor_pda().0;
     let solver = ctx.solver.pubkey();
-    let native_amount = 1_000_000_000;
 
-    ctx.airdrop(&solver, native_amount).unwrap();
+    ctx.airdrop(&solver, route.native_amount).unwrap();
     let calldata = Calldata {
-        data: system_instruction::transfer(&executor, &recipient, native_amount).data,
+        data: system_instruction::transfer(&executor, &recipient, route.native_amount).data,
         account_count: 3,
     };
     let call_accounts = vec![
@@ -331,10 +330,10 @@ fn fulfill_intent_native_transfer_success() {
 
     let source_route = route_with_calldatas_with_accounts(
         route.clone(),
-        vec![(system_program::ID, calldata_with_accounts, native_amount)],
+        vec![(system_program::ID, calldata_with_accounts)],
     );
     let destination_route =
-        route_with_calldatas(route, vec![(system_program::ID, calldata, native_amount)]);
+        route_with_calldatas(route.clone(), vec![(system_program::ID, calldata)]);
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
 
@@ -356,7 +355,7 @@ fn fulfill_intent_native_transfer_success() {
     );
     assert_eq!(ctx.balance(&solver), 0);
     assert_eq!(ctx.balance(&executor), 0);
-    assert_eq!(ctx.balance(&recipient), native_amount);
+    assert_eq!(ctx.balance(&recipient), route.native_amount);
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
         FulfillMarker::new(claimant, bump)
@@ -476,6 +475,7 @@ fn fulfill_intent_invalid_mint_fail() {
 fn fulfill_intent_invalid_fulfill_marker_fail() {
     let mut ctx = common::Context::default();
     let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
@@ -503,6 +503,7 @@ fn fulfill_intent_invalid_fulfill_marker_fail() {
 fn fulfill_intent_invalid_calldata_fail() {
     let mut ctx = common::Context::default();
     let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let recipient = Pubkey::new_unique();
@@ -525,9 +526,9 @@ fn fulfill_intent_invalid_calldata_fail() {
 
     let source_route = route_with_calldatas_with_accounts(
         route.clone(),
-        vec![(system_program::ID, calldata_with_accounts, 0)],
+        vec![(system_program::ID, calldata_with_accounts)],
     );
-    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata, 0)]);
+    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
     let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
@@ -550,6 +551,7 @@ fn fulfill_intent_invalid_calldata_fail() {
 fn fulfill_intent_already_fulfilled_fail() {
     let mut ctx = common::Context::default();
     let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
@@ -621,6 +623,7 @@ fn fulfill_intent_invalid_portal_fail() {
 fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
     let mut ctx = common::Context::default();
     let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     route.tokens.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();
     let claimant = Pubkey::new_unique().to_bytes().into();
@@ -654,7 +657,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
         AccountMeta::new_readonly(hyper_prover::hyperlane::MAILBOX_ID, false),
         AccountMeta::new_readonly(hyper_prover::ID, false),
     ];
-    let route_with_prover_call = route_with_calldatas(route, vec![(hyper_prover::ID, calldata, 0)]);
+    let route_with_prover_call = route_with_calldatas(route, vec![(hyper_prover::ID, calldata)]);
     let intent_hash = types::intent_hash(CHAIN_ID, &route_with_prover_call.hash(), &reward_hash);
     let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
 
@@ -703,6 +706,7 @@ fn fulfill_intent_route_expired_fail() {
 fn fulfill_intent_invalid_intent_hash_fail() {
     let mut ctx = common::Context::default();
     let (_, mut route, _) = ctx.rand_intent();
+    route.native_amount = 0;
     route.tokens.clear();
     route.calls.clear();
     let reward_hash = rand::random::<[u8; 32]>().into();

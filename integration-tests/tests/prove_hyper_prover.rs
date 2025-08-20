@@ -23,6 +23,7 @@ fn setup(intent_count: usize) -> (common::Context, Vec<Bytes32>) {
             let (_, mut route, _) = ctx.rand_intent();
             route.tokens.clear();
             route.calls.clear();
+            route.native_amount = 0;
             let reward_hash = rand::random::<[u8; 32]>().into();
             let claimant = Pubkey::new_unique().to_bytes().into();
             let executor = state::executor_pda().0;

@@ -14,6 +14,7 @@ fn setup(intent_count: usize) -> (common::Context, Vec<eco_svm_std::Bytes32>) {
             let (_, mut route, mut reward) = ctx.rand_intent();
             route.tokens.clear();
             route.calls.clear();
+            route.native_amount = 0;
             reward.prover = local_prover::ID;
             let claimant = Pubkey::new_unique().to_bytes().into();
             let executor = state::executor_pda().0;

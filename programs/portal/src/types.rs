@@ -221,6 +221,7 @@ pub struct Route {
     pub salt: Bytes32,
     pub deadline: u64,
     pub portal: Bytes32,
+    pub native_amount: u64,
     pub tokens: Vec<TokenAmount>,
     pub calls: Vec<Call>,
 }
@@ -291,7 +292,6 @@ pub struct TokenAmount {
 pub struct Call {
     pub target: Bytes32,
     pub data: Vec<u8>,
-    pub value: u64,
 }
 
 #[cfg(test)]
@@ -735,6 +735,7 @@ mod tests {
             deadline: 1700000000,
             salt: [1u8; 32].into(),
             portal: [2u8; 32].into(),
+            native_amount: 10,
             tokens: vec![
                 TokenAmount {
                     token: Pubkey::new_from_array([3u8; 32]),
@@ -749,12 +750,10 @@ mod tests {
                 Call {
                     target: [5u8; 32].into(),
                     data: vec![1, 2, 3],
-                    value: 0,
                 },
                 Call {
                     target: [6u8; 32].into(),
                     data: vec![4, 5, 6],
-                    value: 1000,
                 },
             ],
         };
@@ -768,6 +767,7 @@ mod tests {
             deadline: 1700000000,
             salt: [1u8; 32].into(),
             portal: [2u8; 32].into(),
+            native_amount: 100,
             tokens: vec![
                 TokenAmount {
                     token: Pubkey::new_from_array([3u8; 32]),
