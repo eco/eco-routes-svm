@@ -1,6 +1,6 @@
 # Eco Routes SVM
 
-A cross-chain intent protocol built on Solana, enabling users to create intents that are fulfilled by solvers across different blockchain networks. This implementation uses Hyperlane for cross-chain message passing and follows the ERC-7683 intent standard.
+A cross-chain intent protocol built on Solana, enabling users to create intents that are fulfilled by solvers across different blockchain networks. This implementation uses Hyperlane for cross-chain message passing.
 
 ## Table of Contents
 
@@ -26,10 +26,9 @@ The main intent protocol that manages the complete intent lifecycle:
 - **Reward Settlement**: Distributes rewards to successful solvers
 
 #### **Hyper-Prover Program** (`programs/hyper-prover/`)
-A specialized prover that integrates with Hyperlane for cross-chain proof delivery:
+A specialized program that integrates with Hyperlane for cross-chain message delivery:
 
-- **Proof Generation**: Creates cryptographic proofs of intent fulfillment
-- **Cross-Chain Messaging**: Uses Hyperlane to send proofs to source chains
+- **Cross-Chain Messaging**: Uses Hyperlane to send fulfillment notifications to source chains
 - **Message Validation**: Implements ISM (Interchain Security Module) for security
 - **Account Management**: Manages proof accounts and cleanup operations
 
@@ -38,28 +37,33 @@ A specialized prover that integrates with Hyperlane for cross-chain proof delive
 ```mermaid
 sequenceDiagram
     participant User
-    participant Portal
+    participant SourcePortal as Portal (Source Chain)
+    participant DestPortal as Portal (Destination Chain)
     participant Solver
-    participant HyperProver
+    participant DestProver as HyperProver (Destination Chain)
     participant Hyperlane
-    participant Source
+    participant SourceProver as HyperProver (Source Chain)
 
-    User->>Portal: Create & Fund Intent
-    Solver->>Portal: Fulfill Intent
-    Portal->>HyperProver: Prove Intent
-    HyperProver->>Hyperlane: Send Proof Message
-    Hyperlane->>Source: Deliver Proof
-    Source->>Solver: Release Rewards
+    User->>SourcePortal: Publish Intent
+    User->>SourcePortal: Fund Intent
+    Solver->>DestPortal: Fulfill Intent
+    Solver->>DestPortal: Prove Intent
+    DestPortal->>DestProver: Send Proof Message
+    DestProver->>Hyperlane: Send Proof Message
+    Hyperlane->>SourceProver: Deliver Proof Message
+    SourceProver->>SourceProver: Handle & Create Proof Account
+    Solver->>SourcePortal: Withdraw Rewards
+    SourcePortal->>SourceProver: Verify Proof
+    SourcePortal->>Solver: Release Rewards
 ```
 
 1. **Intent Lifecycle**: Portal manages the full intent creation, funding, and fulfillment process
-2. **Cross-Chain Proof**: HyperProver generates and transmits proof of fulfillment to origin chains
+2. **Cross-Chain Messaging**: HyperProver handles Hyperlane message passing for proof delivery
 3. **Security**: Hyperlane's ISM validates cross-chain messages for security
 4. **Cleanup**: Proof accounts are closed after successful validation to reclaim rent
 
 ### Key Features
 
-- **ERC-7683 Compatibility**: Follows the standard intent protocol interface
 - **Multi-Chain Support**: Works with any Hyperlane-supported blockchain
 - **Solver Incentives**: Reward-based system encourages solver participation
 - **Gas Optimization**: Efficient account management and rent reclamation
@@ -178,12 +182,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 anchor test
 
 # Update golden files (if needed)
-cargo test -- --goldie=overwrite
+GOLDIE_UPDATE=1 cargo test
 ```
 
 ### Available Anchor Scripts
-
-The project includes convenient Anchor scripts for different environments:
 
 ```bash
 # Build scripts
@@ -219,38 +221,40 @@ anchor test --skip-deploy
 
 ### Portal Program
 
-**Program ID**: `8zy9vW3HKKvBNgV6UKdGKFZDyY9J7r1cN5jcYd2mwGFA` (localnet)
 
 #### Key Instructions:
-- `fund_intent` - Fund an intent with reward tokens
-- `fulfill_intent` - Execute intent operations and mark as fulfilled
-- `prove_intent` - Submit proof of fulfillment from destination chain
-- `refund_intent` - Refund intent if not fulfilled within timeout
+- `publish` - Create and emit intent on source chain
+- `fund` - Fund an intent with reward tokens
+- `fulfill` - Execute intent operations and mark as fulfilled
+- `prove` - Submit proof of fulfillment from destination chain
+- `refund` - Refund intent if not fulfilled within timeout
 - `withdraw` - Withdraw rewards after successful proof validation
 
 #### Key Accounts:
-- `FulfillMarker` - Tracks intent fulfillment status
-- `WithdrawnMarker` - Prevents double withdrawals
+- `Vault` - Escrows reward tokens for intent funding
+- `FulfillMarker` - Tracks intent fulfillment status with claimant address
+- `WithdrawnMarker` - Prevents double withdrawals of rewards
 
 ### Hyper-Prover Program
 
-**Program ID**: `B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4` (localnet)
 
 #### Key Instructions:
 - `init` - Initialize prover with whitelisted senders
-- `handle` - Process incoming Hyperlane messages and create proofs
-- `prove` - Generate and send proof via Hyperlane
+- `handle` - Process incoming Hyperlane messages and create proof accounts
+- `prove` - Send proof message via Hyperlane
 - `close_proof` - Clean up proof accounts after validation
 
 #### Key Accounts:
 - `ProofAccount` - Stores proof data for intent fulfillment
-- `Config` - Prover configuration and whitelisted senders
+- `Config` - Prover configuration with whitelisted senders
+
+### Local-Prover Program
+
+A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
 
 ### Dummy ISM Program
 
-**Program ID**: Used for testing Hyperlane integration
-
-A simplified ISM implementation for testing cross-chain message validation.
+A simplified ISM implementation for testing cross-chain message validation in local environments.
 
 ## Testing
 
@@ -263,23 +267,29 @@ A simplified ISM implementation for testing cross-chain message validation.
 ### Test Categories
 
 #### Integration Tests:
+- `publish.rs` - Intent creation and publishing
+- `fund.rs` - Intent funding workflows
 - `fulfill.rs` - Intent fulfillment workflows
-- `prove.rs` - Cross-chain proof generation
-- `prove_hyper_prover.rs` - Direct hyper-prover testing
-- `close_proof_hyper_prover.rs` - Proof cleanup testing
+- `prove_hyper_prover.rs` - HyperProver proof generation
+- `prove_local_prover.rs` - LocalProver proof generation
 - `withdraw.rs` - Reward withdrawal flows
+- `refund.rs` - Intent refund workflows
+- `handle.rs` - Hyperlane message handling
+- `close_proof_hyper_prover.rs` - HyperProver proof cleanup
+- `close_proof_local_prover.rs` - LocalProver proof cleanup
+- `init_hyper_prover.rs` - HyperProver initialization
 
 #### Test Patterns:
 ```rust
 #[test]
 fn test_intent_fulfillment() {
-    let mut ctx = common::Context::default();
+    let mut ctx = common::Context::new();
 
     // Setup intent and accounts
     let intent = ctx.rand_intent();
 
     // Execute fulfillment
-    let result = ctx.fulfill_intent(/* params */);
+    let result = ctx.fulfill_intent(&intent);
 
     // Verify success
     assert!(result.is_ok());
@@ -423,7 +433,7 @@ wallet = "~/.config/solana/id.json"
 - [ ] Imports sorted (`cargo sort --workspace`)
 - [ ] Clippy warnings resolved (`cargo clippy --all-targets`)
 - [ ] All tests passing (`anchor test`)
-- [ ] Golden files updated if needed (`cargo test -- --goldie=overwrite`)
+- [ ] Golden files updated if needed (`GOLDIE_UPDATE=1 cargo test`)
 - [ ] Documentation updated for API changes
 
 ### Adding New Tests
@@ -433,7 +443,7 @@ Follow existing patterns in `integration-tests/tests/`:
 1. Create test files with descriptive names
 2. Use `common::Context` for test setup
 3. Test both success and failure cases
-4. Follow error validation patterns with `common::is_error()`
+4. Follow error validation patterns with appropriate error checking functions
 
 ### Feature Development
 
