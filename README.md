@@ -283,7 +283,7 @@ A simplified ISM implementation for testing cross-chain message validation in lo
 ```rust
 #[test]
 fn test_intent_fulfillment() {
-    let mut ctx = common::Context::new();
+    let mut ctx = common::Context::default();
 
     // Setup intent and accounts
     let intent = ctx.rand_intent();
