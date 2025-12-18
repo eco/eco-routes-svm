@@ -4,6 +4,7 @@ resolver = "2"
 
 [workspace.dependencies]
 anchor-lang = "0.31.1"
+compact-portal = { path = "programs/compact-portal" }
 derive-new = "0.7.0"
 dummy-ism = { path = "programs/dummy-ism" }
 eco-svm-std = { path = "packages/eco-svm-std" }

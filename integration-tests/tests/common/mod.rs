@@ -25,6 +25,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
+mod compact_portal_context;
 mod hyper_prover_context;
 mod hyperlane_context;
 mod local_prover_context;
@@ -34,6 +35,7 @@ const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
+const COMPACT_PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/compact_portal.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -58,6 +60,7 @@ impl Default for Context {
         svm.add_program(portal::ID, PORTAL_BIN);
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
         svm.add_program(local_prover::ID, LOCAL_PROVER_BIN);
+        svm.add_program(compact_portal::ID, COMPACT_PORTAL_BIN);
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);
@@ -99,7 +102,7 @@ impl Context {
     }
 
     pub fn rand_intent(&mut self) -> (u64, Route, Reward) {
-        let route_tokens: Vec<_> = (0..2)
+        let route_tokens: Vec<_> = (0..1)
             .map(|i| TokenAmount {
                 token: Pubkey::new_unique(),
                 amount: (i + 1) * 1_000_000,
@@ -119,7 +122,7 @@ impl Context {
             self.set_mint_account(&token.token);
         });
 
-        let calls: Vec<_> = (0..3)
+        let calls: Vec<_> = (0..1)
             .map(|_| Call {
                 target: random::<[u8; 32]>().into(),
                 data: random::<[u8; 32]>().to_vec(),

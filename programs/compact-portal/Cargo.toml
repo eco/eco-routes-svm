@@ -1,0 +1,28 @@
+[package]
+name = "compact-portal"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "compact_portal"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
+eco-svm-std = { workspace = true }
+portal = { workspace = true, features = ["no-entrypoint"] }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+[dev-dependencies]
+alloy-primitives = "0.8"
+alloy-sol-types = "0.8"
