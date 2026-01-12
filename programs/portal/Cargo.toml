@@ -27,4 +27,3 @@ tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [dev-dependencies]
 goldie = { workspace = true }
-

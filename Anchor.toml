@@ -9,6 +9,7 @@ skip-lint = false
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
+compact-portal = "GheA8jLDXBRbUMXAVpLropHMjn2gw6yVf1aXP8uMnJvA"
 
 [programs.localnet]
 compact-portal = "GheA8jLDXBRbUMXAVpLropHMjn2gw6yVf1aXP8uMnJvA"
@@ -21,6 +22,7 @@ portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
+compact-portal = "GheA8jLDXBRbUMXAVpLropHMjn2gw6yVf1aXP8uMnJvA"
 
 [registry]
 url = "https://api.apr.dev"
