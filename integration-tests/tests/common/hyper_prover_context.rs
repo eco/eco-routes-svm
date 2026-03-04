@@ -13,7 +13,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{Context, TransactionResult};
+use crate::common::{sol_amount, Context, TransactionResult};
 
 #[derive(Deref, DerefMut)]
 pub struct HyperProver<'a>(&'a mut Context);
@@ -52,7 +52,51 @@ impl HyperProver<'_> {
     }
 
     pub fn ism_account_metas(&mut self) -> Vec<AccountMeta> {
-        vec![]
+        let ism_account_metas_pda = Pubkey::find_program_address(
+            &[
+                b"hyperlane_message_recipient",
+                b"-",
+                b"interchain_security_module",
+                b"-",
+                b"account_metas",
+            ],
+            &hyper_prover::ID,
+        )
+        .0;
+
+        let instruction = hyper_prover::instruction::IsmAccountMetas {};
+        let accounts = hyper_prover::accounts::IsmAccountMetas {
+            ism_account_metas: ism_account_metas_pda,
+        };
+
+        let instruction = Instruction {
+            program_id: hyper_prover::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+
+        let payer = Keypair::new();
+        self.airdrop(&payer.pubkey(), sol_amount(1.0)).unwrap();
+
+        let transaction = Transaction::new(
+            &[&payer],
+            Message::new(&[instruction], Some(&payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        let result = self.send_transaction(transaction).unwrap();
+
+        let serializable_metas: Vec<SerializableAccountMeta> =
+            BorshDeserialize::try_from_slice(&result.return_data.data).unwrap();
+
+        serializable_metas
+            .into_iter()
+            .map(|meta| AccountMeta {
+                pubkey: meta.pubkey,
+                is_signer: meta.is_signer,
+                is_writable: meta.is_writable,
+            })
+            .collect()
     }
 
     pub fn handle_account_metas(

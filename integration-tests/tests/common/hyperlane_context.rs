@@ -64,7 +64,7 @@ struct ProtocolFee {
     pub beneficiary: Pubkey,
 }
 
-fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
+fn init_dummy_ism(svm: &mut LiteSVM) {
     let initializer = Keypair::new();
     svm.airdrop(&initializer.pubkey(), sol_amount(1.0)).unwrap();
 
@@ -90,8 +90,6 @@ fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
     );
 
     svm.send_transaction(transaction).unwrap();
-
-    ism_state_pda
 }
 
 fn init_mailbox(svm: &mut LiteSVM, default_ism: Pubkey) {
@@ -191,6 +189,10 @@ impl Hyperlane<'_> {
             AccountMeta::new_readonly(process_authority_pda, false),
             AccountMeta::new(processed_message_pda, false),
         ];
+        accounts.extend(
+            // 5: ISM account metas
+            self.hyper_prover().ism_account_metas(),
+        );
         accounts.extend(vec![
             // 6: SPL-noop
             AccountMeta::new_readonly(spl_noop::ID, false),

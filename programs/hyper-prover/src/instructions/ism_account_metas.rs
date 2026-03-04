@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
+use eco_svm_std::SerializableAccountMeta;
 
 #[derive(Accounts)]
 pub struct IsmAccountMetas<'info> {
@@ -18,6 +19,7 @@ pub struct IsmAccountMetas<'info> {
 }
 
 pub fn ism_account_metas(_ctx: Context<IsmAccountMetas>) -> Result<()> {
-    set_return_data(&[0, 0, 0, 0]); // borsh-serialized empty vec
+    set_return_data(&Vec::<SerializableAccountMeta>::new().try_to_vec()?);
+
     Ok(())
 }
