@@ -25,8 +25,8 @@ pub fn add_hyperlane_programs(svm: &mut LiteSVM) {
 }
 
 pub fn init_hyperlane(svm: &mut LiteSVM) {
-    let dummy_ism_pda = init_dummy_ism(svm);
-    init_mailbox(svm, dummy_ism_pda);
+    init_dummy_ism(svm);
+    init_mailbox(svm, dummy_ism::ID);
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
