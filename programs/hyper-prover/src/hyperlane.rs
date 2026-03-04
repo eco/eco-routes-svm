@@ -10,7 +10,7 @@ use crate::instructions::Prove;
 #[cfg(feature = "mainnet")]
 pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
 #[cfg(feature = "mainnet")]
-pub const MULTISIG_ISM_MESSAGE_ID: Pubkey = pubkey!("EpAuVN1oc5GccKAk41VMBHTgzJFtB5bftvi92SywQdbS");
+pub const MULTISIG_ISM_MESSAGE_ID: Pubkey = pubkey!("LwNfVYMDzAe5dCJgA5CipTZcT34Eyf74zLr81K91jxk");
 #[cfg(not(feature = "mainnet"))]
 pub const MAILBOX_ID: Pubkey = pubkey!("75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSXS5aR");
 #[cfg(not(feature = "mainnet"))]
