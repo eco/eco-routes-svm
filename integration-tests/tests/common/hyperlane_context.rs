@@ -3,7 +3,7 @@ use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::CHAIN_ID;
-use hyper_prover::hyperlane::{process_authority_pda, MAILBOX_ID, MULTISIG_ISM_MESSAGE_ID};
+use hyper_prover::hyperlane::{process_authority_pda, MAILBOX_ID};
 use litesvm::LiteSVM;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
@@ -20,7 +20,7 @@ const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 pub fn add_hyperlane_programs(svm: &mut LiteSVM) {
     svm.add_program(MAILBOX_ID, MAILBOX_BIN);
-    svm.add_program(MULTISIG_ISM_MESSAGE_ID, DUMMY_ISM_BIN);
+    svm.add_program(dummy_ism::ID, DUMMY_ISM_BIN);
     svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
 }
 
@@ -68,7 +68,7 @@ fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
     let initializer = Keypair::new();
     svm.airdrop(&initializer.pubkey(), sol_amount(1.0)).unwrap();
 
-    let ism_state_pda = Pubkey::find_program_address(&[b"ism_state"], &MULTISIG_ISM_MESSAGE_ID).0;
+    let ism_state_pda = Pubkey::find_program_address(&[b"ism_state"], &dummy_ism::ID).0;
 
     let init_instruction = dummy_ism::instruction::Init {};
     let accounts = dummy_ism::accounts::Init {
@@ -78,7 +78,7 @@ fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
     };
 
     let instruction = Instruction {
-        program_id: MULTISIG_ISM_MESSAGE_ID,
+        program_id: dummy_ism::ID,
         accounts: accounts.to_account_metas(None),
         data: init_instruction.data(),
     };
@@ -191,10 +191,6 @@ impl Hyperlane<'_> {
             AccountMeta::new_readonly(process_authority_pda, false),
             AccountMeta::new(processed_message_pda, false),
         ];
-        accounts.extend(
-            // 5: ISM account metas
-            self.hyper_prover().ism_account_metas(),
-        );
         accounts.extend(vec![
             // 6: SPL-noop
             AccountMeta::new_readonly(spl_noop::ID, false),

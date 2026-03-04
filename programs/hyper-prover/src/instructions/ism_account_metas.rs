@@ -1,9 +1,5 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
-use borsh::BorshSerialize;
-use eco_svm_std::SerializableAccountMeta;
-
-use crate::hyperlane;
 
 #[derive(Accounts)]
 pub struct IsmAccountMetas<'info> {
@@ -22,13 +18,6 @@ pub struct IsmAccountMetas<'info> {
 }
 
 pub fn ism_account_metas(_ctx: Context<IsmAccountMetas>) -> Result<()> {
-    let metas = vec![SerializableAccountMeta {
-        pubkey: hyperlane::MULTISIG_ISM_MESSAGE_ID,
-        is_signer: false,
-        is_writable: false,
-    }];
-
-    set_return_data(&metas.try_to_vec()?);
-
+    set_return_data(&[0, 0, 0, 0]); // borsh-serialized empty vec
     Ok(())
 }
