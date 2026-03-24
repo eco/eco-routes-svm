@@ -3,7 +3,7 @@ use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::CHAIN_ID;
-use hyper_prover::hyperlane::{process_authority_pda, MAILBOX_ID, MULTISIG_ISM_MESSAGE_ID};
+use hyper_prover::hyperlane::{process_authority_pda, MAILBOX_ID};
 use litesvm::LiteSVM;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
@@ -20,13 +20,13 @@ const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 pub fn add_hyperlane_programs(svm: &mut LiteSVM) {
     svm.add_program(MAILBOX_ID, MAILBOX_BIN);
-    svm.add_program(MULTISIG_ISM_MESSAGE_ID, DUMMY_ISM_BIN);
+    svm.add_program(dummy_ism::ID, DUMMY_ISM_BIN);
     svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
 }
 
 pub fn init_hyperlane(svm: &mut LiteSVM) {
-    let dummy_ism_pda = init_dummy_ism(svm);
-    init_mailbox(svm, dummy_ism_pda);
+    init_dummy_ism(svm);
+    init_mailbox(svm, dummy_ism::ID);
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -64,11 +64,11 @@ struct ProtocolFee {
     pub beneficiary: Pubkey,
 }
 
-fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
+fn init_dummy_ism(svm: &mut LiteSVM) {
     let initializer = Keypair::new();
     svm.airdrop(&initializer.pubkey(), sol_amount(1.0)).unwrap();
 
-    let ism_state_pda = Pubkey::find_program_address(&[b"ism_state"], &MULTISIG_ISM_MESSAGE_ID).0;
+    let ism_state_pda = Pubkey::find_program_address(&[b"ism_state"], &dummy_ism::ID).0;
 
     let init_instruction = dummy_ism::instruction::Init {};
     let accounts = dummy_ism::accounts::Init {
@@ -78,7 +78,7 @@ fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
     };
 
     let instruction = Instruction {
-        program_id: MULTISIG_ISM_MESSAGE_ID,
+        program_id: dummy_ism::ID,
         accounts: accounts.to_account_metas(None),
         data: init_instruction.data(),
     };
@@ -90,8 +90,6 @@ fn init_dummy_ism(svm: &mut LiteSVM) -> Pubkey {
     );
 
     svm.send_transaction(transaction).unwrap();
-
-    ism_state_pda
 }
 
 fn init_mailbox(svm: &mut LiteSVM, default_ism: Pubkey) {

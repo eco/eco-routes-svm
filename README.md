@@ -29,7 +29,7 @@ The main intent protocol that manages the complete intent lifecycle:
 A specialized program that integrates with Hyperlane for cross-chain message delivery:
 
 - **Cross-Chain Messaging**: Uses Hyperlane to send fulfillment notifications to source chains
-- **Message Validation**: Implements ISM (Interchain Security Module) for security
+- **Message Validation**: Uses Hyperlane's default ISM (Interchain Security Module) for message security — the prover does not configure a custom ISM, so the mailbox's default ISM is used for all incoming messages
 - **Account Management**: Manages proof accounts and cleanup operations
 
 ### How They Work Together
@@ -59,7 +59,7 @@ sequenceDiagram
 
 1. **Intent Lifecycle**: Portal manages the full intent creation, funding, and fulfillment process
 2. **Cross-Chain Messaging**: HyperProver handles Hyperlane message passing for proof delivery
-3. **Security**: Hyperlane's ISM validates cross-chain messages for security
+3. **Security**: Hyperlane's **default ISM** validates cross-chain messages — the HyperProver returns `None` for its ISM, deferring to the mailbox's configured default ISM
 4. **Cleanup**: Proof accounts are closed after successful validation to reclaim rent
 
 ### Key Features
@@ -254,7 +254,7 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 ### Dummy ISM Program
 
-A simplified ISM implementation for testing cross-chain message validation in local environments.
+A simplified ISM implementation used as the mailbox's default ISM in local test environments, standing in for Hyperlane's real default ISM.
 
 ## Testing
 
