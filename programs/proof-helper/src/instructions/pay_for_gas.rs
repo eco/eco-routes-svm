@@ -17,7 +17,9 @@ pub struct PayForGasArgs {
 pub struct PayForGas<'info> {
     /// The Hyperlane dispatched message account created by Mailbox.OutboxDispatch.
     /// Contains the encoded message from which we derive the message_id.
-    /// CHECK: discriminator is validated in the instruction handler.
+    /// CHECK: owner is validated against the Mailbox program and discriminator
+    /// is validated in the instruction handler.
+    #[account(owner = igp::MAILBOX_ID @ ProofHelperError::InvalidDispatchedMessageOwner)]
     pub dispatched_message: UncheckedAccount<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,

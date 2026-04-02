@@ -9,7 +9,12 @@ use crate::instructions::PayForGas as PayForGasAccounts;
 #[cfg(feature = "mainnet")]
 pub const IGP_PROGRAM_ID: Pubkey = pubkey!("JAvHW21tYXE9dtdG83DReqU2b4LUexFuCbtJT5tF8X6M");
 #[cfg(not(feature = "mainnet"))]
-pub const IGP_PROGRAM_ID: Pubkey = pubkey!("JAvHW21tYXE9dtdG83DReqU2b4LUexFuCbtJT5tF8X6M");
+pub const IGP_PROGRAM_ID: Pubkey = pubkey!("9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy");
+
+#[cfg(feature = "mainnet")]
+pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
+#[cfg(not(feature = "mainnet"))]
+pub const MAILBOX_ID: Pubkey = pubkey!("75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSXS5aR");
 
 /// Hyperlane IGP instruction enum. Variant order is critical for Borsh
 /// serialization — the `PayForGas` variant must remain at index 3.
