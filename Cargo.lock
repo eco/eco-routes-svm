@@ -1723,7 +1723,9 @@ dependencies = [
  "hyper-prover",
  "litesvm",
  "local-prover",
+ "mock-igp",
  "portal",
+ "proof-helper",
  "rand 0.9.1",
  "solana-sdk",
  "spl-noop",
@@ -2014,6 +2016,13 @@ dependencies = [
  "libc",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mock-igp"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
 ]
 
 [[package]]

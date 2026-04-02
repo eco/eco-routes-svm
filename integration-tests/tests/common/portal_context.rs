@@ -338,6 +338,44 @@ impl Portal<'_> {
         )
     }
 
+    /// Like `prove_intent_via_hyper_prover` but accepts an external
+    /// `unique_message` keypair so the caller can derive the
+    /// `dispatched_message_pda` for subsequent instructions.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_intent_with_unique_message(
+        &mut self,
+        intent_hashes: Vec<Bytes32>,
+        source_chain_domain_id: u64,
+        fulfill_markers: Vec<Pubkey>,
+        dispatcher: Pubkey,
+        prover_dispatcher: Pubkey,
+        mailbox_program: Pubkey,
+        data: Vec<u8>,
+        unique_message: &Keypair,
+        outbox_pda: Pubkey,
+        dispatched_message_pda: Pubkey,
+    ) -> TransactionResult {
+        self.prove_intent(
+            intent_hashes,
+            hyper_prover::ID,
+            source_chain_domain_id,
+            fulfill_markers,
+            dispatcher,
+            data,
+            vec![unique_message.insecure_clone()],
+            vec![
+                AccountMeta::new_readonly(prover_dispatcher, false),
+                AccountMeta::new(self.payer.pubkey(), true),
+                AccountMeta::new(outbox_pda, false),
+                AccountMeta::new_readonly(spl_noop::ID, false),
+                AccountMeta::new_readonly(unique_message.pubkey(), true),
+                AccountMeta::new(dispatched_message_pda, false),
+                AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+                AccountMeta::new_readonly(mailbox_program, false),
+            ],
+        )
+    }
+
     pub fn prove_intent_via_local_prover(
         &mut self,
         intent_hashes: Vec<Bytes32>,

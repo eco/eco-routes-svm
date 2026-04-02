@@ -12,8 +12,10 @@ dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
 litesvm = "0.6.1"
+mock-igp = { workspace = true, features = ["no-entrypoint"] }
 local-prover = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
+proof-helper = { workspace = true, features = ["no-entrypoint"] }
 rand = "0.9.1"
 solana-sdk = "2.2.1"
 spl-noop = { version = "1.0.0", features = ["no-entrypoint"] }

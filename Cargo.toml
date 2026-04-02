@@ -10,6 +10,7 @@ eco-svm-std = { path = "packages/eco-svm-std" }
 goldie = "0.5.0"
 hyper-prover = { path = "programs/hyper-prover" }
 local-prover = { path = "programs/local-prover" }
+mock-igp = { path = "programs/mock-igp" }
 portal = { path = "programs/portal" }
 proof-helper = { path = "programs/proof-helper" }
 

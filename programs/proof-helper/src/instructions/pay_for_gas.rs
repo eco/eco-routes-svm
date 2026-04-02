@@ -4,8 +4,11 @@ use tiny_keccak::{Hasher, Keccak};
 use crate::igp;
 use crate::instructions::ProofHelperError;
 
+/// The Hyperlane mailbox uses Borsh `AccountData` encoding, which prepends
+/// a version byte before the 8-byte discriminator.
 const DISPATCHED_MESSAGE_DISCRIMINATOR: &[u8; 8] = b"DISPATCH";
-const DISPATCHED_MESSAGE_HEADER_LEN: usize = 8 + 4 + 8 + 32; // discriminator + nonce + slot + pubkey
+const DISCRIMINATOR_OFFSET: usize = 1; // version byte prefix
+const DISPATCHED_MESSAGE_HEADER_LEN: usize = 1 + 8 + 4 + 8 + 32; // version + discriminator + nonce + slot + pubkey
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct PayForGasArgs {
@@ -53,7 +56,8 @@ fn extract_message_id(dispatched_message: &UncheckedAccount) -> Result<[u8; 32]>
 
     require!(
         data.len() > DISPATCHED_MESSAGE_HEADER_LEN
-            && data[..8] == *DISPATCHED_MESSAGE_DISCRIMINATOR,
+            && data[DISCRIMINATOR_OFFSET..DISCRIMINATOR_OFFSET + 8]
+                == *DISPATCHED_MESSAGE_DISCRIMINATOR,
         ProofHelperError::InvalidDispatchedMessage
     );
 
@@ -73,7 +77,7 @@ mod tests {
 
     #[test]
     fn dispatched_message_header_len() {
-        // discriminator(8) + nonce(4) + slot(8) + unique_message_pubkey(32)
-        assert_eq!(DISPATCHED_MESSAGE_HEADER_LEN, 52);
+        // version(1) + discriminator(8) + nonce(4) + slot(8) + unique_message_pubkey(32)
+        assert_eq!(DISPATCHED_MESSAGE_HEADER_LEN, 53);
     }
 }

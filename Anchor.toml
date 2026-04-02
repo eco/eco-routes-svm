@@ -9,6 +9,7 @@ skip-lint = false
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
+mock-igp = "9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 proof-helper = "EcoUHtBzc4eQXSPoNmYCLxxbEoosoRS8aPVwBpvizZvC"
 
