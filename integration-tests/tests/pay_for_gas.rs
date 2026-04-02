@@ -335,6 +335,11 @@ fn atomic_fulfill_prove_pay_for_gas() {
         ctx.latest_blockhash(),
     );
 
+    // Measure the serialized transaction size (the production constraint)
+    let tx_size = bincode::serialize(&transaction).unwrap().len();
+    let num_accounts = transaction.message.account_keys.len();
+    let num_signatures = transaction.signatures.len();
+
     let result = ctx.send_transaction(transaction).map_err(Box::new);
     let tx = result.unwrap();
 
@@ -349,4 +354,13 @@ fn atomic_fulfill_prove_pay_for_gas() {
         .logs
         .iter()
         .any(|l| l.contains("MockIGP: pay_for_gas")));
+
+    // Report transaction metrics
+    eprintln!("=== ATOMIC TRANSACTION METRICS ===");
+    eprintln!("  Serialized size: {} / 1232 bytes", tx_size);
+    eprintln!("  Headroom:        {} bytes", 1232_i64 - tx_size as i64);
+    eprintln!("  Accounts:        {}", num_accounts);
+    eprintln!("  Signatures:      {}", num_signatures);
+    eprintln!("  Compute units:   {}", tx.compute_units_consumed);
+    eprintln!("  NOTE: This is a legacy tx without ALT. v0+ALT would be smaller.");
 }
