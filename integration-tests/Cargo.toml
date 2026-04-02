@@ -19,5 +19,4 @@ proof-helper = { workspace = true, features = ["no-entrypoint"] }
 rand = "0.9.1"
 solana-sdk = "2.2.1"
 spl-noop = { version = "1.0.0", features = ["no-entrypoint"] }
-bincode = "1.3.3"
 tiny-keccak = "2.0.2"
