@@ -6,7 +6,7 @@ pub use pay_for_gas::*;
 
 #[error_code]
 pub enum ProofHelperError {
-    #[msg("Dispatched message account is not owned by the Mailbox program")]
+    #[msg("Dispatched message account not owned by the Mailbox program")]
     InvalidDispatchedMessageOwner,
     #[msg("Invalid dispatched message discriminator or data")]
     InvalidDispatchedMessage,
