@@ -331,7 +331,7 @@ impl Context {
         self.set_sysvar(&clock);
     }
 
-    fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
+    pub fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
         let result = self.svm.send_transaction(transaction);
         self.expire_blockhash();
         let slot = self.svm.get_sysvar::<Clock>().slot;

@@ -21,7 +21,7 @@ pub fn add_proof_helper_programs(svm: &mut LiteSVM) {
 }
 
 /// Derive the IGP program data PDA (seeds from Hyperlane IGP).
-fn igp_program_data_pda() -> Pubkey {
+pub fn igp_program_data_pda() -> Pubkey {
     Pubkey::find_program_address(
         &[b"hyperlane_igp", b"-", b"program_data"],
         &igp::IGP_PROGRAM_ID,
@@ -30,7 +30,7 @@ fn igp_program_data_pda() -> Pubkey {
 }
 
 /// Derive the gas payment PDA from a unique gas payment pubkey.
-fn gas_payment_pda(unique_gas_payment: &Pubkey) -> Pubkey {
+pub fn gas_payment_pda(unique_gas_payment: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
         &[
             b"hyperlane_igp",
@@ -45,7 +45,7 @@ fn gas_payment_pda(unique_gas_payment: &Pubkey) -> Pubkey {
 }
 
 /// Derive the IGP account PDA from a salt.
-fn igp_account_pda(salt: &[u8; 32]) -> Pubkey {
+pub fn igp_account_pda(salt: &[u8; 32]) -> Pubkey {
     Pubkey::find_program_address(
         &[b"hyperlane_igp", b"-", b"igp", b"-", salt.as_ref()],
         &igp::IGP_PROGRAM_ID,
