@@ -1,0 +1,24 @@
+[package]
+name = "proof-helper"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "proof_helper"
+
+[features]
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+mainnet = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { workspace = true }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+[dev-dependencies]
+goldie = { workspace = true }
