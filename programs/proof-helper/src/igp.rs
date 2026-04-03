@@ -7,7 +7,7 @@ use anchor_lang::system_program;
 use crate::instructions::PayForGas as PayForGasAccounts;
 
 #[cfg(feature = "mainnet")]
-pub const IGP_PROGRAM_ID: Pubkey = pubkey!("JAvHW21tYXE9dtdG83DReqU2b4LUexFuCbtJT5tF8X6M");
+pub const IGP_PROGRAM_ID: Pubkey = pubkey!("BhNcatUDC2D5JTyeaqrdSukiVFsEHK7e3hVmKMztwefv");
 #[cfg(not(feature = "mainnet"))]
 pub const IGP_PROGRAM_ID: Pubkey = pubkey!("9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy");
 
