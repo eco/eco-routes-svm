@@ -11,19 +11,19 @@ hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 mock-igp = "9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
-proof-helper = "EcoUHtBzc4eQXSPoNmYCLxxbEoosoRS8aPVwBpvizZvC"
+proof-helper = "EcopAhGGe8ngNYcGDLeXixLrecw9H58vxQhoJkcHw678"
 
 [programs.devnet]
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
-proof-helper = "EcoUHtBzc4eQXSPoNmYCLxxbEoosoRS8aPVwBpvizZvC"
+proof-helper = "EcopAhGGe8ngNYcGDLeXixLrecw9H58vxQhoJkcHw678"
 
 [programs.mainnet]
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
-proof-helper = "EcoUHtBzc4eQXSPoNmYCLxxbEoosoRS8aPVwBpvizZvC"
+proof-helper = "EcopAhGGe8ngNYcGDLeXixLrecw9H58vxQhoJkcHw678"
 
 [registry]
 url = "https://api.apr.dev"
