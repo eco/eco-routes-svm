@@ -113,10 +113,7 @@ impl ProofHelper<'_> {
 
         let transaction = Transaction::new(
             &[&self.payer, unique_gas_payment],
-            Message::new(
-                &[compute_budget, instruction],
-                Some(&self.payer.pubkey()),
-            ),
+            Message::new(&[compute_budget, instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );
 

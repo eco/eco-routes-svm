@@ -224,7 +224,10 @@ fn atomic_fulfill_prove_pay_for_gas() {
     let recipient = Pubkey::new_unique();
 
     // Keep only 1 token, clear native amount
-    route.tokens = vec![TokenAmount { token: mint, amount }];
+    route.tokens = vec![TokenAmount {
+        token: mint,
+        amount,
+    }];
     route.native_amount = 0;
 
     // Build the transfer_checked call
@@ -293,8 +296,7 @@ fn atomic_fulfill_prove_pay_for_gas() {
     let compute_budget = ComputeBudgetInstruction::set_compute_unit_limit(600_000);
 
     // ── ix[1]: Portal.fulfill (with token + call) ──
-    let solver_ata =
-        get_associated_token_address_with_program_id(&solver, &mint, &token_program);
+    let solver_ata = get_associated_token_address_with_program_id(&solver, &mint, &token_program);
     let token_accounts = vec![
         AccountMeta::new(solver_ata, false),
         AccountMeta::new(executor_ata, false),
@@ -323,10 +325,7 @@ fn atomic_fulfill_prove_pay_for_gas() {
         .chain(token_accounts)
         .chain(call_accounts)
         .collect(),
-        data: (portal::instruction::Fulfill {
-            args: fulfill_args,
-        })
-        .data(),
+        data: (portal::instruction::Fulfill { args: fulfill_args }).data(),
     };
 
     // ── ix[2]: Portal.prove ──
