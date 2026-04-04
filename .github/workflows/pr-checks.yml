@@ -65,8 +65,11 @@ jobs:
         with:
           anchor-version: ${{ env.ANCHOR_VERSION }}
 
-      - name: Build Anchor program
+      - name: Build Anchor programs
         run: anchor build
+
+      - name: Build mock-igp (non-Anchor test program)
+        run: cargo build-sbf --manifest-path programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -88,5 +91,11 @@ jobs:
         with:
           anchor-version: ${{ env.ANCHOR_VERSION }}
 
-      - name: Run Anchor tests
-        run: anchor test
+      - name: Build Anchor programs
+        run: anchor build
+
+      - name: Build mock-igp (non-Anchor test program)
+        run: cargo build-sbf --manifest-path programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+
+      - name: Run tests
+        run: cargo test --no-fail-fast
