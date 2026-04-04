@@ -2,6 +2,7 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use litesvm::LiteSVM;
 use proof_helper::igp;
+use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -10,7 +11,6 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
 use crate::common::{Context, TransactionResult, COMPUTE_UNIT_LIMIT};
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
 
 const PROOF_HELPER_BIN: &[u8] = include_bytes!("../../../target/deploy/proof_helper.so");
 const MOCK_IGP_BIN: &[u8] = include_bytes!("../../../target/deploy/mock_igp.so");

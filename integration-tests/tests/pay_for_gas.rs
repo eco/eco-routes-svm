@@ -19,8 +19,7 @@ use tiny_keccak::{Hasher, Keccak};
 
 pub mod common;
 
-use common::hyperlane_context;
-use common::proof_helper_context;
+use common::{hyperlane_context, proof_helper_context};
 
 /// Create a fulfilled intent, prove it via Portal → HyperProver → Mailbox,
 /// and return the dispatched_message_pda along with the source domain.
