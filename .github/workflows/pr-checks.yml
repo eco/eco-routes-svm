@@ -69,7 +69,7 @@ jobs:
         run: anchor build
 
       - name: Build mock-igp (non-Anchor test program)
-        run: cargo build-sbf --manifest-path programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+        run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -95,7 +95,7 @@ jobs:
         run: anchor build
 
       - name: Build mock-igp (non-Anchor test program)
-        run: cargo build-sbf --manifest-path programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+        run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Run tests
         run: cargo test --no-fail-fast

@@ -1,9 +1,8 @@
 use anchor_lang::solana_program::account_info::AccountInfo;
-use anchor_lang::solana_program::entrypoint;
 use anchor_lang::solana_program::entrypoint::ProgramResult;
-use anchor_lang::solana_program::msg;
 use anchor_lang::solana_program::program_error::ProgramError;
 use anchor_lang::solana_program::pubkey::Pubkey;
+use anchor_lang::solana_program::{entrypoint, msg};
 
 // Same ID as the devnet Hyperlane IGP so proof-helper's address check passes.
 anchor_lang::declare_id!("9SQVtTNsbipdMzumhzi6X8GwojiSMwBfqAhS7FgyTcqy");
