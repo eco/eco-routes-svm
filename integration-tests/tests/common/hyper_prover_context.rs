@@ -6,7 +6,6 @@ use eco_svm_std::prover::{ProofData, ProveArgs};
 use eco_svm_std::{Bytes32, SerializableAccountMeta};
 use hyper_prover::hyperlane;
 use hyper_prover::state::dispatcher_pda;
-// import hyper_prover
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;

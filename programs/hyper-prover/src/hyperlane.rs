@@ -9,12 +9,8 @@ use crate::instructions::Prove;
 
 #[cfg(feature = "mainnet")]
 pub const MAILBOX_ID: Pubkey = pubkey!("E588QtVUvresuXq2KoNEwAmoifCzYGpRBdHByN9KQMbi");
-#[cfg(feature = "mainnet")]
-pub const MULTISIG_ISM_MESSAGE_ID: Pubkey = pubkey!("EpAuVN1oc5GccKAk41VMBHTgzJFtB5bftvi92SywQdbS");
 #[cfg(not(feature = "mainnet"))]
 pub const MAILBOX_ID: Pubkey = pubkey!("75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSXS5aR");
-#[cfg(not(feature = "mainnet"))]
-pub const MULTISIG_ISM_MESSAGE_ID: Pubkey = pubkey!("4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k");
 
 pub const HANDLE_DISCRIMINATOR: [u8; 8] = [33, 210, 5, 66, 196, 212, 239, 142];
 pub const HANDLE_ACCOUNT_METAS_DISCRIMINATOR: [u8; 8] = [194, 141, 30, 82, 241, 41, 169, 52];

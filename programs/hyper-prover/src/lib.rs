@@ -45,11 +45,17 @@ pub mod hyper_prover {
         instructions::handle_account_metas(ctx, origin, sender, payload)
     }
 
+    /// Called by Hyperlane to discover this recipient's ISM. Returns `None`,
+    /// indicating that the mailbox's default ISM should be used for message
+    /// verification rather than a custom ISM.
     #[instruction(discriminator = &hyperlane::INTERCHAIN_SECURITY_MODULE_DISCRIMINATOR)]
     pub fn ism(ctx: Context<Ism>) -> Result<()> {
         instructions::ism(ctx)
     }
 
+    /// Called by Hyperlane to discover the accounts required by this
+    /// recipient's ISM. Returns an empty list because no custom ISM is
+    /// configured; the mailbox's default ISM is used instead.
     #[instruction(discriminator = &hyperlane::INTERCHAIN_SECURITY_MODULE_ACCOUNT_METAS_DISCRIMINATOR)]
     pub fn ism_account_metas(ctx: Context<IsmAccountMetas>) -> Result<()> {
         instructions::ism_account_metas(ctx)
