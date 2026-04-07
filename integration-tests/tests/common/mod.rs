@@ -26,9 +26,10 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
 mod hyper_prover_context;
-mod hyperlane_context;
+pub mod hyperlane_context;
 mod local_prover_context;
 mod portal_context;
+pub mod proof_helper_context;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
@@ -61,6 +62,8 @@ impl Default for Context {
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);
+
+        proof_helper_context::add_proof_helper_programs(&mut svm);
 
         let mint_authority = Keypair::new();
         let creator = Keypair::new();
@@ -328,7 +331,7 @@ impl Context {
         self.set_sysvar(&clock);
     }
 
-    fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
+    pub fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
         let result = self.svm.send_transaction(transaction);
         self.expire_blockhash();
         let slot = self.svm.get_sysvar::<Clock>().slot;

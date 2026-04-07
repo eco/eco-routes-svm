@@ -10,16 +10,19 @@ dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
+proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [programs.devnet]
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
+proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [programs.mainnet]
 hyper-prover = "B4pMQaAGPZ7Mza9XnDxJfXZ1cUa4aa67zrNkv8zYAjx4"
 portal = "52gVFYqekRiSUxWwCKPNKw9LhBsVxbZiLSnGVsTBGh5F"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
+proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [registry]
 url = "https://api.apr.dev"
@@ -30,8 +33,8 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 build-localnet = "anchor build"
-build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover"
-build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet"
-deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover"
-deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name proof-helper"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet"
+deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name proof-helper"
+deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name proof-helper"
 test = "cargo test --no-fail-fast"
