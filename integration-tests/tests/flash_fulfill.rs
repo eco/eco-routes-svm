@@ -238,6 +238,7 @@ fn flash_fulfill_from_buffer_should_succeed() {
         claimant,
         native_fee: reward.native_amount - route.native_amount,
     })));
+    assert!(ctx.account::<FlashFulfillIntentAccount>(&buffer).is_none());
 }
 
 #[test]

@@ -76,10 +76,13 @@ pub struct FlashFulfill<'info> {
     /// CHECK: validated by portal.fulfill against FulfillMarker::pda(intent_hash)
     #[account(mut)]
     pub fulfill_marker: UncheckedAccount<'info>,
-    /// CHECK: executable-only; handler logic constrains which portal is used
+    /// CHECK: executable-only. Program ID is not validated because it's
+    /// deploy-keypair-dependent and passing a malicious look-alike can only
+    /// drain `payer`'s SOL (via CPI signer inheritance) — no third-party
+    /// harm. Assumes `payer` is the solver/caller, not a sponsored relayer.
     #[account(executable)]
     pub portal_program: UncheckedAccount<'info>,
-    /// CHECK: executable-only; handler logic constrains which prover is used
+    /// CHECK: executable-only. See `portal_program` above — same rationale.
     #[account(executable)]
     pub local_prover_program: UncheckedAccount<'info>,
     /// CHECK: local_prover's event authority PDA, validated by local_prover during CPI
@@ -96,6 +99,10 @@ pub struct FlashFulfill<'info> {
 /// × reward.tokens.len(), then route 3-tuples (flash_vault_ata, executor_ata, mint)
 /// × route.tokens.len(), then one claimant ATA per reward mint, then any accounts
 /// referenced by `route.calls`.
+///
+/// When invoked via `FlashFulfillIntent::IntentHash`, the consumed
+/// `FlashFulfillIntentAccount` buffer is closed at the end and its rent
+/// refunded to `payer`.
 pub fn flash_fulfill<'info>(
     ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,
@@ -107,6 +114,7 @@ pub fn flash_fulfill<'info>(
         FlashFulfillerError::InvalidClaimant
     );
 
+    let close_flash_fulfill_intent = matches!(intent, FlashFulfillIntent::IntentHash(_));
     let (route, reward) = resolve_intent(&ctx, intent)?;
     let route_hash = route.hash();
     let reward_hash = reward.hash();
@@ -188,6 +196,12 @@ pub fn flash_fulfill<'info>(
 
     sweep_leftover_tokens(&ctx, &claimant_transfers, flash_vault_seeds)?;
     let native_fee = sweep_leftover_native(&ctx, flash_vault_seeds)?;
+
+    if close_flash_fulfill_intent {
+        ctx.accounts
+            .flash_fulfill_intent
+            .close(ctx.accounts.payer.to_account_info())?;
+    }
 
     emit_cpi!(FlashFulfilled {
         intent_hash,
