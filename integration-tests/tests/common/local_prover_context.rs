@@ -24,7 +24,7 @@ impl Context {
 impl LocalProver<'_> {
     pub fn prove(
         &mut self,
-        portal_dispatcher: &Keypair,
+        caller: &Keypair,
         domain_id: u64,
         intent_hashes_claimants: ProofData,
         data: Vec<u8>,
@@ -37,7 +37,7 @@ impl LocalProver<'_> {
         };
         let instruction = local_prover::instruction::Prove { args };
         let accounts = local_prover::accounts::Prove {
-            portal_dispatcher: portal_dispatcher.pubkey(),
+            caller: caller.pubkey(),
             payer: self.payer.pubkey(),
             system_program: anchor_lang::system_program::ID,
             event_authority: event_authority_pda(&local_prover::ID).0,
@@ -53,7 +53,7 @@ impl LocalProver<'_> {
             data: instruction.data(),
         };
         let transaction = Transaction::new(
-            &[&self.payer, portal_dispatcher],
+            &[&self.payer, caller],
             Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );

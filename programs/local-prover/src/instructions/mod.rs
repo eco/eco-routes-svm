@@ -8,7 +8,7 @@ pub use prove::*;
 
 #[error_code]
 pub enum LocalProverError {
-    InvalidPortalDispatcher,
+    InvalidCaller,
     InvalidDomainId,
     InvalidDestination,
     InvalidPortalProofCloser,

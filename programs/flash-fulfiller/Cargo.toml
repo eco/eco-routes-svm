@@ -1,12 +1,12 @@
 [package]
-name = "local-prover"
+name = "flash-fulfiller"
 version = "0.1.0"
-description = "Created with Anchor"
+description = "Flash-fulfillment orchestrator: withdraw reward + fulfill intent + pay claimant atomically."
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "local_prover"
+name = "flash_fulfiller"
 
 [features]
 mainnet = ["eco-svm-std/mainnet"]
@@ -18,7 +18,11 @@ no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
-anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+anchor-spl = { workspace = true }
 eco-svm-std = { workspace = true }
-flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
+spl-pod = "0.5.1"
+
+[dev-dependencies]
+goldie = { workspace = true }

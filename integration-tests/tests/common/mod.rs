@@ -25,6 +25,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
+mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
 mod local_prover_context;
@@ -35,6 +36,7 @@ const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
+const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_fulfiller.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -59,6 +61,7 @@ impl Default for Context {
         svm.add_program(portal::ID, PORTAL_BIN);
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
         svm.add_program(local_prover::ID, LOCAL_PROVER_BIN);
+        svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN);
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);

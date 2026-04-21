@@ -5,11 +5,12 @@ edition = "2021"
 
 [dependencies]
 anchor-lang = { workspace = true }
-anchor-spl = "0.31.1"
+anchor-spl = { workspace = true }
 base64 = "0.22.1"
 derive_more = { version = "2.0.1", features = ["deref_mut"] }
 dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
+flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
 litesvm = "0.6.1"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
