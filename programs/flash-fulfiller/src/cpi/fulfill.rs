@@ -7,6 +7,8 @@ use anchor_lang::InstructionData;
 use portal::instructions::FulfillArgs;
 use portal::types::TokenTransferAccounts;
 
+/// CPIs `portal.fulfill` with `solver` signed via `solver_seeds` (so that a PDA
+/// like `flash_vault` can act as the solver).
 #[allow(clippy::too_many_arguments)]
 pub fn fulfill_intent<'info>(
     portal_program: &AccountInfo<'info>,

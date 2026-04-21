@@ -108,6 +108,12 @@ pub struct IntentProven {
     destination: u64,
 }
 
+/// CPIs a prover program's `prove` instruction for a single intent.
+///
+/// Generic over any prover that follows the standard `prove(ProveArgs)` shape
+/// (local-prover, hyper-prover, etc.). `caller` is signed via `caller_seeds`,
+/// so PDAs that the prover accepts as authorized callers (e.g. a dispatcher
+/// or flash-vault PDA) can invoke this helper.
 #[allow(clippy::too_many_arguments)]
 pub fn prove<'info>(
     prover_program: &AccountInfo<'info>,

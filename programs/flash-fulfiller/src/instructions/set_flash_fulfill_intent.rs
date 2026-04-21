@@ -6,14 +6,19 @@ use portal::types::{intent_hash, Reward, Route};
 use crate::instructions::FlashFulfillerError;
 use crate::state::{FlashFulfillIntentAccount, FLASH_FULFILL_INTENT_SEED};
 
+/// Args for [`set_flash_fulfill_intent`]: the `(route, reward)` pair to buffer under the intent-hash PDA.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct SetFlashFulfillIntentArgs {
+    /// Route that will be committed to the buffer.
     pub route: Route,
+    /// Reward that will be committed to the buffer.
     pub reward: Reward,
 }
 
+/// Accounts for [`set_flash_fulfill_intent`].
 #[derive(Accounts)]
 pub struct SetFlashFulfillIntent<'info> {
+    /// Pays for the buffer account rent and is recorded as the writer.
     #[account(mut)]
     pub writer: Signer<'info>,
     /// CHECK: address + init handled in handler
@@ -22,6 +27,7 @@ pub struct SetFlashFulfillIntent<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Creates the `FlashFulfillIntentAccount` buffer at the PDA for the supplied `(route, reward)`.
 pub fn set_flash_fulfill_intent(
     ctx: Context<SetFlashFulfillIntent>,
     args: SetFlashFulfillIntentArgs,

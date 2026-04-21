@@ -5,6 +5,10 @@ use anchor_lang::InstructionData;
 use portal::instructions::WithdrawArgs;
 use portal::types::TokenTransferAccounts;
 
+/// CPIs `portal.withdraw` to transfer the reward to `claimant`.
+///
+/// Trailing remaining accounts after the reward triples include `payer` as a
+/// signer, which portal forwards into its `close_proof` CPI on the prover.
 #[allow(clippy::too_many_arguments)]
 pub fn withdraw_intent<'info>(
     portal_program: &AccountInfo<'info>,

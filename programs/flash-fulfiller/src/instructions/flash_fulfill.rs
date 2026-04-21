@@ -27,17 +27,24 @@ struct FlashFulfillAccounts<'a, 'info> {
     calls: &'a [AccountInfo<'info>],
 }
 
+/// How the intent is supplied to `flash_fulfill`: either inline or by hash,
+/// referencing a buffer previously written via `set_flash_fulfill_intent`.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub enum FlashFulfillIntent {
+    /// Read `(route, reward)` from the buffered `FlashFulfillIntentAccount` for this intent hash.
     IntentHash(Bytes32),
+    /// Inline `(route, reward)` pair; no buffer account is required.
     Intent { route: Route, reward: Reward },
 }
 
+/// Args for [`flash_fulfill`]: the intent to fulfill, inline or by hash.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FlashFulfillArgs {
+    /// Intent selector — see [`FlashFulfillIntent`].
     pub intent: FlashFulfillIntent,
 }
 
+/// Accounts for [`flash_fulfill`].
 #[event_cpi]
 #[derive(Accounts)]
 pub struct FlashFulfill<'info> {
@@ -83,6 +90,12 @@ pub struct FlashFulfill<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Executes the full prove → withdraw → fulfill → sweep sequence atomically.
+///
+/// Remaining accounts layout: reward 3-tuples (intent_vault_ata, flash_vault_ata, mint)
+/// × reward.tokens.len(), then route 3-tuples (flash_vault_ata, executor_ata, mint)
+/// × route.tokens.len(), then one claimant ATA per reward mint, then any accounts
+/// referenced by `route.calls`.
 pub fn flash_fulfill<'info>(
     ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,

@@ -3,7 +3,10 @@ use eco_svm_std::account::AccountExt;
 use eco_svm_std::Bytes32;
 use portal::types::{Reward, Route};
 
+/// Seed for the program's single `flash_vault` PDA.
 pub const FLASH_VAULT_SEED: &[u8] = b"flash_vault";
+
+/// Seed for per-intent `FlashFulfillIntentAccount` buffer PDAs.
 pub const FLASH_FULFILL_INTENT_SEED: &[u8] = b"flash_fulfill_intent";
 
 const MAX_REWARD_TOKENS: usize = 5;
@@ -25,14 +28,20 @@ const ROUTE_INIT_SPACE: usize = 32
 
 const REWARD_INIT_SPACE: usize = 8 + 32 + 32 + 8 + 4 + MAX_REWARD_TOKENS * TOKEN_AMOUNT_INIT_SPACE;
 
+/// Derives the program's `flash_vault` PDA (holds rewards during fulfillment).
 pub fn flash_vault_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[FLASH_VAULT_SEED], &crate::ID)
 }
 
+/// Stored `(route, reward)` pair that lets `flash_fulfill` be invoked by
+/// intent hash alone, avoiding re-sending the full payload.
 #[account]
 pub struct FlashFulfillIntentAccount {
+    /// Signer that wrote the buffer and paid the rent.
     pub writer: Pubkey,
+    /// Route committed by the buffered intent.
     pub route: Route,
+    /// Reward committed by the buffered intent.
     pub reward: Reward,
 }
 
@@ -47,6 +56,7 @@ impl Space for FlashFulfillIntentAccount {
 impl AccountExt for FlashFulfillIntentAccount {}
 
 impl FlashFulfillIntentAccount {
+    /// Derives the buffer PDA for a given intent hash.
     pub fn pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
         Pubkey::find_program_address(
             &[FLASH_FULFILL_INTENT_SEED, intent_hash.as_ref()],
