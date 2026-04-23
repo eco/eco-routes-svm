@@ -371,18 +371,22 @@ fn resolve_intent(
     match intent {
         FlashFulfillIntent::Intent { route, reward } => Ok((route, reward)),
         FlashFulfillIntent::IntentHash(intent_hash) => {
-            let intent = ctx
+            let buffer = ctx
                 .accounts
                 .flash_fulfill_intent
                 .as_ref()
                 .ok_or(FlashFulfillerError::InvalidFlashFulfillIntentAccount)?;
 
             require!(
-                intent.key() == FlashFulfillIntentAccount::pda(&intent_hash).0,
+                buffer.key() == FlashFulfillIntentAccount::pda(&intent_hash, &buffer.writer).0,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
+            require!(buffer.finalized, FlashFulfillerError::BufferNotFinalized);
 
-            Ok((intent.route.clone(), intent.reward.clone()))
+            let route = Route::try_from_slice(&buffer.route_bytes)
+                .map_err(|_| FlashFulfillerError::RouteDecodeFailed)?;
+
+            Ok((route, buffer.reward.clone()))
         }
     }
 }

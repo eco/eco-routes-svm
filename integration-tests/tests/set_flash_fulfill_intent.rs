@@ -1,4 +1,5 @@
 use anchor_lang::error::ErrorCode;
+use anchor_lang::AnchorSerialize;
 use eco_svm_std::CHAIN_ID;
 use flash_fulfiller::instructions::FlashFulfillerError;
 use flash_fulfiller::state::FlashFulfillIntentAccount;
@@ -16,8 +17,8 @@ fn set_flash_fulfill_intent_should_succeed() {
     route.calls.clear();
 
     let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value).0;
     let writer = ctx.payer.insecure_clone();
+    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value, &writer.pubkey()).0;
 
     let result = ctx.flash_fulfiller().set_flash_fulfill_intent(
         &writer,
@@ -29,8 +30,13 @@ fn set_flash_fulfill_intent_should_succeed() {
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
     assert_eq!(stored.writer, writer.pubkey());
-    assert_eq!(stored.route.hash(), route.hash());
+    assert_eq!(stored.route_hash, route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
+    assert_eq!(
+        stored.route_total_size as usize,
+        route.try_to_vec().unwrap().len()
+    );
+    assert!(stored.finalized);
 }
 
 #[test]
@@ -61,8 +67,8 @@ fn set_flash_fulfill_intent_already_exists_fail() {
     route.calls.clear();
 
     let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value).0;
     let writer = ctx.payer.insecure_clone();
+    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value, &writer.pubkey()).0;
 
     ctx.flash_fulfiller()
         .set_flash_fulfill_intent(&writer, buffer, route.clone(), reward.clone())

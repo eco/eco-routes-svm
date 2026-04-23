@@ -213,7 +213,7 @@ fn flash_fulfill_from_buffer_should_succeed() {
     let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
 
     let writer = ctx.payer.insecure_clone();
-    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value).0;
+    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value, &writer.pubkey()).0;
     ctx.flash_fulfiller()
         .set_flash_fulfill_intent(&writer, buffer, route.clone(), reward.clone())
         .unwrap();
