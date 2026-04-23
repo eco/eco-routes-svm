@@ -8,10 +8,6 @@ pub const FLASH_VAULT_SEED: &[u8] = b"flash_vault";
 /// Seed for per-intent `FlashFulfillIntentAccount` buffer PDAs.
 pub const FLASH_FULFILL_INTENT_SEED: &[u8] = b"flash_fulfill_intent";
 
-/// Seconds that must elapse after `created_at` before an un-finalized buffer
-/// becomes abandonable by any caller via `close_abandoned_flash_fulfill_intent`.
-pub const ABANDON_TTL_SECS: i64 = 3600;
-
 const MAX_REWARD_TOKENS: usize = 5;
 const MAX_ROUTE_TOKENS: usize = 5;
 const MAX_ROUTE_CALLS: usize = 10;
@@ -39,7 +35,6 @@ const HEADER_SPACE: usize = 32            // writer
     + 32                                  // route_hash
     + 4                                   // route_total_size
     + 4                                   // route_bytes_written
-    + 8                                   // created_at
     + 1; // finalized
 
 /// Derives the program's `flash_vault` PDA (holds rewards during fulfillment).
@@ -59,7 +54,8 @@ pub fn flash_vault_pda() -> (Pubkey, u8) {
 pub struct FlashFulfillIntentAccount {
     /// Signer that paid rent and is the only party allowed to append/cancel.
     pub writer: Pubkey,
-    /// Reward committed at init time.
+    /// Reward committed at init time. `reward.deadline` also gates
+    /// abandonment: once it passes, anyone may close the buffer.
     pub reward: Reward,
     /// Keccak256 of the route's Borsh encoding, committed at init.
     pub route_hash: Bytes32,
@@ -67,8 +63,6 @@ pub struct FlashFulfillIntentAccount {
     pub route_total_size: u32,
     /// Number of bytes written so far via `append_flash_fulfill_route_chunk`.
     pub route_bytes_written: u32,
-    /// Unix timestamp at init; used by `close_abandoned_flash_fulfill_intent`.
-    pub created_at: i64,
     /// True once keccak + Borsh decode validation have both passed.
     pub finalized: bool,
     /// Pre-allocated Borsh encoding of the committed Route, filled chunk-by-chunk.
@@ -138,7 +132,6 @@ mod tests {
             route_hash: [0u8; 32].into(),
             route_total_size: route_total_size as u32,
             route_bytes_written: route_total_size as u32,
-            created_at: 0,
             finalized: true,
             route_bytes: vec![0u8; route_total_size],
         };
@@ -160,7 +153,6 @@ mod tests {
             route_hash: [0u8; 32].into(),
             route_total_size: route_total_size as u32,
             route_bytes_written: 0,
-            created_at: 0,
             finalized: false,
             route_bytes: vec![0u8; route_total_size],
         };

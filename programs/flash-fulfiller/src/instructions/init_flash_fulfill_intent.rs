@@ -148,7 +148,6 @@ pub(crate) fn do_init<'info>(
         route_hash,
         route_total_size,
         route_bytes_written: 0,
-        created_at: Clock::get()?.unix_timestamp,
         finalized: false,
         route_bytes: vec![0u8; size],
     })

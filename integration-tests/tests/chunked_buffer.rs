@@ -9,7 +9,7 @@ use eco_svm_std::{Bytes32, CHAIN_ID};
 use flash_fulfiller::instructions::{
     AppendFlashFulfillRouteChunkArgs, FlashFulfillerError, InitFlashFulfillIntentArgs,
 };
-use flash_fulfiller::state::{FlashFulfillIntentAccount, ABANDON_TTL_SECS};
+use flash_fulfiller::state::FlashFulfillIntentAccount;
 use portal::types::intent_hash;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
@@ -180,6 +180,8 @@ fn init_pda_binds_to_writer() {
 
 // ---------- append_flash_fulfill_route_chunk ----------
 
+/// Shared helper for the append-path tests. Returns:
+/// (intent_hash, buffer PDA, Borsh-encoded route bytes, route, reward).
 fn init_buffer_for_appends(
     ctx: &mut common::Context,
     writer: &Keypair,
@@ -468,15 +470,15 @@ fn close_abandoned_before_ttl_fail() {
 fn close_abandoned_after_ttl_refunds_writer() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, _, _, _) = init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, _, _, reward) = init_buffer_for_appends(&mut ctx, &writer);
 
     let caller = Keypair::new();
     ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
         .unwrap();
 
-    // Warp past the abandonment TTL.
-    let now_ts = ctx.now() as i64;
-    ctx.warp_to_timestamp(now_ts + ABANDON_TTL_SECS + 1);
+    // Warp past the intent's reward deadline — the buffer is abandoned
+    // once the intent itself is dead.
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let writer_before = ctx.balance(&writer.pubkey());
     let rent = ctx.balance(&buffer);
@@ -494,14 +496,13 @@ fn close_abandoned_after_ttl_refunds_writer() {
 fn close_abandoned_wrong_writer_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, _, _, _) = init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, _, _, reward) = init_buffer_for_appends(&mut ctx, &writer);
 
     let caller = Keypair::new();
     ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
         .unwrap();
 
-    let now_ts = ctx.now() as i64;
-    ctx.warp_to_timestamp(now_ts + ABANDON_TTL_SECS + 1);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     // Wrong writer pubkey: seed derivation uses the supplied writer, so the
     // resulting PDA does not match the legitimate buffer's address.
@@ -519,7 +520,8 @@ fn close_abandoned_wrong_writer_fail() {
 fn close_abandoned_on_finalized_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, reward) =
+        init_buffer_for_appends(&mut ctx, &writer);
 
     ctx.flash_fulfiller()
         .append_flash_fulfill_route_chunk(
@@ -537,8 +539,7 @@ fn close_abandoned_on_finalized_fail() {
     ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
         .unwrap();
 
-    let now_ts = ctx.now() as i64;
-    ctx.warp_to_timestamp(now_ts + ABANDON_TTL_SECS + 1);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.flash_fulfiller().close_abandoned_flash_fulfill_intent(
         &caller,
