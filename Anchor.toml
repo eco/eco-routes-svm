@@ -7,21 +7,21 @@ skip-lint = false
 
 [programs.localnet]
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
-flash-fulfiller = "2d8yK5bxGuoZssTgEa4Lj9Z5AyhmVySVDQ1JadaTLeaK"
+flash-fulfiller = "EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT"
 hyper-prover = "EcooFDTfKVVo5qZcpNoDngMmVXqrG6FQT1D5LDjZEGeR"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo"
 proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [programs.devnet]
-flash-fulfiller = "2d8yK5bxGuoZssTgEa4Lj9Z5AyhmVySVDQ1JadaTLeaK"
+flash-fulfiller = "EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT"
 hyper-prover = "EcooFDTfKVVo5qZcpNoDngMmVXqrG6FQT1D5LDjZEGeR"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo"
 proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [programs.mainnet]
-flash-fulfiller = "2d8yK5bxGuoZssTgEa4Lj9Z5AyhmVySVDQ1JadaTLeaK"
+flash-fulfiller = "EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT"
 hyper-prover = "EcooFDTfKVVo5qZcpNoDngMmVXqrG6FQT1D5LDjZEGeR"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo"

@@ -9,7 +9,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("2d8yK5bxGuoZssTgEa4Lj9Z5AyhmVySVDQ1JadaTLeaK");
+declare_id!("EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT");
 
 pub mod cpi;
 pub mod events;
