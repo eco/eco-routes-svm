@@ -146,7 +146,8 @@ fn init_pda_binds_to_writer() {
         FlashFulfillIntentAccount::pda(&intent_hash_value, &legitimate_writer.pubkey()).0;
 
     let attacker = Keypair::new();
-    ctx.airdrop(&attacker.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&attacker.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     // Attacker tries to init at legitimate writer's PDA — fails PDA check.
     let result = ctx.flash_fulfiller().init_flash_fulfill_intent(
@@ -182,7 +183,13 @@ fn init_pda_binds_to_writer() {
 fn init_buffer_for_appends(
     ctx: &mut common::Context,
     writer: &Keypair,
-) -> (Bytes32, Pubkey, Vec<u8>, portal::types::Route, portal::types::Reward) {
+) -> (
+    Bytes32,
+    Pubkey,
+    Vec<u8>,
+    portal::types::Route,
+    portal::types::Reward,
+) {
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
     route.calls.clear();
@@ -212,8 +219,7 @@ fn init_buffer_for_appends(
 fn append_multi_chunk_happy_path_finalizes() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     // Split into two chunks.
     let split = route_bytes.len() / 2;
@@ -249,18 +255,21 @@ fn append_multi_chunk_happy_path_finalizes() {
 
     let after_final = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
     assert!(after_final.finalized);
-    assert_eq!(after_final.route_bytes_written, after_final.route_total_size);
+    assert_eq!(
+        after_final.route_bytes_written,
+        after_final.route_total_size
+    );
 }
 
 #[test]
 fn append_non_writer_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     let attacker = Keypair::new();
-    ctx.airdrop(&attacker.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&attacker.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     // Wrong signer — seed derivation uses writer.key() so the PDA for the
     // attacker does not match the legitimate buffer's address.
@@ -298,8 +307,7 @@ fn append_wrong_offset_fail() {
 fn append_overflow_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     // Try to append a chunk that overflows the declared total size.
     let oversized = vec![0u8; route_bytes.len() + 1];
@@ -319,8 +327,7 @@ fn append_overflow_fail() {
 fn append_hash_mismatch_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     // Fill with zeros of the correct length — keccak won't match route_hash.
     let garbage = vec![0u8; route_bytes.len()];
@@ -345,8 +352,7 @@ fn append_hash_mismatch_fail() {
 fn append_after_finalize_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     ctx.flash_fulfiller()
         .append_flash_fulfill_route_chunk(
@@ -402,7 +408,8 @@ fn cancel_by_non_writer_fail() {
     let (intent_hash_value, buffer, _, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     let attacker = Keypair::new();
-    ctx.airdrop(&attacker.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&attacker.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     let result =
         ctx.flash_fulfiller()
@@ -414,8 +421,7 @@ fn cancel_by_non_writer_fail() {
 fn cancel_after_finalize_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     ctx.flash_fulfiller()
         .append_flash_fulfill_route_chunk(
@@ -446,7 +452,8 @@ fn close_abandoned_before_ttl_fail() {
     let (intent_hash_value, buffer, _, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     let caller = Keypair::new();
-    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     let result = ctx.flash_fulfiller().close_abandoned_flash_fulfill_intent(
         &caller,
@@ -464,7 +471,8 @@ fn close_abandoned_after_ttl_refunds_writer() {
     let (intent_hash_value, buffer, _, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     let caller = Keypair::new();
-    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     // Warp past the abandonment TTL.
     let now_ts = ctx.now() as i64;
@@ -474,12 +482,7 @@ fn close_abandoned_after_ttl_refunds_writer() {
     let rent = ctx.balance(&buffer);
 
     ctx.flash_fulfiller()
-        .close_abandoned_flash_fulfill_intent(
-            &caller,
-            writer.pubkey(),
-            buffer,
-            intent_hash_value,
-        )
+        .close_abandoned_flash_fulfill_intent(&caller, writer.pubkey(), buffer, intent_hash_value)
         .unwrap();
 
     assert!(ctx.account::<FlashFulfillIntentAccount>(&buffer).is_none());
@@ -494,7 +497,8 @@ fn close_abandoned_wrong_writer_fail() {
     let (intent_hash_value, buffer, _, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     let caller = Keypair::new();
-    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     let now_ts = ctx.now() as i64;
     ctx.warp_to_timestamp(now_ts + ABANDON_TTL_SECS + 1);
@@ -515,8 +519,7 @@ fn close_abandoned_wrong_writer_fail() {
 fn close_abandoned_on_finalized_fail() {
     let mut ctx = common::Context::default();
     let writer = ctx.payer.insecure_clone();
-    let (intent_hash_value, buffer, route_bytes, _, _) =
-        init_buffer_for_appends(&mut ctx, &writer);
+    let (intent_hash_value, buffer, route_bytes, _, _) = init_buffer_for_appends(&mut ctx, &writer);
 
     ctx.flash_fulfiller()
         .append_flash_fulfill_route_chunk(
@@ -531,7 +534,8 @@ fn close_abandoned_on_finalized_fail() {
         .unwrap();
 
     let caller = Keypair::new();
-    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0)).unwrap();
+    ctx.airdrop(&caller.pubkey(), common::sol_amount(1.0))
+        .unwrap();
 
     let now_ts = ctx.now() as i64;
     ctx.warp_to_timestamp(now_ts + ABANDON_TTL_SECS + 1);
@@ -546,4 +550,3 @@ fn close_abandoned_on_finalized_fail() {
         FlashFulfillerError::BufferAlreadyFinalized
     )));
 }
-

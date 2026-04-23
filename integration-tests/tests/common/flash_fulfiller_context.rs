@@ -145,8 +145,7 @@ impl FlashFulfiller<'_> {
         intent_hash: Bytes32,
     ) -> TransactionResult {
         let args = CloseAbandonedFlashFulfillIntentArgs { intent_hash };
-        let instruction =
-            flash_fulfiller::instruction::CloseAbandonedFlashFulfillIntent { args };
+        let instruction = flash_fulfiller::instruction::CloseAbandonedFlashFulfillIntent { args };
         let accounts = flash_fulfiller::accounts::CloseAbandonedFlashFulfillIntent {
             caller: caller.pubkey(),
             writer,

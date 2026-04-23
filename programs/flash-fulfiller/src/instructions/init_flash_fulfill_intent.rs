@@ -5,9 +5,7 @@ use eco_svm_std::{Bytes32, CHAIN_ID};
 use portal::types::{intent_hash, Reward};
 
 use crate::instructions::FlashFulfillerError;
-use crate::state::{
-    FlashFulfillIntentAccount, FLASH_FULFILL_INTENT_SEED, MAX_ROUTE_INIT_SPACE,
-};
+use crate::state::{FlashFulfillIntentAccount, FLASH_FULFILL_INTENT_SEED, MAX_ROUTE_INIT_SPACE};
 
 /// Args for [`init_flash_fulfill_intent`]: commits an intent preimage and sizes the buffer.
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -79,8 +77,7 @@ pub(crate) fn do_init<'info>(
     );
 
     let writer_key = writer.key();
-    let (expected_pda, bump) =
-        FlashFulfillIntentAccount::pda(&committed_intent_hash, &writer_key);
+    let (expected_pda, bump) = FlashFulfillIntentAccount::pda(&committed_intent_hash, &writer_key);
     require!(
         buffer.key() == expected_pda,
         FlashFulfillerError::InvalidFlashFulfillIntentAccount
