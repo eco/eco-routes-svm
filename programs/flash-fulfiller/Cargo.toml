@@ -1,0 +1,33 @@
+[package]
+name = "flash-fulfiller"
+version = "0.1.0"
+description = "Flash-fulfillment orchestrator: withdraw reward + fulfill intent + pay claimant atomically."
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "flash_fulfiller"
+
+[features]
+# `custom-heap` opts out of solana-program's default 32 KB `BumpAllocator`
+# (which is hardcoded regardless of the tx's `RequestHeapFrame`). With it
+# enabled, we install our own 256 KB allocator in `lib.rs`. See
+# https://github.com/solana-labs/solana/issues/32607 for the gotcha.
+custom-heap = []
+mainnet = ["eco-svm-std/mainnet", "custom-heap"]
+default = ["custom-heap"]
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+anchor-spl = { workspace = true }
+eco-svm-std = { workspace = true }
+portal = { workspace = true, features = ["no-entrypoint"] }
+spl-pod = "0.5.1"
+
+[dev-dependencies]
+goldie = { workspace = true }

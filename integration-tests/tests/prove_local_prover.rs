@@ -164,15 +164,15 @@ fn prove_intent_invalid_source_fail() {
 }
 
 #[test]
-fn prove_invalid_portal_dispatcher_fail() {
+fn prove_invalid_caller_fail() {
     let mut ctx = common::Context::default();
-    let invalid_dispatcher = ctx.payer.insecure_clone();
+    let invalid_caller = ctx.payer.insecure_clone();
     let intent_hash = [1u8; 32].into();
     let source = CHAIN_ID;
     let claimant = [2u8; 32].into();
 
     let result = ctx.local_prover().prove(
-        &invalid_dispatcher,
+        &invalid_caller,
         source,
         prover::ProofData::new(
             source,
@@ -181,7 +181,7 @@ fn prove_invalid_portal_dispatcher_fail() {
         vec![],
         vec![],
     );
-    assert!(result.is_err_and(common::is_error(LocalProverError::InvalidPortalDispatcher)));
+    assert!(result.is_err_and(common::is_error(LocalProverError::InvalidCaller)));
 }
 
 #[test]
