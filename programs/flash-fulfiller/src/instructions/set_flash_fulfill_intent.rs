@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::account::AccountExt;
 use eco_svm_std::CHAIN_ID;
 use portal::types::{intent_hash, Reward, Route};
 
-use crate::instructions::FlashFulfillerError;
-use crate::state::{FlashFulfillIntentAccount, FLASH_FULFILL_INTENT_SEED};
+use crate::instructions::append_flash_fulfill_route_chunk::write_buffer_chunk;
+use crate::instructions::init_flash_fulfill_intent::{do_init, serialize_buffer};
+use crate::instructions::{FlashFulfillerError, InitFlashFulfillIntentArgs};
 
 /// Args for [`set_flash_fulfill_intent`]: the `(route, reward)` pair to buffer under the intent-hash PDA.
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -27,31 +27,38 @@ pub struct SetFlashFulfillIntent<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Creates the `FlashFulfillIntentAccount` buffer at the PDA for the supplied `(route, reward)`.
+/// Single-tx convenience that fuses init + a full-payload append for Routes
+/// small enough to fit in one tx. Large routes must use explicit
+/// `init_flash_fulfill_intent` + `append_flash_fulfill_route_chunk`.
+///
+/// Composes the shared `do_init` and `write_buffer_chunk` helpers so init
+/// and append share identical validation with the multi-tx flow.
 pub fn set_flash_fulfill_intent(
     ctx: Context<SetFlashFulfillIntent>,
     args: SetFlashFulfillIntentArgs,
 ) -> Result<()> {
     let SetFlashFulfillIntentArgs { route, reward } = args;
-    let intent_hash = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-    let (expected_pda, bump) = FlashFulfillIntentAccount::pda(&intent_hash);
+    let route_bytes = route.try_to_vec().expect("Failed to serialize Route");
+    let route_total_size: u32 = route_bytes
+        .len()
+        .try_into()
+        .map_err(|_| FlashFulfillerError::InvalidRouteTotalSize)?;
+    let route_hash = route.hash();
+    let committed_intent_hash = intent_hash(CHAIN_ID, &route_hash, &reward.hash());
 
-    require!(
-        ctx.accounts.flash_fulfill_intent.key() == expected_pda,
-        FlashFulfillerError::InvalidFlashFulfillIntentAccount
-    );
-
-    let signer_seeds = [FLASH_FULFILL_INTENT_SEED, intent_hash.as_ref(), &[bump]];
-
-    FlashFulfillIntentAccount {
-        writer: ctx.accounts.writer.key(),
-        route,
-        reward,
-    }
-    .init(
+    let mut account = do_init(
+        &ctx.accounts.writer.to_account_info(),
         &ctx.accounts.flash_fulfill_intent,
-        &ctx.accounts.writer,
         &ctx.accounts.system_program,
-        &[&signer_seeds],
-    )
+        InitFlashFulfillIntentArgs {
+            intent_hash: committed_intent_hash,
+            route_hash,
+            reward,
+            route_total_size,
+        },
+    )?;
+
+    write_buffer_chunk(&mut account, 0, &route_bytes)?;
+
+    serialize_buffer(&ctx.accounts.flash_fulfill_intent, &account)
 }

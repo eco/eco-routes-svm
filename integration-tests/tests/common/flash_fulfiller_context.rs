@@ -1,11 +1,13 @@
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{InstructionData, ToAccountMetas};
+use anchor_lang::{AnchorSerialize, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::Proof;
-use eco_svm_std::{event_authority_pda, CHAIN_ID};
+use eco_svm_std::{event_authority_pda, Bytes32, CHAIN_ID};
 use flash_fulfiller::instructions::{
-    FlashFulfillArgs, FlashFulfillIntent, SetFlashFulfillIntentArgs,
+    AppendFlashFulfillRouteChunkArgs, CancelFlashFulfillIntentArgs,
+    CloseAbandonedFlashFulfillIntentArgs, FlashFulfillArgs, FlashFulfillIntent,
+    InitFlashFulfillIntentArgs, SetFlashFulfillIntentArgs,
 };
 use flash_fulfiller::state::{flash_vault_pda, FlashFulfillIntentAccount};
 use portal::state::{executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker};
@@ -19,6 +21,12 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
 use crate::common::{Context, TransactionResult};
+
+/// Matches the `len` on flash-fulfiller's custom `#[global_allocator]` (see
+/// `programs/flash-fulfiller/src/lib.rs`). The allocator bumps *down* from
+/// `start + len`, so every tx invoking flash-fulfiller must request this
+/// heap frame or the very first allocation writes past the VM's heap region.
+const FLASH_FULFILLER_HEAP_BYTES: u32 = 256 * 1024;
 
 #[derive(Deref, DerefMut)]
 pub struct FlashFulfiller<'a>(&'a mut Context);
@@ -49,13 +57,162 @@ impl FlashFulfiller<'_> {
             accounts: accounts.to_account_metas(None),
             data: instruction.data(),
         };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
         let transaction = Transaction::new(
             &[&self.payer, writer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );
 
         self.send_transaction(transaction)
+    }
+
+    pub fn init_flash_fulfill_intent(
+        &mut self,
+        writer: &Keypair,
+        flash_fulfill_intent: Pubkey,
+        args: InitFlashFulfillIntentArgs,
+    ) -> TransactionResult {
+        let instruction = flash_fulfiller::instruction::InitFlashFulfillIntent { args };
+        let accounts = flash_fulfiller::accounts::InitFlashFulfillIntent {
+            writer: writer.pubkey(),
+            flash_fulfill_intent,
+            system_program: anchor_lang::system_program::ID,
+        };
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
+        let transaction = Transaction::new(
+            &[&self.payer, writer],
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn append_flash_fulfill_route_chunk(
+        &mut self,
+        writer: &Keypair,
+        flash_fulfill_intent: Pubkey,
+        args: AppendFlashFulfillRouteChunkArgs,
+    ) -> TransactionResult {
+        let instruction = flash_fulfiller::instruction::AppendFlashFulfillRouteChunk { args };
+        let accounts = flash_fulfiller::accounts::AppendFlashFulfillRouteChunk {
+            writer: writer.pubkey(),
+            flash_fulfill_intent,
+        };
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
+        let transaction = Transaction::new(
+            &[&self.payer, writer],
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn cancel_flash_fulfill_intent(
+        &mut self,
+        writer: &Keypair,
+        flash_fulfill_intent: Pubkey,
+        intent_hash: Bytes32,
+    ) -> TransactionResult {
+        let args = CancelFlashFulfillIntentArgs { intent_hash };
+        let instruction = flash_fulfiller::instruction::CancelFlashFulfillIntent { args };
+        let accounts = flash_fulfiller::accounts::CancelFlashFulfillIntent {
+            writer: writer.pubkey(),
+            flash_fulfill_intent,
+        };
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
+        let transaction = Transaction::new(
+            &[&self.payer, writer],
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn close_abandoned_flash_fulfill_intent(
+        &mut self,
+        caller: &Keypair,
+        writer: Pubkey,
+        flash_fulfill_intent: Pubkey,
+        intent_hash: Bytes32,
+    ) -> TransactionResult {
+        let args = CloseAbandonedFlashFulfillIntentArgs { intent_hash };
+        let instruction = flash_fulfiller::instruction::CloseAbandonedFlashFulfillIntent { args };
+        let accounts = flash_fulfiller::accounts::CloseAbandonedFlashFulfillIntent {
+            caller: caller.pubkey(),
+            writer,
+            flash_fulfill_intent,
+        };
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+        // Caller pays the tx fee so writer↔caller rent accounting in tests is clean.
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
+        let transaction = Transaction::new(
+            &[caller],
+            Message::new(&[heap_frame, instruction], Some(&caller.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    /// Runs init + one full-payload append across two separate transactions,
+    /// exercising the chunked-buffer flow without needing multi-chunk setup.
+    pub fn init_and_append_full(
+        &mut self,
+        writer: &Keypair,
+        route: &Route,
+        reward: &Reward,
+    ) -> TransactionResult {
+        let route_hash = route.hash();
+        let reward_hash = reward.hash();
+        let intent_hash_value = intent_hash(CHAIN_ID, &route_hash, &reward_hash);
+        let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value, &writer.pubkey()).0;
+
+        let route_bytes = route.try_to_vec().unwrap();
+        let route_total_size = route_bytes.len() as u32;
+
+        self.init_flash_fulfill_intent(
+            writer,
+            buffer,
+            InitFlashFulfillIntentArgs {
+                intent_hash: intent_hash_value,
+                route_hash,
+                reward: reward.clone(),
+                route_total_size,
+            },
+        )?;
+
+        self.append_flash_fulfill_route_chunk(
+            writer,
+            buffer,
+            AppendFlashFulfillRouteChunkArgs {
+                intent_hash: intent_hash_value,
+                offset: 0,
+                chunk: route_bytes,
+            },
+        )
     }
 
     pub fn flash_fulfill(
@@ -148,9 +305,11 @@ impl FlashFulfiller<'_> {
         call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+        // Buffer PDA is derived using the fee payer as the writer. Existing
+        // callers always use `ctx.payer` as the writer for IntentHash tests.
         let flash_fulfill_intent = match &intent {
             FlashFulfillIntent::IntentHash(_) => {
-                Some(FlashFulfillIntentAccount::pda(&intent_hash_value).0)
+                Some(FlashFulfillIntentAccount::pda(&intent_hash_value, &self.payer.pubkey()).0)
             }
             FlashFulfillIntent::Intent { .. } => None,
         };
@@ -195,9 +354,13 @@ impl FlashFulfiller<'_> {
             data: instruction_data.data(),
         };
         let compute_budget = ComputeBudgetInstruction::set_compute_unit_limit(1_000_000);
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
         let transaction = Transaction::new(
             &[&self.payer],
-            Message::new(&[compute_budget, instruction], Some(&self.payer.pubkey())),
+            Message::new(
+                &[compute_budget, heap_frame, instruction],
+                Some(&self.payer.pubkey()),
+            ),
             self.latest_blockhash(),
         );
 

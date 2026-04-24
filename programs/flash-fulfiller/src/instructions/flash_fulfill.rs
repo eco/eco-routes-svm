@@ -10,7 +10,7 @@ use eco_svm_std::prover::{self, IntentHashClaimant, ProofData, ProveArgs};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use portal::instructions::{FulfillArgs, WithdrawArgs};
 use portal::types::{
-    self, CalldataWithAccounts, Reward, Route, TokenTransferAccounts, VecTokenTransferAccounts,
+    self, Reward, Route, TokenTransferAccounts, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
 use spl_pod::option::Nullable;
@@ -281,15 +281,31 @@ fn init_flash_vault_reward_ata<'info>(
     ))
 }
 
+/// Strip the trailing `accounts: Vec<SerializableAccountMeta>` from each
+/// call's Borsh-encoded `CalldataWithAccounts`, leaving only the `Calldata`
+/// prefix in place. The on-wire layout is
+/// `[data.len u32][data bytes][account_count u8][accounts.len u32][accounts]`
+/// so stripping is a bounds-checked `truncate(4 + data_len + 1)` — no
+/// deserialize/reserialize, no intermediate `Vec` allocations.
+///
+/// This matters for heap pressure: in `flash_fulfill`, decoding then
+/// reserializing every call permanently retains ~3× the call size in the
+/// Solana bump allocator (which never frees), pushing deep CPI chains into OOM.
 fn strip_call_accounts(mut route: Route) -> Result<Route> {
-    route.calls.iter_mut().try_for_each(|call| -> Result<()> {
-        call.data = CalldataWithAccounts::try_from_slice(&call.data)?
-            .calldata
-            .try_to_vec()?;
-
-        Ok(())
-    })?;
-
+    for call in route.calls.iter_mut() {
+        require!(call.data.len() >= 5, FlashFulfillerError::InvalidCallData);
+        let data_len =
+            u32::from_le_bytes([call.data[0], call.data[1], call.data[2], call.data[3]]) as usize;
+        let prefix_len = 4usize
+            .checked_add(data_len)
+            .and_then(|n| n.checked_add(1))
+            .ok_or(FlashFulfillerError::InvalidCallData)?;
+        require!(
+            prefix_len <= call.data.len(),
+            FlashFulfillerError::InvalidCallData
+        );
+        call.data.truncate(prefix_len);
+    }
     Ok(route)
 }
 
@@ -371,18 +387,22 @@ fn resolve_intent(
     match intent {
         FlashFulfillIntent::Intent { route, reward } => Ok((route, reward)),
         FlashFulfillIntent::IntentHash(intent_hash) => {
-            let intent = ctx
+            let buffer = ctx
                 .accounts
                 .flash_fulfill_intent
                 .as_ref()
                 .ok_or(FlashFulfillerError::InvalidFlashFulfillIntentAccount)?;
 
             require!(
-                intent.key() == FlashFulfillIntentAccount::pda(&intent_hash).0,
+                buffer.key() == FlashFulfillIntentAccount::pda(&intent_hash, &buffer.writer).0,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
+            require!(buffer.finalized, FlashFulfillerError::BufferNotFinalized);
 
-            Ok((intent.route.clone(), intent.reward.clone()))
+            let route = Route::try_from_slice(&buffer.route_bytes)
+                .map_err(|_| FlashFulfillerError::RouteDecodeFailed)?;
+
+            Ok((route, buffer.reward.clone()))
         }
     }
 }
