@@ -38,7 +38,10 @@ pub fn fulfill_intent<'info>(
     accounts.push(AccountMeta::new(fulfill_marker.key(), false));
     accounts.push(AccountMeta::new_readonly(token_program.key(), false));
     accounts.push(AccountMeta::new_readonly(token_2022_program.key(), false));
-    accounts.push(AccountMeta::new_readonly(associated_token_program.key(), false));
+    accounts.push(AccountMeta::new_readonly(
+        associated_token_program.key(),
+        false,
+    ));
     accounts.push(AccountMeta::new_readonly(system_program.key(), false));
     for transfer in route_transfers.iter() {
         accounts.push(AccountMeta::new(transfer.from.key(), false));

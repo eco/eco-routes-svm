@@ -293,16 +293,9 @@ fn init_flash_vault_reward_ata<'info>(
 /// Solana bump allocator (which never frees), pushing deep CPI chains into OOM.
 fn strip_call_accounts(mut route: Route) -> Result<Route> {
     for call in route.calls.iter_mut() {
-        require!(
-            call.data.len() >= 5,
-            FlashFulfillerError::InvalidCallData
-        );
-        let data_len = u32::from_le_bytes([
-            call.data[0],
-            call.data[1],
-            call.data[2],
-            call.data[3],
-        ]) as usize;
+        require!(call.data.len() >= 5, FlashFulfillerError::InvalidCallData);
+        let data_len =
+            u32::from_le_bytes([call.data[0], call.data[1], call.data[2], call.data[3]]) as usize;
         let prefix_len = 4usize
             .checked_add(data_len)
             .and_then(|n| n.checked_add(1))

@@ -19,9 +19,16 @@ declare_id!("EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT");
 // on `custom-heap` to match the `#[cfg(not(feature = "custom-heap"))]`
 // check in solana-program's `custom_heap_default!` macro — with the
 // feature on, solana-program skips installing its default allocator and
-// we win by being the only `#[global_allocator]` in the binary.
+// we win by being the only `#[global_allocator]` in the binary. Also
+// gated on `not(feature = "no-entrypoint")` so that when another program
+// (e.g. local-prover) depends on us for CPI types, our allocator doesn't
+// bleed into their binary and conflict with theirs.
 // https://github.com/solana-labs/solana/issues/32607
-#[cfg(all(feature = "custom-heap", target_os = "solana"))]
+#[cfg(all(
+    feature = "custom-heap",
+    target_os = "solana",
+    not(feature = "no-entrypoint"),
+))]
 #[global_allocator]
 static ALLOCATOR: anchor_lang::solana_program::entrypoint::BumpAllocator =
     anchor_lang::solana_program::entrypoint::BumpAllocator {

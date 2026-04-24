@@ -321,12 +321,7 @@ fn fund_intent_vault(ctx: &mut common::Context, route: &Route, reward: &Reward) 
         .unwrap();
 }
 
-fn pre_create_atas(
-    ctx: &mut common::Context,
-    reward: &Reward,
-    route: &Route,
-    claimant: Pubkey,
-) {
+fn pre_create_atas(ctx: &mut common::Context, reward: &Reward, route: &Route, claimant: Pubkey) {
     let flash_vault = flash_vault_pda().0;
     let executor = executor_pda().0;
 
