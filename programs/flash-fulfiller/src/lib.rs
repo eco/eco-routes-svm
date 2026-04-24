@@ -11,6 +11,24 @@ use anchor_lang::prelude::*;
 
 declare_id!("EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT");
 
+// Install a 256 KB bump allocator so flash_fulfill can actually use the
+// heap space requested by `ComputeBudgetInstruction::request_heap_frame`
+// on the client tx. solana-program's default `BumpAllocator` has `len`
+// hardcoded to 32 KB regardless of the VM's actual heap region size, so
+// complex CPI chains like ours OOM well before the real ceiling. Gated
+// on `custom-heap` to match the `#[cfg(not(feature = "custom-heap"))]`
+// check in solana-program's `custom_heap_default!` macro — with the
+// feature on, solana-program skips installing its default allocator and
+// we win by being the only `#[global_allocator]` in the binary.
+// https://github.com/solana-labs/solana/issues/32607
+#[cfg(all(feature = "custom-heap", target_os = "solana"))]
+#[global_allocator]
+static ALLOCATOR: anchor_lang::solana_program::entrypoint::BumpAllocator =
+    anchor_lang::solana_program::entrypoint::BumpAllocator {
+        start: anchor_lang::solana_program::entrypoint::HEAP_START_ADDRESS as usize,
+        len: 256 * 1024,
+    };
+
 pub mod cpi;
 pub mod events;
 pub mod instructions;
