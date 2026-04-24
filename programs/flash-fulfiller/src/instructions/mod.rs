@@ -45,4 +45,8 @@ pub enum FlashFulfillerError {
     RouteDecodeFailed,
     /// Buffer has not exceeded its abandonment TTL yet.
     NotAbandonedYet,
+    /// A route call's `data` field is not a well-formed Borsh-encoded
+    /// `CalldataWithAccounts`: too short, or declares a `Calldata` length that
+    /// exceeds the buffer. Returned by the zero-copy strip in `flash_fulfill`.
+    InvalidCallData,
 }
