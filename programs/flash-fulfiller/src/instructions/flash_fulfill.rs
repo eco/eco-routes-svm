@@ -53,9 +53,16 @@ pub struct FlashFulfill<'info> {
     /// CHECK: address is validated
     #[account(mut, address = flash_vault_pda().0 @ FlashFulfillerError::InvalidFlashVault)]
     pub flash_vault: UncheckedAccount<'info>,
-    /// CHECK: only read for the IntentHash variant; address validated in handler
-    #[account(mut)]
+    /// CHECK: only read for the IntentHash variant; address validated in handler.
+    /// Constrained via `has_one = writer` so its rent is refunded to the
+    /// original writer, not the caller of `flash_fulfill`. `close = writer`
+    /// closes the buffer at end of ix when the caller provides it.
+    #[account(mut, has_one = writer, close = writer)]
     pub flash_fulfill_intent: Option<Account<'info, FlashFulfillIntentAccount>>,
+    /// CHECK: matched against `flash_fulfill_intent.writer` via `has_one`; only
+    /// used when the buffer is consumed and closed.
+    #[account(mut)]
+    pub writer: UncheckedAccount<'info>,
     /// CHECK: caller-supplied recipient of leftovers
     #[account(mut)]
     pub claimant: UncheckedAccount<'info>,
@@ -102,7 +109,7 @@ pub struct FlashFulfill<'info> {
 ///
 /// When invoked via `FlashFulfillIntent::IntentHash`, the consumed
 /// `FlashFulfillIntentAccount` buffer is closed at the end and its rent
-/// refunded to `payer`.
+/// refunded to `writer` (the original buffer creator).
 pub fn flash_fulfill<'info>(
     ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,
@@ -114,7 +121,6 @@ pub fn flash_fulfill<'info>(
         FlashFulfillerError::InvalidClaimant
     );
 
-    let close_flash_fulfill_intent = matches!(intent, FlashFulfillIntent::IntentHash(_));
     let (route, reward) = resolve_intent(&ctx, intent)?;
     let route_hash = route.hash();
     let reward_hash = reward.hash();
@@ -196,12 +202,6 @@ pub fn flash_fulfill<'info>(
 
     sweep_leftover_tokens(&ctx, &claimant_transfers, flash_vault_seeds)?;
     let native_fee = sweep_leftover_native(&ctx, flash_vault_seeds)?;
-
-    if close_flash_fulfill_intent {
-        ctx.accounts
-            .flash_fulfill_intent
-            .close(ctx.accounts.payer.to_account_info())?;
-    }
 
     emit_cpi!(FlashFulfilled {
         intent_hash,
@@ -377,8 +377,16 @@ fn resolve_intent(
                 .as_ref()
                 .ok_or(FlashFulfillerError::InvalidFlashFulfillIntentAccount)?;
 
+            // Security boundary, not a sanity check. The buffer's `writer` field
+            // is caller-supplied via raw `append`, so it can disagree with the
+            // signer that actually created the PDA. `has_one = writer` only
+            // proves the close target matches the stored field — a buffer with
+            // `writer = Bob` would let Bob claim the rent. Re-deriving the PDA
+            // from the stored writer and comparing to the actual key catches
+            // that mismatch: a fake writer field maps to a different PDA than
+            // the one the buffer actually lives at, so consume rejects.
             require!(
-                intent.key() == FlashFulfillIntentAccount::pda(&intent_hash).0,
+                intent.key() == FlashFulfillIntentAccount::pda(&intent.writer, &intent_hash).0,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
 

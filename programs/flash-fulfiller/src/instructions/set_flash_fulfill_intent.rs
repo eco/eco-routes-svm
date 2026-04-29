@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::account::AccountExt;
-use eco_svm_std::CHAIN_ID;
+use eco_svm_std::{account, CHAIN_ID};
 use portal::types::{intent_hash, Reward, Route};
 
 use crate::instructions::FlashFulfillerError;
@@ -33,25 +32,37 @@ pub fn set_flash_fulfill_intent(
     args: SetFlashFulfillIntentArgs,
 ) -> Result<()> {
     let SetFlashFulfillIntentArgs { route, reward } = args;
+    let writer = ctx.accounts.writer.key();
     let intent_hash = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-    let (expected_pda, bump) = FlashFulfillIntentAccount::pda(&intent_hash);
+    let (expected_pda, bump) = FlashFulfillIntentAccount::pda(&writer, &intent_hash);
 
     require!(
         ctx.accounts.flash_fulfill_intent.key() == expected_pda,
         FlashFulfillerError::InvalidFlashFulfillIntentAccount
     );
 
-    let signer_seeds = [FLASH_FULFILL_INTENT_SEED, intent_hash.as_ref(), &[bump]];
+    let signer_seeds = [
+        FLASH_FULFILL_INTENT_SEED,
+        writer.as_ref(),
+        intent_hash.as_ref(),
+        &[bump],
+    ];
 
-    FlashFulfillIntentAccount {
-        writer: ctx.accounts.writer.key(),
+    let flash_fulfill_intent = FlashFulfillIntentAccount {
+        writer,
         route,
         reward,
-    }
-    .init(
-        &ctx.accounts.flash_fulfill_intent,
-        &ctx.accounts.writer,
-        &ctx.accounts.system_program,
+    };
+
+    account::create_account(
+        &ctx.accounts.flash_fulfill_intent.to_account_info(),
+        &ctx.accounts.writer.to_account_info(),
+        &ctx.accounts.system_program.to_account_info(),
+        &crate::ID,
+        8 + flash_fulfill_intent.try_to_vec()?.len(),
         &[&signer_seeds],
-    )
+    )?;
+
+    flash_fulfill_intent
+        .try_serialize(&mut &mut ctx.accounts.flash_fulfill_intent.try_borrow_mut_data()?[..])
 }
