@@ -1,4 +1,6 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke_signed;
 use derive_new::new;
 
 use crate::Bytes32;
@@ -104,6 +106,53 @@ pub struct IntentProven {
     intent_hash: Bytes32,
     claimant: Pubkey,
     destination: u64,
+}
+
+/// CPIs a prover program's `prove` instruction for a single intent.
+///
+/// Generic over any prover that follows the standard `prove(ProveArgs)` shape
+/// (local-prover, hyper-prover, etc.). `caller` is signed via `caller_seeds`,
+/// so PDAs that the prover accepts as authorized callers (e.g. a dispatcher
+/// or flash-vault PDA) can invoke this helper.
+#[allow(clippy::too_many_arguments)]
+pub fn prove<'info>(
+    prover_program: &AccountInfo<'info>,
+    caller: &AccountInfo<'info>,
+    caller_seeds: &[&[u8]],
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    event_authority: &AccountInfo<'info>,
+    proof: &AccountInfo<'info>,
+    args: ProveArgs,
+) -> Result<()> {
+    let mut data = PROVE_DISCRIMINATOR.to_vec();
+    args.serialize(&mut data)?;
+
+    let accounts = vec![
+        AccountMeta::new_readonly(caller.key(), true),
+        AccountMeta::new(payer.key(), true),
+        AccountMeta::new_readonly(system_program.key(), false),
+        AccountMeta::new_readonly(event_authority.key(), false),
+        AccountMeta::new_readonly(prover_program.key(), false),
+        AccountMeta::new(proof.key(), false),
+    ];
+
+    let infos = [
+        caller.to_account_info(),
+        payer.to_account_info(),
+        system_program.to_account_info(),
+        event_authority.to_account_info(),
+        prover_program.to_account_info(),
+        proof.to_account_info(),
+    ];
+
+    let ix = Instruction {
+        program_id: prover_program.key(),
+        accounts,
+        data,
+    };
+
+    invoke_signed(&ix, &infos, &[caller_seeds]).map_err(Into::into)
 }
 
 #[cfg(test)]

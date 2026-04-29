@@ -32,6 +32,19 @@ A specialized program that integrates with Hyperlane for cross-chain message del
 - **Message Validation**: Uses Hyperlane's default ISM (Interchain Security Module) for message security — the prover does not configure a custom ISM, so the mailbox's default ISM is used for all incoming messages
 - **Account Management**: Manages proof accounts and cleanup operations
 
+#### **Local-Prover Program** (`programs/local-prover/`)
+A prover for same-chain intents (Solana source and destination):
+
+- **Proof Creation**: Accepts either Portal's dispatcher PDA or Flash-Fulfiller's vault PDA as the authorized caller
+- **Proof Cleanup**: Called back by Portal during `withdraw` to close the Proof PDA and reclaim rent
+
+#### **Flash-Fulfiller Program** (`programs/flash-fulfiller/`)
+An atomic orchestrator that lets solvers fulfill intents with zero capital — the reward funds the fulfillment in a single transaction:
+
+- **Atomic Flow**: CPIs `local_prover.prove` → `portal.withdraw` → `portal.fulfill` → sweep leftover tokens and SOL to a claimant
+- **Flash Vault PDA**: Acts as the transient intermediary; owns ATAs during execution and is drained at the end
+- **Optional Intent Buffer**: `set_flash_fulfill_intent` stores a full route + reward under a PDA so callers can later invoke `flash_fulfill` with just the intent hash
+
 ### How They Work Together
 
 ```mermaid
@@ -175,8 +188,8 @@ cargo +nightly fmt
 # Sort imports
 cargo sort --workspace
 
-# Run clippy linting
-cargo clippy --all-targets --all-features -- -D warnings
+# Run clippy linting (do NOT pass --all-features; portal's cpi feature has broken Anchor codegen)
+cargo clippy --all-targets -- -D warnings
 
 # Run all tests
 anchor test
@@ -252,6 +265,26 @@ anchor test --skip-deploy
 
 A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
 
+#### Key Instructions:
+- `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
+- `close_proof` - Close Proof accounts after successful withdrawal (called by Portal during `withdraw`)
+
+### Flash-Fulfiller Program
+
+Atomic flash-fulfillment orchestrator for same-chain solvers.
+
+#### Key Instructions:
+- `set_flash_fulfill_intent` - Pre-store a route + reward under a PDA indexed by intent hash
+- `flash_fulfill` - Atomically prove, withdraw, fulfill, and sweep leftovers to a user-supplied claimant
+
+#### Key Accounts:
+- `FlashFulfillIntentAccount` - Optional buffer holding the route + reward for hash-based invocation
+- `flash_vault` - Program-owned PDA that holds rewards and acts as solver/claimant during the atomic flow
+
+### Proof-Helper Program
+
+A helper program used by Hyperlane message construction in tests and off-chain tooling.
+
 ### Dummy ISM Program
 
 A simplified ISM implementation used as the mailbox's default ISM in local test environments, standing in for Hyperlane's real default ISM.
@@ -278,6 +311,9 @@ A simplified ISM implementation used as the mailbox's default ISM in local test 
 - `close_proof_hyper_prover.rs` - HyperProver proof cleanup
 - `close_proof_local_prover.rs` - LocalProver proof cleanup
 - `init_hyper_prover.rs` - HyperProver initialization
+- `flash_fulfill.rs` - Atomic flash-fulfillment flows
+- `set_flash_fulfill_intent.rs` - Flash-fulfillment intent buffer writes
+- `pay_for_gas.rs` - Hyperlane gas payment via proof-helper
 
 #### Test Patterns:
 ```rust
@@ -329,15 +365,8 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag affects both programs:
+The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `flash-fulfiller`, `proof-helper`):
 
-#### Portal Program (`programs/portal/Cargo.toml`):
-```toml
-[features]
-mainnet = []
-```
-
-#### Hyper-Prover Program (`programs/hyper-prover/Cargo.toml`):
 ```toml
 [features]
 mainnet = []
@@ -392,18 +421,27 @@ The `Anchor.toml` file includes network-specific program configurations:
 
 ```toml
 [programs.localnet]
+dummy-ism = "..."         # Only for testing
+flash-fulfiller = "..."
 hyper-prover = "..."
+local-prover = "..."
 portal = "..."
-dummy-ism = "..."  # Only for testing
+proof-helper = "..."
 
 [programs.devnet]
+flash-fulfiller = "..."
 hyper-prover = "..."
+local-prover = "..."
 portal = "..."
+proof-helper = "..."
 # dummy-ism excluded
 
 [programs.mainnet]
+flash-fulfiller = "..."
 hyper-prover = "..."
+local-prover = "..."
 portal = "..."
+proof-helper = "..."
 # dummy-ism excluded
 ```
 

@@ -1208,6 +1208,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2551bf44bc5f776c15044b9b94153a00198be06743e262afaaa61f11ac7523a5"
 
 [[package]]
+name = "flash-fulfiller"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "eco-svm-std",
+ "goldie",
+ "portal",
+ "spl-pod",
+]
+
+[[package]]
 name = "flate2"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1720,6 +1732,7 @@ dependencies = [
  "derive_more",
  "dummy-ism",
  "eco-svm-std",
+ "flash-fulfiller",
  "hyper-prover",
  "litesvm",
  "local-prover",
@@ -1937,6 +1950,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "eco-svm-std",
+ "flash-fulfiller",
  "portal",
 ]
 

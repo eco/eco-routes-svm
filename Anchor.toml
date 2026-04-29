@@ -7,18 +7,21 @@ skip-lint = false
 
 [programs.localnet]
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
+flash-fulfiller = "EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT"
 hyper-prover = "EcooFDTfKVVo5qZcpNoDngMmVXqrG6FQT1D5LDjZEGeR"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 portal = "Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo"
 proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [programs.devnet]
+flash-fulfiller = "EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT"
 hyper-prover = "EcooFDTfKVVo5qZcpNoDngMmVXqrG6FQT1D5LDjZEGeR"
 portal = "Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
 proof-helper = "EcorrHQ6t8eCJJjGP9db3ZU7Z92efpnqNh24SN9EUjKX"
 
 [programs.mainnet]
+flash-fulfiller = "EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT"
 hyper-prover = "EcooFDTfKVVo5qZcpNoDngMmVXqrG6FQT1D5LDjZEGeR"
 portal = "Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo"
 local-prover = "34pNy1Kn6VzTrEK8fg1z24fknE8r1EYncASV7wQh1x6j"
@@ -33,8 +36,8 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 build-localnet = "anchor build"
-build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name proof-helper"
-build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet"
-deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name proof-helper"
-deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name proof-helper"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet"
+deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name flash-fulfiller && anchor deploy --provider.cluster devnet --program-name proof-helper"
+deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name flash-fulfiller && anchor deploy --provider.cluster mainnet --program-name proof-helper"
 test = "cargo test --no-fail-fast"

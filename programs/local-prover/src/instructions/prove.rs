@@ -12,8 +12,7 @@ use crate::state::ProofAccount;
 #[derive(Accounts)]
 #[instruction(args: ProveArgs)]
 pub struct Prove<'info> {
-    #[account(address = portal::state::dispatcher_pda().0 @ LocalProverError::InvalidPortalDispatcher)]
-    pub portal_dispatcher: Signer<'info>,
+    pub caller: Signer<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -30,6 +29,14 @@ pub fn prove_intent<'info>(
     } = args;
 
     require!(domain_id == CHAIN_ID, LocalProverError::InvalidDomainId);
+
+    let caller = ctx.accounts.caller.key();
+    let portal_dispatcher = portal::state::dispatcher_pda().0;
+    let flash_vault = flash_fulfiller::state::flash_vault_pda().0;
+    require!(
+        caller == portal_dispatcher || caller == flash_vault,
+        LocalProverError::InvalidCaller
+    );
 
     mark_intent_hashes_proven(&ctx, proof_data)?;
 
