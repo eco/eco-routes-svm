@@ -3,6 +3,7 @@ use anchor_lang::solana_program::program::invoke;
 use anchor_lang::solana_program::system_instruction;
 use eco_svm_std::{account, Bytes32};
 
+use crate::instructions::FlashFulfillerError;
 use crate::state::FLASH_FULFILL_INTENT_SEED;
 
 /// Args for [`append_flash_fulfill_route_chunk`]: the intent hash identifying
@@ -72,7 +73,9 @@ pub fn append_flash_fulfill_route_chunk(
     }
 
     let current_len = buffer.data_len();
-    let new_len = current_len + chunk.len();
+    let new_len = current_len
+        .checked_add(chunk.len())
+        .ok_or(FlashFulfillerError::BufferLengthOverflow)?;
     let new_min_balance = Rent::get()?.minimum_balance(new_len);
     if let Some(top_up) = new_min_balance
         .checked_sub(buffer.lamports())

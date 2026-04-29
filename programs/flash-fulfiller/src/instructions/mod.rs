@@ -23,4 +23,6 @@ pub enum FlashFulfillerError {
     InvalidRemainingAccounts,
     /// A claimant ATA does not match the canonical ATA for the claimant + mint, or its owner does not match the claimant.
     InvalidClaimantToken,
+    /// Appending the chunk would overflow the buffer's length (`usize`).
+    BufferLengthOverflow,
 }

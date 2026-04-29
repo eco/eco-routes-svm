@@ -259,6 +259,75 @@ fn flash_fulfill_from_buffer_should_succeed() {
 }
 
 #[test]
+fn flash_fulfill_intent_hash_consumes_append_built_buffer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let writer = Keypair::new();
+    ctx.airdrop(&writer.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let buffer = FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
+    payload.extend_from_slice(writer.pubkey().as_ref());
+    payload.extend_from_slice(&route.try_to_vec().unwrap());
+    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+
+    let split = payload.len() / 2;
+    let first_chunk = payload[..split].to_vec();
+    let second_chunk = payload[split..].to_vec();
+
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, first_chunk)
+        .unwrap();
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, second_chunk)
+        .unwrap();
+
+    let writer_balance_before = ctx.balance(&writer.pubkey());
+    let buffer_rent = ctx.balance(&buffer);
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill(
+        FlashFulfillIntent::IntentHash(intent_hash_value),
+        writer.pubkey(),
+        &route,
+        &reward,
+        claimant,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: reward.native_amount - route.native_amount,
+    })));
+
+    reward
+        .tokens
+        .iter()
+        .zip(route.tokens.iter())
+        .for_each(|(reward_token, route_token)| {
+            assert_eq!(
+                ctx.token_balance_ata(&reward_token.token, &claimant),
+                reward_token.amount - route_token.amount,
+            );
+        });
+    assert!(ctx.account::<FlashFulfillIntentAccount>(&buffer).is_none());
+    assert_eq!(
+        ctx.balance(&writer.pubkey()),
+        writer_balance_before + buffer_rent,
+    );
+}
+
+#[test]
 fn flash_fulfill_intent_hash_missing_buffer_fail() {
     let (mut ctx, route, reward, _) = setup();
     let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
