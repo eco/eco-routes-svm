@@ -21,6 +21,12 @@ use solana_sdk::transaction::Transaction;
 
 use crate::common::{Context, TransactionResult};
 
+/// Matches the `len` on flash-fulfiller's custom `#[global_allocator]` (see
+/// `programs/flash-fulfiller/src/lib.rs`). The allocator bumps *down* from
+/// `start + len`, so every tx invoking flash-fulfiller must request this
+/// heap frame or the very first allocation writes past the VM's heap region.
+const FLASH_FULFILLER_HEAP_BYTES: u32 = 256 * 1024;
+
 #[derive(Deref, DerefMut)]
 pub struct FlashFulfiller<'a>(&'a mut Context);
 
@@ -50,9 +56,10 @@ impl FlashFulfiller<'_> {
             accounts: accounts.to_account_metas(None),
             data: instruction.data(),
         };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
         let transaction = Transaction::new(
             &[&self.payer, writer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );
 
@@ -82,9 +89,10 @@ impl FlashFulfiller<'_> {
             accounts: accounts.to_account_metas(None),
             data: instruction.data(),
         };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
         let transaction = Transaction::new(
             &[&self.payer, writer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );
 
@@ -111,9 +119,10 @@ impl FlashFulfiller<'_> {
             accounts: accounts.to_account_metas(None),
             data: instruction.data(),
         };
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
         let transaction = Transaction::new(
             &[&self.payer, writer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(&[heap_frame, instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );
 
@@ -325,9 +334,13 @@ impl FlashFulfiller<'_> {
             data: instruction_data.data(),
         };
         let compute_budget = ComputeBudgetInstruction::set_compute_unit_limit(1_000_000);
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
         let transaction = Transaction::new(
             &[&self.payer],
-            Message::new(&[compute_budget, instruction], Some(&self.payer.pubkey())),
+            Message::new(
+                &[compute_budget, heap_frame, instruction],
+                Some(&self.payer.pubkey()),
+            ),
             self.latest_blockhash(),
         );
 
