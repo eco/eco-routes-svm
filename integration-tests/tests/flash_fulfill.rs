@@ -175,7 +175,7 @@ fn flash_fulfill_native_fee_reports_documented_delta_not_swept_amount() {
     let donation: u64 = 7777;
     ctx.airdrop(&flash_vault_pda().0, donation).unwrap();
 
-    let documented_delta = reward.native_amount - route.native_amount;
+    let documented_delta = reward.native_amount.saturating_sub(route.native_amount);
 
     let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
     let result = ctx.flash_fulfiller().flash_fulfill(
