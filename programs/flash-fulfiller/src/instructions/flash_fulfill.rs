@@ -129,6 +129,7 @@ pub fn flash_fulfill<'info>(
         FlashFulfillerError::InvalidClaimant
     );
 
+    let should_close = matches!(intent, FlashFulfillIntent::IntentHash(_));
     let (route, reward) = resolve_intent(&ctx, intent)?;
     let route_hash = route.hash();
     let reward_hash = reward.hash();
@@ -211,14 +212,22 @@ pub fn flash_fulfill<'info>(
     sweep_leftover_tokens(&ctx, &claimant_transfers, flash_vault_seeds)?;
     let native_fee = sweep_leftover_native(&ctx, flash_vault_seeds)?;
 
-    if let Some(buffer) = ctx.accounts.flash_fulfill_intent.as_ref() {
-        buffer.close(
-            ctx.accounts
-                .writer
-                .as_ref()
-                .ok_or(FlashFulfillerError::WriterRequired)?
-                .to_account_info(),
-        )?;
+    // Gate close on the IntentHash variant. Without this, a caller using the
+    // inline `Intent { route, reward }` variant could pass any other writer's
+    // existing buffer with their own pubkey as `writer` and have the victim's
+    // buffer closed with the rent redirected to themselves — `resolve_intent`
+    // doesn't touch the buffer for the inline variant, so the PDA-derivation
+    // security boundary doesn't run.
+    if should_close {
+        let buffer =
+            ctx.accounts.flash_fulfill_intent.as_ref().expect(
+                "buffer must be Some when intent is IntentHash (validated in resolve_intent)",
+            );
+        let writer =
+            ctx.accounts.writer.as_ref().expect(
+                "writer must be Some when intent is IntentHash (validated in resolve_intent)",
+            );
+        buffer.close(writer.to_account_info())?;
     }
 
     emit_cpi!(FlashFulfilled {

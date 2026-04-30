@@ -849,3 +849,47 @@ fn flash_fulfill_intent_hash_requires_buffer() {
         FlashFulfillerError::InvalidFlashFulfillIntentAccount
     )));
 }
+
+#[test]
+fn flash_fulfill_inline_variant_does_not_close_passed_buffer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let alice = Keypair::new();
+    ctx.airdrop(&alice.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let alice_buffer = FlashFulfillIntentAccount::pda(&alice.pubkey(), &intent_hash_value).0;
+    ctx.flash_fulfiller()
+        .set_flash_fulfill_intent(&alice, alice_buffer, route.clone(), reward.clone())
+        .unwrap();
+
+    let alice_buffer_lamports_before = ctx.balance(&alice_buffer);
+
+    let mallory = Keypair::new();
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::Intent {
+            route: route.clone(),
+            reward: reward.clone(),
+        },
+        Some(mallory.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        Some(alice_buffer),
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&alice_buffer)
+        .is_some());
+    assert_eq!(ctx.balance(&alice_buffer), alice_buffer_lamports_before);
+    assert_eq!(ctx.balance(&mallory.pubkey()), 0);
+}
