@@ -87,7 +87,7 @@ fn close_flash_fulfill_intent_reclaims_malformed_buffer() {
     malformed.extend_from_slice(&[0xAA; 7]);
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, malformed.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, malformed.clone())
         .unwrap();
 
     assert!(ctx.account::<FlashFulfillIntentAccount>(&buffer).is_none());
@@ -134,10 +134,10 @@ fn close_flash_fulfill_intent_closes_append_built_buffer() {
     let second_chunk = payload[split..].to_vec();
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, first_chunk)
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, first_chunk)
         .unwrap();
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, second_chunk)
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, second_chunk)
         .unwrap();
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();

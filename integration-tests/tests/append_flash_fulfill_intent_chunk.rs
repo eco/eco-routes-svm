@@ -12,7 +12,7 @@ use solana_sdk::transaction::Transaction;
 pub mod common;
 
 #[test]
-fn append_flash_fulfill_route_chunk_first_call_creates_buffer() {
+fn append_flash_fulfill_intent_chunk_first_call_creates_buffer() {
     let mut ctx = common::Context::default();
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
@@ -28,7 +28,7 @@ fn append_flash_fulfill_route_chunk_first_call_creates_buffer() {
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
-    let result = ctx.flash_fulfiller().append_flash_fulfill_route_chunk(
+    let result = ctx.flash_fulfiller().append_flash_fulfill_intent_chunk(
         &writer,
         intent_hash_value,
         payload.clone(),
@@ -46,7 +46,7 @@ fn append_flash_fulfill_route_chunk_first_call_creates_buffer() {
 }
 
 #[test]
-fn append_flash_fulfill_route_chunk_extends_buffer() {
+fn append_flash_fulfill_intent_chunk_extends_buffer() {
     let mut ctx = common::Context::default();
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
@@ -67,10 +67,10 @@ fn append_flash_fulfill_route_chunk_extends_buffer() {
     let second_chunk = payload[split..].to_vec();
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, first_chunk.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, first_chunk.clone())
         .unwrap();
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, second_chunk.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, second_chunk.clone())
         .unwrap();
 
     let raw = ctx.get_account(&buffer).unwrap();
@@ -84,7 +84,7 @@ fn append_flash_fulfill_route_chunk_extends_buffer() {
 }
 
 #[test]
-fn append_flash_fulfill_route_chunk_non_writer_isolated() {
+fn append_flash_fulfill_intent_chunk_non_writer_isolated() {
     let mut ctx = common::Context::default();
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
@@ -101,7 +101,7 @@ fn append_flash_fulfill_route_chunk_non_writer_isolated() {
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, payload.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, payload.clone())
         .unwrap();
 
     let mallory = Keypair::new();
@@ -112,7 +112,7 @@ fn append_flash_fulfill_route_chunk_non_writer_isolated() {
     assert_ne!(writer_buffer, mallory_buffer);
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&mallory, intent_hash_value, vec![0xAA; 16])
+        .append_flash_fulfill_intent_chunk(&mallory, intent_hash_value, vec![0xAA; 16])
         .unwrap();
 
     assert_eq!(ctx.get_account(&writer_buffer).unwrap().data, payload);
@@ -123,7 +123,7 @@ fn append_flash_fulfill_route_chunk_non_writer_isolated() {
 }
 
 #[test]
-fn append_flash_fulfill_route_chunk_isolated_per_writer() {
+fn append_flash_fulfill_intent_chunk_isolated_per_writer() {
     let mut ctx = common::Context::default();
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
@@ -140,7 +140,7 @@ fn append_flash_fulfill_route_chunk_isolated_per_writer() {
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&alice, intent_hash_value, payload.clone())
+        .append_flash_fulfill_intent_chunk(&alice, intent_hash_value, payload.clone())
         .unwrap();
 
     let alice_data_before = ctx.get_account(&alice_buffer).unwrap().data;
@@ -154,7 +154,7 @@ fn append_flash_fulfill_route_chunk_isolated_per_writer() {
     assert_ne!(alice_buffer, mallory_buffer);
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&mallory, intent_hash_value, vec![0xCC; 32])
+        .append_flash_fulfill_intent_chunk(&mallory, intent_hash_value, vec![0xCC; 32])
         .unwrap();
 
     assert_eq!(ctx.get_account(&alice_buffer).unwrap().data, payload);
@@ -170,7 +170,7 @@ fn append_flash_fulfill_route_chunk_isolated_per_writer() {
 }
 
 #[test]
-fn append_flash_fulfill_route_chunk_handles_pre_funded_pda() {
+fn append_flash_fulfill_intent_chunk_handles_pre_funded_pda() {
     let mut ctx = common::Context::default();
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
@@ -210,7 +210,7 @@ fn append_flash_fulfill_route_chunk_handles_pre_funded_pda() {
     let writer_balance_before = ctx.balance(&writer.pubkey());
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, payload.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, payload.clone())
         .unwrap();
 
     let raw = ctx.get_account(&buffer).unwrap();
@@ -230,7 +230,7 @@ fn append_flash_fulfill_route_chunk_handles_pre_funded_pda() {
 }
 
 #[test]
-fn append_flash_fulfill_route_chunk_tops_up_rent_on_growth() {
+fn append_flash_fulfill_intent_chunk_tops_up_rent_on_growth() {
     let mut ctx = common::Context::default();
     let intent_hash_value = [0xABu8; 32].into();
     let writer = Keypair::new();
@@ -242,7 +242,7 @@ fn append_flash_fulfill_route_chunk_tops_up_rent_on_growth() {
     let second_chunk = vec![0x22u8; 500];
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, first_chunk.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, first_chunk.clone())
         .unwrap();
 
     let rent = ctx.get_sysvar::<Rent>();
@@ -254,7 +254,7 @@ fn append_flash_fulfill_route_chunk_tops_up_rent_on_growth() {
     );
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, second_chunk.clone())
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, second_chunk.clone())
         .unwrap();
 
     let raw = ctx.get_account(&buffer).unwrap();

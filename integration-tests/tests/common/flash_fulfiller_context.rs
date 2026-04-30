@@ -5,7 +5,7 @@ use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::Proof;
 use eco_svm_std::{event_authority_pda, CHAIN_ID};
 use flash_fulfiller::instructions::{
-    AppendFlashFulfillRouteChunkArgs, CloseFlashFulfillIntentArgs, FlashFulfillArgs,
+    AppendFlashFulfillIntentChunkArgs, CloseFlashFulfillIntentArgs, FlashFulfillArgs,
     FlashFulfillIntent, SetFlashFulfillIntentArgs,
 };
 use flash_fulfiller::state::{flash_vault_pda, FlashFulfillIntentAccount};
@@ -59,7 +59,7 @@ impl FlashFulfiller<'_> {
         self.send_transaction(transaction)
     }
 
-    pub fn append_flash_fulfill_route_chunk(
+    pub fn append_flash_fulfill_intent_chunk(
         &mut self,
         writer: &Keypair,
         intent_hash_value: eco_svm_std::Bytes32,
@@ -67,12 +67,12 @@ impl FlashFulfiller<'_> {
     ) -> TransactionResult {
         let flash_fulfill_intent =
             FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
-        let args = AppendFlashFulfillRouteChunkArgs {
+        let args = AppendFlashFulfillIntentChunkArgs {
             intent_hash: intent_hash_value,
             chunk,
         };
-        let instruction = flash_fulfiller::instruction::AppendFlashFulfillRouteChunk { args };
-        let accounts = flash_fulfiller::accounts::AppendFlashFulfillRouteChunk {
+        let instruction = flash_fulfiller::instruction::AppendFlashFulfillIntentChunk { args };
+        let accounts = flash_fulfiller::accounts::AppendFlashFulfillIntentChunk {
             writer: writer.pubkey(),
             flash_fulfill_intent,
             system_program: anchor_lang::system_program::ID,

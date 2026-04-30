@@ -6,10 +6,10 @@ use eco_svm_std::{account, Bytes32};
 use crate::instructions::FlashFulfillerError;
 use crate::state::FLASH_FULFILL_INTENT_SEED;
 
-/// Args for [`append_flash_fulfill_route_chunk`]: the intent hash identifying
+/// Args for [`append_flash_fulfill_intent_chunk`]: the intent hash identifying
 /// the writer's buffer, plus the raw bytes to append.
 #[derive(AnchorSerialize, AnchorDeserialize)]
-pub struct AppendFlashFulfillRouteChunkArgs {
+pub struct AppendFlashFulfillIntentChunkArgs {
     /// Intent hash identifying the writer's buffer (combined with `writer` in the PDA seeds).
     pub intent_hash: Bytes32,
     /// Raw bytes appended to the buffer's tail. Caller is responsible for
@@ -18,10 +18,10 @@ pub struct AppendFlashFulfillRouteChunkArgs {
     pub chunk: Vec<u8>,
 }
 
-/// Accounts for [`append_flash_fulfill_route_chunk`].
+/// Accounts for [`append_flash_fulfill_intent_chunk`].
 #[derive(Accounts)]
-#[instruction(args: AppendFlashFulfillRouteChunkArgs)]
-pub struct AppendFlashFulfillRouteChunk<'info> {
+#[instruction(args: AppendFlashFulfillIntentChunkArgs)]
+pub struct AppendFlashFulfillIntentChunk<'info> {
     #[account(mut)]
     pub writer: Signer<'info>,
     /// CHECK: address validated by seed derivation; created on first call, extended on subsequent calls
@@ -42,11 +42,11 @@ pub struct AppendFlashFulfillRouteChunk<'info> {
 /// bytes; subsequent calls realloc the buffer to its current length plus `chunk.len()`
 /// and copy `chunk` into the trailing slice. The PDA's binding to `writer` makes
 /// the (per-writer) ordering of chunks the writer's responsibility.
-pub fn append_flash_fulfill_route_chunk(
-    ctx: Context<AppendFlashFulfillRouteChunk>,
-    args: AppendFlashFulfillRouteChunkArgs,
+pub fn append_flash_fulfill_intent_chunk(
+    ctx: Context<AppendFlashFulfillIntentChunk>,
+    args: AppendFlashFulfillIntentChunkArgs,
 ) -> Result<()> {
-    let AppendFlashFulfillRouteChunkArgs { intent_hash, chunk } = args;
+    let AppendFlashFulfillIntentChunkArgs { intent_hash, chunk } = args;
     let writer = ctx.accounts.writer.key();
     let bump = ctx.bumps.flash_fulfill_intent;
     let buffer = &ctx.accounts.flash_fulfill_intent;
@@ -77,6 +77,7 @@ pub fn append_flash_fulfill_route_chunk(
         .checked_add(chunk.len())
         .ok_or(FlashFulfillerError::BufferLengthOverflow)?;
     let new_min_balance = Rent::get()?.minimum_balance(new_len);
+
     if let Some(top_up) = new_min_balance
         .checked_sub(buffer.lamports())
         .filter(|amount| *amount > 0)

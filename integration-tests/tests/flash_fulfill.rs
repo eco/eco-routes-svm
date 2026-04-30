@@ -279,10 +279,10 @@ fn flash_fulfill_intent_hash_consumes_append_built_buffer() {
     let second_chunk = payload[split..].to_vec();
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, first_chunk)
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, first_chunk)
         .unwrap();
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&writer, intent_hash_value, second_chunk)
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, second_chunk)
         .unwrap();
 
     let writer_balance_before = ctx.balance(&writer.pubkey());
@@ -768,7 +768,7 @@ fn flash_fulfill_intent_hash_rejects_fake_writer_field() {
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
     ctx.flash_fulfiller()
-        .append_flash_fulfill_route_chunk(&alice, intent_hash_value, payload)
+        .append_flash_fulfill_intent_chunk(&alice, intent_hash_value, payload)
         .unwrap();
 
     let stored = ctx
