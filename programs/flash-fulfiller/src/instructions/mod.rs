@@ -25,4 +25,6 @@ pub enum FlashFulfillerError {
     InvalidClaimantToken,
     /// Appending the chunk would overflow the buffer's length (`usize`).
     BufferLengthOverflow,
+    /// When the buffered IntentHash variant is used, a `writer` account must be supplied.
+    WriterRequired,
 }

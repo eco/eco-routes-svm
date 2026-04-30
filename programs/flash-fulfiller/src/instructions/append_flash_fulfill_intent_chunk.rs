@@ -13,7 +13,7 @@ pub struct AppendFlashFulfillIntentChunkArgs {
     /// Intent hash identifying the writer's buffer (combined with `writer` in the PDA seeds).
     pub intent_hash: Bytes32,
     /// Raw bytes appended to the buffer's tail. Caller is responsible for
-    /// streaming a valid Borsh `(writer, route, reward)` body across chunks;
+    /// streaming a valid Borsh `(route, reward)` body across chunks;
     /// `flash_fulfill` is what catches malformed bytes via deserialization.
     pub chunk: Vec<u8>,
 }

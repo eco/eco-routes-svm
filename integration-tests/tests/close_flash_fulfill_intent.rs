@@ -125,7 +125,6 @@ fn close_flash_fulfill_intent_closes_append_built_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(writer.pubkey().as_ref());
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
@@ -141,7 +140,6 @@ fn close_flash_fulfill_intent_closes_append_built_buffer() {
         .unwrap();
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
-    assert_eq!(stored.writer, writer.pubkey());
     assert_eq!(stored.route.hash(), route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
 

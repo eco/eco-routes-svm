@@ -124,7 +124,7 @@ impl FlashFulfiller<'_> {
     pub fn flash_fulfill(
         &mut self,
         intent: FlashFulfillIntent,
-        writer: Pubkey,
+        writer: Option<Pubkey>,
         route: &Route,
         reward: &Reward,
         claimant: Pubkey,
@@ -132,11 +132,11 @@ impl FlashFulfiller<'_> {
         call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-        let buffer = match &intent {
-            FlashFulfillIntent::IntentHash(_) => {
+        let buffer = match (&intent, writer) {
+            (FlashFulfillIntent::IntentHash(_), Some(writer)) => {
                 Some(FlashFulfillIntentAccount::pda(&writer, &intent_hash_value).0)
             }
-            FlashFulfillIntent::Intent { .. } => None,
+            _ => None,
         };
 
         self.flash_fulfill_explicit_buffer(
@@ -155,7 +155,7 @@ impl FlashFulfiller<'_> {
     pub fn flash_fulfill_explicit_buffer(
         &mut self,
         intent: FlashFulfillIntent,
-        writer: Pubkey,
+        writer: Option<Pubkey>,
         route: &Route,
         reward: &Reward,
         claimant: Pubkey,
@@ -237,7 +237,7 @@ impl FlashFulfiller<'_> {
     pub fn flash_fulfill_with_accounts(
         &mut self,
         intent: FlashFulfillIntent,
-        writer: Pubkey,
+        writer: Option<Pubkey>,
         route: &Route,
         reward: &Reward,
         claimant: Pubkey,
@@ -247,11 +247,11 @@ impl FlashFulfiller<'_> {
         call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-        let flash_fulfill_intent = match &intent {
-            FlashFulfillIntent::IntentHash(_) => {
+        let flash_fulfill_intent = match (&intent, writer) {
+            (FlashFulfillIntent::IntentHash(_), Some(writer)) => {
                 Some(FlashFulfillIntentAccount::pda(&writer, &intent_hash_value).0)
             }
-            FlashFulfillIntent::Intent { .. } => None,
+            _ => None,
         };
 
         self.flash_fulfill_with_buffer(
@@ -272,7 +272,7 @@ impl FlashFulfiller<'_> {
     pub fn flash_fulfill_with_buffer(
         &mut self,
         intent: FlashFulfillIntent,
-        writer: Pubkey,
+        writer: Option<Pubkey>,
         route: &Route,
         reward: &Reward,
         claimant: Pubkey,

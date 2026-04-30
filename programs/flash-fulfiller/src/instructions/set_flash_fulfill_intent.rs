@@ -17,7 +17,7 @@ pub struct SetFlashFulfillIntentArgs {
 /// Accounts for [`set_flash_fulfill_intent`].
 #[derive(Accounts)]
 pub struct SetFlashFulfillIntent<'info> {
-    /// Pays for the buffer account rent and is recorded as the writer.
+    /// Pays for the buffer account rent; the buffer's PDA is seed-bound to this key.
     #[account(mut)]
     pub writer: Signer<'info>,
     /// CHECK: address + init handled in handler
@@ -48,11 +48,7 @@ pub fn set_flash_fulfill_intent(
         &[bump],
     ];
 
-    let flash_fulfill_intent = FlashFulfillIntentAccount {
-        writer,
-        route,
-        reward,
-    };
+    let flash_fulfill_intent = FlashFulfillIntentAccount { route, reward };
 
     account::create_account(
         &ctx.accounts.flash_fulfill_intent.to_account_info(),

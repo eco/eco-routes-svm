@@ -24,7 +24,6 @@ fn append_flash_fulfill_intent_chunk_first_call_creates_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(writer.pubkey().as_ref());
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
@@ -40,7 +39,6 @@ fn append_flash_fulfill_intent_chunk_first_call_creates_buffer() {
     assert_eq!(raw.owner, flash_fulfiller::ID);
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
-    assert_eq!(stored.writer, writer.pubkey());
     assert_eq!(stored.route.hash(), route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
 }
@@ -58,7 +56,6 @@ fn append_flash_fulfill_intent_chunk_extends_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(writer.pubkey().as_ref());
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
@@ -78,7 +75,6 @@ fn append_flash_fulfill_intent_chunk_extends_buffer() {
     assert_eq!(raw.data, payload);
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
-    assert_eq!(stored.writer, writer.pubkey());
     assert_eq!(stored.route.hash(), route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
 }
@@ -96,7 +92,6 @@ fn append_flash_fulfill_intent_chunk_non_writer_isolated() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(writer.pubkey().as_ref());
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
@@ -135,7 +130,6 @@ fn append_flash_fulfill_intent_chunk_isolated_per_writer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(alice.pubkey().as_ref());
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
@@ -203,7 +197,6 @@ fn append_flash_fulfill_intent_chunk_handles_pre_funded_pda() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(writer.pubkey().as_ref());
     payload.extend_from_slice(&route.try_to_vec().unwrap());
     payload.extend_from_slice(&reward.try_to_vec().unwrap());
 
@@ -218,7 +211,6 @@ fn append_flash_fulfill_intent_chunk_handles_pre_funded_pda() {
     assert_eq!(raw.owner, flash_fulfiller::ID);
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
-    assert_eq!(stored.writer, writer.pubkey());
     assert_eq!(stored.route.hash(), route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
 

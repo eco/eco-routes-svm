@@ -17,8 +17,6 @@ pub fn flash_vault_pda() -> (Pubkey, u8) {
 /// intent hash alone, avoiding re-sending the full payload.
 #[account]
 pub struct FlashFulfillIntentAccount {
-    /// Signer that wrote the buffer and paid the rent.
-    pub writer: Pubkey,
     /// Route committed by the buffered intent.
     pub route: Route,
     /// Reward committed by the buffered intent.

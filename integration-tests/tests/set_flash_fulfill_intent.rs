@@ -32,7 +32,6 @@ fn set_flash_fulfill_intent_should_succeed() {
     assert!(result.is_ok());
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
-    assert_eq!(stored.writer, writer.pubkey());
     assert_eq!(stored.route.hash(), route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
 }
@@ -79,7 +78,6 @@ fn set_flash_fulfill_intent_handles_pre_funded_pda() {
     assert_eq!(raw.owner, flash_fulfiller::ID);
 
     let stored = ctx.account::<FlashFulfillIntentAccount>(&buffer).unwrap();
-    assert_eq!(stored.writer, writer.pubkey());
     assert_eq!(stored.route.hash(), route.hash());
     assert_eq!(stored.reward.hash(), reward.hash());
 
@@ -151,6 +149,9 @@ fn set_flash_fulfill_intent_pda_isolated_per_writer() {
 
     assert_ne!(buffer_a, buffer_b);
 
+    let route_hash = route.hash();
+    let reward_hash = reward.hash();
+
     ctx.flash_fulfiller()
         .set_flash_fulfill_intent(&writer_a, buffer_a, route.clone(), reward.clone())
         .unwrap();
@@ -160,6 +161,8 @@ fn set_flash_fulfill_intent_pda_isolated_per_writer() {
 
     let stored_a = ctx.account::<FlashFulfillIntentAccount>(&buffer_a).unwrap();
     let stored_b = ctx.account::<FlashFulfillIntentAccount>(&buffer_b).unwrap();
-    assert_eq!(stored_a.writer, writer_a.pubkey());
-    assert_eq!(stored_b.writer, writer_b.pubkey());
+    assert_eq!(stored_a.route.hash(), route_hash);
+    assert_eq!(stored_a.reward.hash(), reward_hash);
+    assert_eq!(stored_b.route.hash(), route_hash);
+    assert_eq!(stored_b.reward.hash(), reward_hash);
 }

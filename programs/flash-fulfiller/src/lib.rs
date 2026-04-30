@@ -34,7 +34,7 @@ pub mod flash_fulfiller {
 
     /// Streams raw bytes into the writer's buffer. The first call allocates
     /// the buffer; subsequent calls realloc and append. Bytes streamed must
-    /// form a valid Borsh `(writer, route, reward)` body once concatenated —
+    /// form a valid Borsh `(route, reward)` body once concatenated —
     /// `flash_fulfill` rejects malformed buffers via deserialization.
     pub fn append_flash_fulfill_intent_chunk(
         ctx: Context<AppendFlashFulfillIntentChunk>,
