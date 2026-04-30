@@ -164,6 +164,43 @@ fn flash_fulfill_should_succeed() {
 }
 
 #[test]
+fn flash_fulfill_native_fee_reports_documented_delta_not_swept_amount() {
+    let (mut ctx, route, reward, _vault) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let donation: u64 = 7777;
+    ctx.airdrop(&flash_vault_pda().0, donation).unwrap();
+
+    let documented_delta = reward.native_amount - route.native_amount;
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill(
+        FlashFulfillIntent::Intent {
+            route: route.clone(),
+            reward: reward.clone(),
+        },
+        None,
+        &route,
+        &reward,
+        claimant,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: documented_delta,
+    })));
+    assert_eq!(ctx.balance(&claimant), documented_delta + donation);
+    assert_eq!(ctx.balance(&flash_vault_pda().0), 0);
+}
+
+#[test]
 fn flash_fulfill_default_claimant_fail() {
     let (mut ctx, route, reward, _) = setup();
     let claimant = Pubkey::default();

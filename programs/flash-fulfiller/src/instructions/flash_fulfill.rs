@@ -140,6 +140,7 @@ pub fn flash_fulfill<'info>(
     let route_hash = route.hash();
     let reward_hash = reward.hash();
     let intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
+    let native_fee = reward.native_amount.saturating_sub(route.native_amount);
     let flash_vault = ctx.accounts.flash_vault.key();
     let (_, flash_vault_bump) = flash_vault_pda();
     let flash_vault_seeds: &[&[u8]] = &[FLASH_VAULT_SEED, &[flash_vault_bump]];
@@ -216,7 +217,7 @@ pub fn flash_fulfill<'info>(
     )?;
 
     sweep_leftover_tokens(&ctx, &claimant_transfers, flash_vault_seeds)?;
-    let native_fee = sweep_leftover_native(&ctx, flash_vault_seeds)?;
+    sweep_leftover_native(&ctx, flash_vault_seeds)?;
 
     // Gate close on the IntentHash variant. Without this, a caller using the
     // inline `Intent { route, reward }` variant could pass any other writer's
@@ -395,10 +396,10 @@ fn sweep_leftover_tokens<'info>(
 fn sweep_leftover_native<'info>(
     ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     flash_vault_seeds: &[&[u8]],
-) -> Result<u64> {
+) -> Result<()> {
     let leftover = ctx.accounts.flash_vault.lamports();
     if leftover == 0 {
-        return Ok(0);
+        return Ok(());
     }
 
     invoke_signed(
@@ -415,7 +416,7 @@ fn sweep_leftover_native<'info>(
         &[flash_vault_seeds],
     )?;
 
-    Ok(leftover)
+    Ok(())
 }
 
 fn resolve_intent(
