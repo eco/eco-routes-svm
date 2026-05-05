@@ -6,10 +6,46 @@
 //! Living in its own program (rather than extending `local-prover`) avoids
 //! Solana's reentrancy rule — `local_prover` only appears on the stack
 //! inside portal's `close_proof` CPI, never twice.
+//!
+//! # Client requirement
+//!
+//! Every transaction invoking *any* instruction in this program must prepend
+//! `ComputeBudgetInstruction::request_heap_frame(256 * 1024)`. The 256 KB
+//! [`BumpAllocator`] (see `ALLOCATOR` below) is `#[global_allocator]`, so it
+//! services every heap allocation in the binary — Anchor's account validation
+//! and Borsh arg deserialization on entry to any handler included. The VM
+//! only maps the default 32 KB heap region unless the caller asks for more,
+//! and without the request the first allocation access-violates immediately.
+//!
+//! [`BumpAllocator`]: anchor_lang::solana_program::entrypoint::BumpAllocator
 
 use anchor_lang::prelude::*;
 
-declare_id!("2d8yK5bxGuoZssTgEa4Lj9Z5AyhmVySVDQ1JadaTLeaK");
+declare_id!("EcoFvY9tDz6kaxAQxNHga68sQm535DskDBCgKm3tziaT");
+
+// Install a 256 KB bump allocator so flash_fulfill can actually use the
+// heap space requested by `ComputeBudgetInstruction::request_heap_frame`
+// on the client tx. solana-program's default `BumpAllocator` has `len`
+// hardcoded to 32 KB regardless of the VM's actual heap region size, so
+// complex CPI chains like ours OOM well before the real ceiling. Gated
+// on `custom-heap` to match solana-program's `custom_heap_default!`
+// macro — with the feature on, solana-program skips installing its
+// default allocator and we win by being the only `#[global_allocator]`
+// in the binary. Also gated on `not(feature = "no-entrypoint")` so that
+// when another program (e.g. local-prover) depends on us for CPI types,
+// our allocator doesn't bleed into their binary and conflict with theirs.
+// https://github.com/solana-labs/solana/issues/32607
+#[cfg(all(
+    feature = "custom-heap",
+    target_os = "solana",
+    not(feature = "no-entrypoint"),
+))]
+#[global_allocator]
+static ALLOCATOR: anchor_lang::solana_program::entrypoint::BumpAllocator =
+    anchor_lang::solana_program::entrypoint::BumpAllocator {
+        start: anchor_lang::solana_program::entrypoint::HEAP_START_ADDRESS as usize,
+        len: 256 * 1024,
+    };
 
 pub mod cpi;
 pub mod events;

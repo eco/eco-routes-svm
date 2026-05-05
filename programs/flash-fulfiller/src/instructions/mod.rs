@@ -27,4 +27,7 @@ pub enum FlashFulfillerError {
     BufferLengthOverflow,
     /// When the buffered IntentHash variant is used, a `writer` account must be supplied.
     WriterRequired,
+    /// A call's `data` field is malformed — header would index past the slice
+    /// or arithmetic on the prefix length overflows.
+    InvalidCallData,
 }

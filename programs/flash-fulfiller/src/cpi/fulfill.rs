@@ -1,5 +1,3 @@
-use std::iter;
-
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
@@ -25,7 +23,19 @@ pub fn fulfill_intent<'info>(
     call_accounts: &[AccountInfo<'info>],
     args: FulfillArgs,
 ) -> Result<()> {
-    let fixed_metas = [
+    // Pre-size both Vecs to avoid bump-allocator doubling waste. A plain
+    // `chain(...).collect()` gives Vec::with_capacity(0) and then doubles,
+    // retaining every prior buffer (Solana's bump allocator never frees). For
+    // ~60 entries that's ~3 KB of dead heap per Vec — enough to push a
+    // complex flash_fulfill path into OOM on the default 32 KB heap.
+    // `extend` on a Vec with sufficient remaining capacity pushes in place
+    // without reallocating, so functional iterator inputs (whose size_hint
+    // collect would mishandle) stay safe here.
+    const FIXED: usize = 8;
+    let total_accounts = FIXED + route_transfers.len() * 3 + call_accounts.len();
+
+    let mut accounts: Vec<AccountMeta> = Vec::with_capacity(total_accounts);
+    accounts.extend([
         AccountMeta::new(payer.key(), true),
         AccountMeta::new(solver.key(), true),
         AccountMeta::new(executor.key(), false),
@@ -34,26 +44,22 @@ pub fn fulfill_intent<'info>(
         AccountMeta::new_readonly(token_2022_program.key(), false),
         AccountMeta::new_readonly(associated_token_program.key(), false),
         AccountMeta::new_readonly(system_program.key(), false),
-    ];
-    let route_metas = route_transfers.iter().flat_map(|transfer| {
+    ]);
+    accounts.extend(route_transfers.iter().flat_map(|transfer| {
         [
             AccountMeta::new(transfer.from.key(), false),
             AccountMeta::new(transfer.to.key(), false),
             AccountMeta::new_readonly(transfer.mint.key(), false),
         ]
-    });
-    let call_metas = call_accounts.iter().map(|account| AccountMeta {
+    }));
+    accounts.extend(call_accounts.iter().map(|account| AccountMeta {
         pubkey: account.key(),
         is_signer: account.is_signer,
         is_writable: account.is_writable,
-    });
-    let accounts: Vec<AccountMeta> = fixed_metas
-        .into_iter()
-        .chain(route_metas)
-        .chain(call_metas)
-        .collect();
+    }));
 
-    let fixed_infos = [
+    let mut infos: Vec<AccountInfo<'info>> = Vec::with_capacity(total_accounts + 1);
+    infos.extend([
         payer.to_account_info(),
         solver.to_account_info(),
         executor.to_account_info(),
@@ -62,21 +68,20 @@ pub fn fulfill_intent<'info>(
         token_2022_program.to_account_info(),
         associated_token_program.to_account_info(),
         system_program.to_account_info(),
-    ];
-    let route_infos = route_transfers.iter().flat_map(|transfer| {
+    ]);
+    infos.extend(route_transfers.iter().flat_map(|transfer| {
         [
             transfer.from.to_account_info(),
             transfer.to.to_account_info(),
             transfer.mint.to_account_info(),
         ]
-    });
-    let call_infos = call_accounts.iter().map(ToAccountInfo::to_account_info);
-    let infos: Vec<AccountInfo<'info>> = fixed_infos
-        .into_iter()
-        .chain(route_infos)
-        .chain(call_infos)
-        .chain(iter::once(portal_program.to_account_info()))
-        .collect();
+    }));
+    infos.extend(
+        call_accounts
+            .iter()
+            .map(ToAccountInfo::to_account_info)
+            .chain(std::iter::once(portal_program.to_account_info())),
+    );
 
     let ix = Instruction {
         program_id: portal_program.key(),

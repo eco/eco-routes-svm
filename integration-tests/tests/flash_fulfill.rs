@@ -4,7 +4,7 @@ use anchor_lang::{AnchorSerialize, Discriminator};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use eco_svm_std::prover::Proof;
-use eco_svm_std::CHAIN_ID;
+use eco_svm_std::{SerializableAccountMeta, CHAIN_ID};
 use flash_fulfiller::events::FlashFulfilled;
 use flash_fulfiller::instructions::{FlashFulfillIntent, FlashFulfillerError};
 use flash_fulfiller::state::{flash_vault_pda, FlashFulfillIntentAccount};
@@ -947,4 +947,173 @@ fn flash_fulfill_inline_variant_does_not_close_passed_buffer() {
         .is_some());
     assert_eq!(ctx.balance(&alice_buffer), alice_buffer_lamports_before);
     assert_eq!(ctx.balance(&mallory.pubkey()), 0);
+}
+
+#[test]
+fn flash_fulfill_large_route_consumes_without_oom() {
+    let mut ctx = common::Context::default();
+    let (_, mut route, mut reward) = ctx.rand_intent();
+    reward.prover = local_prover::ID;
+    route.native_amount = reward.native_amount / 2;
+    route.tokens = reward
+        .tokens
+        .iter()
+        .map(|reward_token| TokenAmount {
+            token: reward_token.token,
+            amount: reward_token.amount / 2,
+        })
+        .collect();
+
+    let edge_account = Pubkey::new_unique();
+    let unique_dummies: Vec<Pubkey> = (0..3).map(|_| Pubkey::new_unique()).collect();
+    let middle_accounts: Vec<Pubkey> = (0..30)
+        .map(|index| unique_dummies[index % unique_dummies.len()])
+        .collect();
+
+    let target = spl_noop::ID.to_bytes().into();
+    let build_call = |data: Vec<u8>, accounts: Vec<Pubkey>| Call {
+        target,
+        data: CalldataWithAccounts {
+            calldata: Calldata {
+                data,
+                account_count: accounts.len() as u8,
+            },
+            accounts: accounts
+                .into_iter()
+                .map(|pubkey| SerializableAccountMeta {
+                    pubkey,
+                    is_signer: false,
+                    is_writable: false,
+                })
+                .collect(),
+        }
+        .try_to_vec()
+        .unwrap(),
+    };
+
+    route.calls = vec![
+        build_call(vec![0u8], vec![edge_account]),
+        build_call(vec![0u8; 8], middle_accounts.clone()),
+        build_call(vec![0u8], vec![edge_account]),
+    ];
+
+    let encoded_route_size = route.try_to_vec().unwrap().len();
+    assert!(
+        encoded_route_size >= 1300,
+        "expected jupiter-shape route to encode to >=1300 bytes, got {encoded_route_size}",
+    );
+
+    let route_hash = route.hash();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route_hash, &reward.hash());
+    let vault = vault_pda(&intent_hash_value).0;
+
+    let funder = ctx.funder.pubkey();
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
+    });
+
+    let token_program = ctx.token_program;
+    let fund_accounts: Vec<AccountMeta> = reward
+        .tokens
+        .iter()
+        .flat_map(|token| {
+            vec![
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &funder,
+                        &token.token,
+                        &token_program,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &vault,
+                        &token.token,
+                        &token_program,
+                    ),
+                    false,
+                ),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect();
+
+    ctx.portal()
+        .fund_intent(
+            CHAIN_ID,
+            reward.clone(),
+            vault,
+            route_hash,
+            false,
+            fund_accounts,
+        )
+        .unwrap();
+
+    let writer = Keypair::new();
+    ctx.airdrop(&writer.pubkey(), common::sol_amount(2.0))
+        .unwrap();
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
+    payload.extend_from_slice(&route.try_to_vec().unwrap());
+    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+
+    payload.chunks(900).for_each(|chunk| {
+        ctx.flash_fulfiller()
+            .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, chunk.to_vec())
+            .unwrap();
+    });
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let call_accounts: Vec<AccountMeta> = std::iter::once(edge_account)
+        .chain(middle_accounts.iter().copied())
+        .chain(std::iter::once(edge_account))
+        .chain(std::iter::once(spl_noop::ID))
+        .map(|pubkey| AccountMeta::new_readonly(pubkey, false))
+        .collect();
+
+    let result = ctx.flash_fulfiller().flash_fulfill(
+        FlashFulfillIntent::IntentHash(intent_hash_value),
+        Some(writer.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        claimant_ata_metas,
+        call_accounts,
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: reward.native_amount - route.native_amount,
+    })));
+
+    reward
+        .tokens
+        .iter()
+        .zip(route.tokens.iter())
+        .for_each(|(reward_token, route_token)| {
+            assert_eq!(
+                ctx.token_balance_ata(&reward_token.token, &claimant),
+                reward_token.amount - route_token.amount,
+            );
+        });
+    assert_eq!(
+        ctx.balance(&claimant),
+        reward.native_amount - route.native_amount,
+    );
+    assert_eq!(ctx.balance(&flash_vault_pda().0), 0);
+    assert!(ctx
+        .account::<WithdrawnMarker>(&WithdrawnMarker::pda(&intent_hash_value).0)
+        .is_some());
+    assert!(ctx
+        .account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
+        .is_some());
 }

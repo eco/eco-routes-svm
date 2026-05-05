@@ -27,6 +27,10 @@ pub struct SetFlashFulfillIntent<'info> {
 }
 
 /// Creates the `FlashFulfillIntentAccount` buffer at the PDA for the supplied `(route, reward)`.
+///
+/// Caller's transaction must prepend
+/// `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` — see the
+/// crate-level docs (applies to every instruction in this program).
 pub fn set_flash_fulfill_intent(
     ctx: Context<SetFlashFulfillIntent>,
     args: SetFlashFulfillIntentArgs,
