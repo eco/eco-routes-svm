@@ -10,6 +10,7 @@ A cross-chain intent protocol built on Solana, enabling users to create intents 
 - [Programs](#programs)
 - [Testing](#testing)
 - [Deployment](#deployment)
+- [Release](#release)
 - [Contributing](#contributing)
 
 ## Architecture Overview
@@ -454,6 +455,53 @@ Update `Anchor.toml` for different environments:
 cluster = "localnet"  # or "devnet", "mainnet"
 wallet = "~/.config/solana/id.json"
 ```
+
+## Release
+
+Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub and click **Run workflow**.
+
+### What gets published
+
+Each release attaches mainnet and devnet IDLs as downloadable assets on the GitHub Release:
+
+```
+dist/idl/mainnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper}.json
+dist/idl/devnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper}.json
+```
+
+`dummy-ism` is excluded — it's a test-only program and never shipped.
+
+### Versioning
+
+Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conventional-commit history since the last tag:
+
+| Commit type                        | Bump  |
+| ---------------------------------- | ----- |
+| `feat:` / `feat(scope):`           | minor |
+| `fix:` / `fix(scope):`             | patch |
+| `feat!:` or `BREAKING CHANGE:`     | major |
+| `chore:` / `docs:` / `refactor:` … | none  |
+
+If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
+
+The `version` field in each released crate's `Cargo.toml` (the 5 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. `dummy-ism` is not bumped.
+
+### First release
+
+semantic-release defaults to `1.0.0` for the first release when no prior version tag exists. To start in `0.x` land instead, push an initial tag before triggering the workflow:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Subsequent releases bump from that tag based on commits.
+
+### Maintenance branches
+
+After every successful release, the workflow automatically pushes a `releases/<major>.<minor>.x` branch (e.g. `releases/1.2.x`) pointing at the new tag. To back-port a patch onto an older minor line, check that branch out, cherry-pick or commit the fix, push, then re-run the Release workflow from the Actions UI with the **Use workflow from** branch selector set to `releases/<major>.<minor>.x`.
+
+semantic-release scopes the version bump to that line (so a `fix:` on `releases/1.2.x` produces `v1.2.1`, never `v1.3.x`).
 
 ## Contributing
 

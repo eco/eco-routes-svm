@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  RUST_VERSION: "1.85.1"
+  ANCHOR_VERSION: "0.31.1"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: release
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Compute next version (dry run)
+        id: dry
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          dry_run: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump Cargo.toml versions (runner-only, never committed)
+        if: steps.dry.outputs.new_release_published == 'true'
+        run: scripts/bump-cargo-versions.sh ${{ steps.dry.outputs.new_release_version }}
+
+      - name: Build mainnet IDLs
+        if: steps.dry.outputs.new_release_published == 'true'
+        run: |
+          rm -rf target/idl
+          anchor run build-mainnet
+          mkdir -p dist/idl/mainnet
+          for program in portal hyper_prover local_prover flash_fulfiller proof_helper; do
+            cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.json"
+          done
+
+      - name: Build devnet IDLs
+        if: steps.dry.outputs.new_release_published == 'true'
+        run: |
+          rm -rf target/idl
+          anchor run build-devnet
+          mkdir -p dist/idl/devnet
+          for program in portal hyper_prover local_prover flash_fulfiller proof_helper; do
+            cp "target/idl/${program}.json" "dist/idl/devnet/${program}.json"
+          done
+
+      - name: Release
+        id: semantic
+        if: steps.dry.outputs.new_release_published == 'true'
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create maintenance branch
+        if: steps.semantic.outputs.new_release_published == 'true'
+        run: |
+          VERSION="${{ steps.semantic.outputs.new_release_version }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          BRANCH="releases/${MAJOR}.${MINOR}.x"
+          git push origin "refs/tags/v${VERSION}:refs/heads/${BRANCH}"
