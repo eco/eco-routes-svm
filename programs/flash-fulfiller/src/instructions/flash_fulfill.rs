@@ -53,9 +53,21 @@ pub struct FlashFulfill<'info> {
     /// CHECK: address is validated
     #[account(mut, address = flash_vault_pda().0 @ FlashFulfillerError::InvalidFlashVault)]
     pub flash_vault: UncheckedAccount<'info>,
-    /// CHECK: only read for the IntentHash variant; address validated in handler
+    /// CHECK: only read for the IntentHash variant; address validated in handler.
+    /// Closed manually at the end of the handler when present, refunding rent
+    /// to `writer`. The `writer` account is validated transitively by the PDA
+    /// re-derivation in `resolve_intent`. Anchor does not support
+    /// `Option<NestedAccounts>` (composite Optionals), so the bundle is
+    /// expressed as two separate Optionals plus a runtime "both or neither"
+    /// check in the handler.
     #[account(mut)]
     pub flash_fulfill_intent: Option<Account<'info, FlashFulfillIntentAccount>>,
+    /// CHECK: validated transitively by the buffer PDA re-derivation in
+    /// `resolve_intent`. Required when `FlashFulfillIntent::IntentHash` is used
+    /// (the buffer's rent refund target); omitted with the inline `Intent`
+    /// variant.
+    #[account(mut)]
+    pub writer: Option<UncheckedAccount<'info>>,
     /// CHECK: caller-supplied recipient of leftovers
     #[account(mut)]
     pub claimant: UncheckedAccount<'info>,
@@ -102,7 +114,10 @@ pub struct FlashFulfill<'info> {
 ///
 /// When invoked via `FlashFulfillIntent::IntentHash`, the consumed
 /// `FlashFulfillIntentAccount` buffer is closed at the end and its rent
-/// refunded to `payer`.
+/// refunded to `writer` (the original buffer creator). Caller must supply
+/// both `flash_fulfill_intent` and `writer` together — Anchor does not
+/// support `Option<NestedAccounts>`, so the pairing is enforced at runtime
+/// (`WriterRequired` if buffer is supplied without writer).
 pub fn flash_fulfill<'info>(
     ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,
@@ -114,7 +129,7 @@ pub fn flash_fulfill<'info>(
         FlashFulfillerError::InvalidClaimant
     );
 
-    let close_flash_fulfill_intent = matches!(intent, FlashFulfillIntent::IntentHash(_));
+    let should_close = matches!(intent, FlashFulfillIntent::IntentHash(_));
     let (route, reward) = resolve_intent(&ctx, intent)?;
     let route_hash = route.hash();
     let reward_hash = reward.hash();
@@ -197,10 +212,22 @@ pub fn flash_fulfill<'info>(
     sweep_leftover_tokens(&ctx, &claimant_transfers, flash_vault_seeds)?;
     let native_fee = sweep_leftover_native(&ctx, flash_vault_seeds)?;
 
-    if close_flash_fulfill_intent {
-        ctx.accounts
-            .flash_fulfill_intent
-            .close(ctx.accounts.payer.to_account_info())?;
+    // Gate close on the IntentHash variant. Without this, a caller using the
+    // inline `Intent { route, reward }` variant could pass any other writer's
+    // existing buffer with their own pubkey as `writer` and have the victim's
+    // buffer closed with the rent redirected to themselves — `resolve_intent`
+    // doesn't touch the buffer for the inline variant, so the PDA-derivation
+    // security boundary doesn't run.
+    if should_close {
+        let buffer =
+            ctx.accounts.flash_fulfill_intent.as_ref().expect(
+                "buffer must be Some when intent is IntentHash (validated in resolve_intent)",
+            );
+        let writer =
+            ctx.accounts.writer.as_ref().expect(
+                "writer must be Some when intent is IntentHash (validated in resolve_intent)",
+            );
+        buffer.close(writer.to_account_info())?;
     }
 
     emit_cpi!(FlashFulfilled {
@@ -376,9 +403,30 @@ fn resolve_intent(
                 .flash_fulfill_intent
                 .as_ref()
                 .ok_or(FlashFulfillerError::InvalidFlashFulfillIntentAccount)?;
+            let writer = ctx
+                .accounts
+                .writer
+                .as_ref()
+                .ok_or(FlashFulfillerError::WriterRequired)?;
 
+            // Security boundary: the writer account is the rent-refund target, so we
+            // must verify it actually owns this buffer's PDA. The seed binding
+            // [FLASH_FULFILL_INTENT_SEED, writer.key(), intent_hash] guarantees only
+            // the genuine writer can derive the buffer's address — anyone passing a
+            // different writer account derives a different PDA, which won't match
+            // buffer.key(). Without this re-derivation, any pubkey could be supplied
+            // as `writer` and redirect the close-rent refund.
             require!(
-                intent.key() == FlashFulfillIntentAccount::pda(&intent_hash).0,
+                intent.key() == FlashFulfillIntentAccount::pda(&writer.key(), &intent_hash).0,
+                FlashFulfillerError::InvalidFlashFulfillIntentAccount
+            );
+            // `append_flash_fulfill_intent_chunk` does not validate streamed bytes
+            // against the seed `intent_hash` — without this check, `args.intent_hash`
+            // and the intent actually fulfilled (recomputed from the buffer downstream)
+            // could diverge silently.
+            require!(
+                intent_hash
+                    == types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash()),
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
 

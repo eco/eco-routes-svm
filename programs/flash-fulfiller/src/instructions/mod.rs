@@ -1,8 +1,12 @@
 use anchor_lang::prelude::*;
 
+mod append_flash_fulfill_intent_chunk;
+mod close_flash_fulfill_intent;
 mod flash_fulfill;
 mod set_flash_fulfill_intent;
 
+pub use append_flash_fulfill_intent_chunk::*;
+pub use close_flash_fulfill_intent::*;
 pub use flash_fulfill::*;
 pub use set_flash_fulfill_intent::*;
 
@@ -19,4 +23,8 @@ pub enum FlashFulfillerError {
     InvalidRemainingAccounts,
     /// A claimant ATA does not match the canonical ATA for the claimant + mint, or its owner does not match the claimant.
     InvalidClaimantToken,
+    /// Appending the chunk would overflow the buffer's length (`usize`).
+    BufferLengthOverflow,
+    /// When the buffered IntentHash variant is used, a `writer` account must be supplied.
+    WriterRequired,
 }

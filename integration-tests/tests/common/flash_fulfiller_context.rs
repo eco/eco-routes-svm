@@ -5,7 +5,8 @@ use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::Proof;
 use eco_svm_std::{event_authority_pda, CHAIN_ID};
 use flash_fulfiller::instructions::{
-    FlashFulfillArgs, FlashFulfillIntent, SetFlashFulfillIntentArgs,
+    AppendFlashFulfillIntentChunkArgs, CloseFlashFulfillIntentArgs, FlashFulfillArgs,
+    FlashFulfillIntent, SetFlashFulfillIntentArgs,
 };
 use flash_fulfiller::state::{flash_vault_pda, FlashFulfillIntentAccount};
 use portal::state::{executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker};
@@ -58,12 +59,107 @@ impl FlashFulfiller<'_> {
         self.send_transaction(transaction)
     }
 
+    pub fn append_flash_fulfill_intent_chunk(
+        &mut self,
+        writer: &Keypair,
+        intent_hash_value: eco_svm_std::Bytes32,
+        chunk: Vec<u8>,
+    ) -> TransactionResult {
+        let flash_fulfill_intent =
+            FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
+        let args = AppendFlashFulfillIntentChunkArgs {
+            intent_hash: intent_hash_value,
+            chunk,
+        };
+        let instruction = flash_fulfiller::instruction::AppendFlashFulfillIntentChunk { args };
+        let accounts = flash_fulfiller::accounts::AppendFlashFulfillIntentChunk {
+            writer: writer.pubkey(),
+            flash_fulfill_intent,
+            system_program: anchor_lang::system_program::ID,
+        };
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, writer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn close_flash_fulfill_intent(
+        &mut self,
+        writer: &Keypair,
+        intent_hash_value: eco_svm_std::Bytes32,
+    ) -> TransactionResult {
+        let flash_fulfill_intent =
+            FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
+        let args = CloseFlashFulfillIntentArgs {
+            intent_hash: intent_hash_value,
+        };
+        let instruction = flash_fulfiller::instruction::CloseFlashFulfillIntent { args };
+        let accounts = flash_fulfiller::accounts::CloseFlashFulfillIntent {
+            writer: writer.pubkey(),
+            flash_fulfill_intent,
+        };
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: accounts.to_account_metas(None),
+            data: instruction.data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, writer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn flash_fulfill(
         &mut self,
         intent: FlashFulfillIntent,
+        writer: Option<Pubkey>,
         route: &Route,
         reward: &Reward,
         claimant: Pubkey,
+        claimant_atas: Vec<AccountMeta>,
+        call_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+        let buffer = match (&intent, writer) {
+            (FlashFulfillIntent::IntentHash(_), Some(writer)) => {
+                Some(FlashFulfillIntentAccount::pda(&writer, &intent_hash_value).0)
+            }
+            _ => None,
+        };
+
+        self.flash_fulfill_explicit_buffer(
+            intent,
+            writer,
+            route,
+            reward,
+            claimant,
+            buffer,
+            claimant_atas,
+            call_accounts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn flash_fulfill_explicit_buffer(
+        &mut self,
+        intent: FlashFulfillIntent,
+        writer: Option<Pubkey>,
+        route: &Route,
+        reward: &Reward,
+        claimant: Pubkey,
+        buffer: Option<Pubkey>,
         claimant_atas: Vec<AccountMeta>,
         call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
@@ -123,11 +219,13 @@ impl FlashFulfiller<'_> {
             })
             .collect();
 
-        self.flash_fulfill_with_accounts(
+        self.flash_fulfill_with_buffer(
             intent,
+            writer,
             route,
             reward,
             claimant,
+            buffer,
             reward_accounts,
             route_accounts,
             claimant_atas,
@@ -139,6 +237,7 @@ impl FlashFulfiller<'_> {
     pub fn flash_fulfill_with_accounts(
         &mut self,
         intent: FlashFulfillIntent,
+        writer: Option<Pubkey>,
         route: &Route,
         reward: &Reward,
         claimant: Pubkey,
@@ -148,17 +247,48 @@ impl FlashFulfiller<'_> {
         call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-        let flash_fulfill_intent = match &intent {
-            FlashFulfillIntent::IntentHash(_) => {
-                Some(FlashFulfillIntentAccount::pda(&intent_hash_value).0)
+        let flash_fulfill_intent = match (&intent, writer) {
+            (FlashFulfillIntent::IntentHash(_), Some(writer)) => {
+                Some(FlashFulfillIntentAccount::pda(&writer, &intent_hash_value).0)
             }
-            FlashFulfillIntent::Intent { .. } => None,
+            _ => None,
         };
+
+        self.flash_fulfill_with_buffer(
+            intent,
+            writer,
+            route,
+            reward,
+            claimant,
+            flash_fulfill_intent,
+            reward_accounts,
+            route_accounts,
+            claimant_atas,
+            call_accounts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn flash_fulfill_with_buffer(
+        &mut self,
+        intent: FlashFulfillIntent,
+        writer: Option<Pubkey>,
+        route: &Route,
+        reward: &Reward,
+        claimant: Pubkey,
+        flash_fulfill_intent: Option<Pubkey>,
+        reward_accounts: Vec<AccountMeta>,
+        route_accounts: Vec<AccountMeta>,
+        claimant_atas: Vec<AccountMeta>,
+        call_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
 
         let accounts = flash_fulfiller::accounts::FlashFulfill {
             payer: self.payer.pubkey(),
             flash_vault: flash_vault_pda().0,
             flash_fulfill_intent,
+            writer,
             claimant,
             proof: Proof::pda(&intent_hash_value, &local_prover::ID).0,
             intent_vault: vault_pda(&intent_hash_value).0,

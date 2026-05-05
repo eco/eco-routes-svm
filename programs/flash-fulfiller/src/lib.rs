@@ -22,13 +22,34 @@ use instructions::*;
 pub mod flash_fulfiller {
     use super::*;
 
-    /// Stores a `(route, reward)` pair under the intent-hash PDA so later
-    /// `flash_fulfill` calls can reference the intent by hash only.
+    /// Initializes a buffer at `pda(writer, intent_hash)` and writes the
+    /// supplied `(route, reward)` typed body into it. Use this when the full
+    /// `(route, reward)` body fits in a single transaction.
     pub fn set_flash_fulfill_intent(
         ctx: Context<SetFlashFulfillIntent>,
         args: SetFlashFulfillIntentArgs,
     ) -> Result<()> {
         instructions::set_flash_fulfill_intent(ctx, args)
+    }
+
+    /// Streams raw bytes into the writer's buffer. The first call allocates
+    /// the buffer; subsequent calls realloc and append. Bytes streamed must
+    /// form a valid Borsh `(route, reward)` body once concatenated —
+    /// `flash_fulfill` rejects malformed buffers via deserialization.
+    pub fn append_flash_fulfill_intent_chunk(
+        ctx: Context<AppendFlashFulfillIntentChunk>,
+        args: AppendFlashFulfillIntentChunkArgs,
+    ) -> Result<()> {
+        instructions::append_flash_fulfill_intent_chunk(ctx, args)
+    }
+
+    /// Closes the writer's buffer and refunds rent to the writer. Useful when
+    /// a streamed buffer is abandoned without ever being consumed by `flash_fulfill`.
+    pub fn close_flash_fulfill_intent(
+        ctx: Context<CloseFlashFulfillIntent>,
+        args: CloseFlashFulfillIntentArgs,
+    ) -> Result<()> {
+        instructions::close_flash_fulfill_intent(ctx, args)
     }
 
     /// Atomically proves, withdraws, fulfills, and sweeps leftovers to the

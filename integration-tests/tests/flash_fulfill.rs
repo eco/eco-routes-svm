@@ -1,6 +1,6 @@
 use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::AnchorSerialize;
+use anchor_lang::{AnchorSerialize, Discriminator};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use eco_svm_std::prover::Proof;
@@ -13,6 +13,7 @@ use portal::types::{
     intent_hash, Call, Calldata, CalldataWithAccounts, Reward, Route, TokenAmount,
 };
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 pub mod common;
@@ -120,6 +121,7 @@ fn flash_fulfill_should_succeed() {
             route: route.clone(),
             reward: reward.clone(),
         },
+        None,
         &route,
         &reward,
         claimant,
@@ -172,6 +174,7 @@ fn flash_fulfill_default_claimant_fail() {
             route: route.clone(),
             reward: reward.clone(),
         },
+        None,
         &route,
         &reward,
         claimant,
@@ -197,6 +200,7 @@ fn flash_fulfill_wrong_claimant_ata_fail() {
             route: route.clone(),
             reward: reward.clone(),
         },
+        None,
         &route,
         &reward,
         claimant,
@@ -212,11 +216,16 @@ fn flash_fulfill_from_buffer_should_succeed() {
     let (mut ctx, route, reward, _) = setup();
     let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
 
-    let writer = ctx.payer.insecure_clone();
-    let buffer = FlashFulfillIntentAccount::pda(&intent_hash_value).0;
+    let writer = Keypair::new();
+    ctx.airdrop(&writer.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let buffer = FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
     ctx.flash_fulfiller()
         .set_flash_fulfill_intent(&writer, buffer, route.clone(), reward.clone())
         .unwrap();
+
+    let writer_balance_before = ctx.balance(&writer.pubkey());
+    let buffer_rent = ctx.balance(&buffer);
 
     let claimant = Pubkey::new_unique();
     reward.tokens.iter().for_each(|token| {
@@ -226,6 +235,7 @@ fn flash_fulfill_from_buffer_should_succeed() {
     let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
     let result = ctx.flash_fulfiller().flash_fulfill(
         FlashFulfillIntent::IntentHash(intent_hash_value),
+        Some(writer.pubkey()),
         &route,
         &reward,
         claimant,
@@ -239,6 +249,78 @@ fn flash_fulfill_from_buffer_should_succeed() {
         native_fee: reward.native_amount - route.native_amount,
     })));
     assert!(ctx.account::<FlashFulfillIntentAccount>(&buffer).is_none());
+    assert_eq!(
+        ctx.balance(&writer.pubkey()),
+        writer_balance_before + buffer_rent,
+    );
+}
+
+#[test]
+fn flash_fulfill_intent_hash_consumes_append_built_buffer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let writer = Keypair::new();
+    ctx.airdrop(&writer.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let buffer = FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
+    payload.extend_from_slice(&route.try_to_vec().unwrap());
+    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+
+    let split = payload.len() / 2;
+    let first_chunk = payload[..split].to_vec();
+    let second_chunk = payload[split..].to_vec();
+
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, first_chunk)
+        .unwrap();
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, second_chunk)
+        .unwrap();
+
+    let writer_balance_before = ctx.balance(&writer.pubkey());
+    let buffer_rent = ctx.balance(&buffer);
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill(
+        FlashFulfillIntent::IntentHash(intent_hash_value),
+        Some(writer.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: reward.native_amount - route.native_amount,
+    })));
+
+    reward
+        .tokens
+        .iter()
+        .zip(route.tokens.iter())
+        .for_each(|(reward_token, route_token)| {
+            assert_eq!(
+                ctx.token_balance_ata(&reward_token.token, &claimant),
+                reward_token.amount - route_token.amount,
+            );
+        });
+    assert!(ctx.account::<FlashFulfillIntentAccount>(&buffer).is_none());
+    assert_eq!(
+        ctx.balance(&writer.pubkey()),
+        writer_balance_before + buffer_rent,
+    );
 }
 
 #[test]
@@ -250,9 +332,11 @@ fn flash_fulfill_intent_hash_missing_buffer_fail() {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
 
+    let writer = ctx.payer.pubkey();
     let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
     let result = ctx.flash_fulfiller().flash_fulfill(
         FlashFulfillIntent::IntentHash(intent_hash_value),
+        Some(writer),
         &route,
         &reward,
         claimant,
@@ -397,6 +481,7 @@ fn flash_fulfill_with_calls_should_succeed() {
             route: route.clone(),
             reward: reward.clone(),
         },
+        None,
         &route,
         &reward,
         claimant,
@@ -449,6 +534,7 @@ fn flash_fulfill_token_2022_should_succeed() {
             route: route.clone(),
             reward: reward.clone(),
         },
+        None,
         &route,
         &reward,
         claimant,
@@ -547,6 +633,7 @@ fn flash_fulfill_zero_leftover_should_succeed() {
             route: route.clone(),
             reward: reward.clone(),
         },
+        None,
         &route,
         &reward,
         claimant,
@@ -571,4 +658,293 @@ fn flash_fulfill_zero_leftover_should_succeed() {
     assert!(ctx
         .account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
         .is_some());
+}
+
+#[test]
+fn flash_fulfill_squatter_buffer_does_not_affect_writer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let mallory = Keypair::new();
+    ctx.airdrop(&mallory.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let mallory_buffer = FlashFulfillIntentAccount::pda(&mallory.pubkey(), &intent_hash_value).0;
+    ctx.flash_fulfiller()
+        .set_flash_fulfill_intent(&mallory, mallory_buffer, route.clone(), reward.clone())
+        .unwrap();
+
+    let writer = ctx.payer.insecure_clone();
+    let writer_buffer = FlashFulfillIntentAccount::pda(&writer.pubkey(), &intent_hash_value).0;
+    ctx.flash_fulfiller()
+        .set_flash_fulfill_intent(&writer, writer_buffer, route.clone(), reward.clone())
+        .unwrap();
+
+    assert_ne!(mallory_buffer, writer_buffer);
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill(
+        FlashFulfillIntent::IntentHash(intent_hash_value),
+        Some(writer.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: reward.native_amount - route.native_amount,
+    })));
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&writer_buffer)
+        .is_none());
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&mallory_buffer)
+        .is_some());
+}
+
+#[test]
+fn flash_fulfill_intent_hash_rejects_wrong_writer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let alice = ctx.payer.insecure_clone();
+    let alice_buffer = FlashFulfillIntentAccount::pda(&alice.pubkey(), &intent_hash_value).0;
+    ctx.flash_fulfiller()
+        .set_flash_fulfill_intent(&alice, alice_buffer, route.clone(), reward.clone())
+        .unwrap();
+
+    let mallory = Keypair::new();
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::IntentHash(intent_hash_value),
+        Some(mallory.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        Some(alice_buffer),
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        FlashFulfillerError::InvalidFlashFulfillIntentAccount
+    )));
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&alice_buffer)
+        .is_some());
+}
+
+#[test]
+fn flash_fulfill_intent_hash_rejects_mismatched_intent_hash() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_a = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let alice = ctx.payer.insecure_clone();
+    let alice_buffer = FlashFulfillIntentAccount::pda(&alice.pubkey(), &intent_hash_a).0;
+    ctx.flash_fulfiller()
+        .set_flash_fulfill_intent(&alice, alice_buffer, route.clone(), reward.clone())
+        .unwrap();
+
+    let mut intent_hash_b_bytes: [u8; 32] = intent_hash_a.into();
+    intent_hash_b_bytes[0] ^= 0x01;
+    let intent_hash_b = intent_hash_b_bytes.into();
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::IntentHash(intent_hash_b),
+        Some(alice.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        Some(alice_buffer),
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        FlashFulfillerError::InvalidFlashFulfillIntentAccount
+    )));
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&alice_buffer)
+        .is_some());
+}
+
+#[test]
+fn flash_fulfill_intent_hash_rejects_buffer_content_hash_mismatch() {
+    let (mut ctx, route, reward, _) = setup();
+    let real_intent_hash = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let mut fake_intent_hash_bytes: [u8; 32] = real_intent_hash.into();
+    fake_intent_hash_bytes[0] ^= 0x01;
+    let fake_intent_hash = fake_intent_hash_bytes.into();
+
+    let writer = Keypair::new();
+    ctx.airdrop(&writer.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let fake_buffer = FlashFulfillIntentAccount::pda(&writer.pubkey(), &fake_intent_hash).0;
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
+    payload.extend_from_slice(&route.try_to_vec().unwrap());
+    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+
+    let split = payload.len() / 2;
+    let first_chunk = payload[..split].to_vec();
+    let second_chunk = payload[split..].to_vec();
+
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_intent_chunk(&writer, fake_intent_hash, first_chunk)
+        .unwrap();
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_intent_chunk(&writer, fake_intent_hash, second_chunk)
+        .unwrap();
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::IntentHash(fake_intent_hash),
+        Some(writer.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        Some(fake_buffer),
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        FlashFulfillerError::InvalidFlashFulfillIntentAccount
+    )));
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&fake_buffer)
+        .is_some());
+}
+
+#[test]
+fn flash_fulfill_inline_variant_works_without_buffer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::Intent {
+            route: route.clone(),
+            reward: reward.clone(),
+        },
+        None,
+        &route,
+        &reward,
+        claimant,
+        None,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: reward.native_amount - route.native_amount,
+    })));
+    assert!(ctx
+        .account::<WithdrawnMarker>(&WithdrawnMarker::pda(&intent_hash_value).0)
+        .is_some());
+    assert!(ctx
+        .account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
+        .is_some());
+}
+
+#[test]
+fn flash_fulfill_intent_hash_requires_buffer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::IntentHash(intent_hash_value),
+        None,
+        &route,
+        &reward,
+        claimant,
+        None,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        FlashFulfillerError::InvalidFlashFulfillIntentAccount
+    )));
+}
+
+#[test]
+fn flash_fulfill_inline_variant_does_not_close_passed_buffer() {
+    let (mut ctx, route, reward, _) = setup();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let alice = Keypair::new();
+    ctx.airdrop(&alice.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let alice_buffer = FlashFulfillIntentAccount::pda(&alice.pubkey(), &intent_hash_value).0;
+    ctx.flash_fulfiller()
+        .set_flash_fulfill_intent(&alice, alice_buffer, route.clone(), reward.clone())
+        .unwrap();
+
+    let alice_buffer_lamports_before = ctx.balance(&alice_buffer);
+
+    let mallory = Keypair::new();
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::Intent {
+            route: route.clone(),
+            reward: reward.clone(),
+        },
+        Some(mallory.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        Some(alice_buffer),
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&alice_buffer)
+        .is_some());
+    assert_eq!(ctx.balance(&alice_buffer), alice_buffer_lamports_before);
+    assert_eq!(ctx.balance(&mallory.pubkey()), 0);
 }
