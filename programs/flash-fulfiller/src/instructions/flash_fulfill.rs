@@ -420,6 +420,15 @@ fn resolve_intent(
                 intent.key() == FlashFulfillIntentAccount::pda(&writer.key(), &intent_hash).0,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
+            // `append_flash_fulfill_intent_chunk` does not validate streamed bytes
+            // against the seed `intent_hash` — without this check, `args.intent_hash`
+            // and the intent actually fulfilled (recomputed from the buffer downstream)
+            // could diverge silently.
+            require!(
+                intent_hash
+                    == types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash()),
+                FlashFulfillerError::InvalidFlashFulfillIntentAccount
+            );
 
             Ok((intent.route.clone(), intent.reward.clone()))
         }

@@ -788,6 +788,61 @@ fn flash_fulfill_intent_hash_rejects_mismatched_intent_hash() {
 }
 
 #[test]
+fn flash_fulfill_intent_hash_rejects_buffer_content_hash_mismatch() {
+    let (mut ctx, route, reward, _) = setup();
+    let real_intent_hash = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+    let mut fake_intent_hash_bytes: [u8; 32] = real_intent_hash.into();
+    fake_intent_hash_bytes[0] ^= 0x01;
+    let fake_intent_hash = fake_intent_hash_bytes.into();
+
+    let writer = Keypair::new();
+    ctx.airdrop(&writer.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let fake_buffer = FlashFulfillIntentAccount::pda(&writer.pubkey(), &fake_intent_hash).0;
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
+    payload.extend_from_slice(&route.try_to_vec().unwrap());
+    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+
+    let split = payload.len() / 2;
+    let first_chunk = payload[..split].to_vec();
+    let second_chunk = payload[split..].to_vec();
+
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_intent_chunk(&writer, fake_intent_hash, first_chunk)
+        .unwrap();
+    ctx.flash_fulfiller()
+        .append_flash_fulfill_intent_chunk(&writer, fake_intent_hash, second_chunk)
+        .unwrap();
+
+    let claimant = Pubkey::new_unique();
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+    let result = ctx.flash_fulfiller().flash_fulfill_explicit_buffer(
+        FlashFulfillIntent::IntentHash(fake_intent_hash),
+        Some(writer.pubkey()),
+        &route,
+        &reward,
+        claimant,
+        Some(fake_buffer),
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        FlashFulfillerError::InvalidFlashFulfillIntentAccount
+    )));
+    assert!(ctx
+        .account::<FlashFulfillIntentAccount>(&fake_buffer)
+        .is_some());
+}
+
+#[test]
 fn flash_fulfill_inline_variant_works_without_buffer() {
     let (mut ctx, route, reward, _) = setup();
     let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
