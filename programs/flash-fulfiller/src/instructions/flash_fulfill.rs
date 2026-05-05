@@ -107,7 +107,13 @@ pub struct FlashFulfill<'info> {
 
 /// Executes the full prove → withdraw → fulfill → sweep sequence atomically.
 ///
-/// Remaining accounts layout: reward 3-tuples (intent_vault_ata, flash_vault_ata, mint)
+/// Caller's transaction must prepend
+/// `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` — see the
+/// crate-level docs (applies to every instruction in this program).
+///
+/// # Remaining accounts layout
+///
+/// reward 3-tuples (intent_vault_ata, flash_vault_ata, mint)
 /// × reward.tokens.len(), then route 3-tuples (flash_vault_ata, executor_ata, mint)
 /// × route.tokens.len(), then one claimant ATA per reward mint, then any accounts
 /// referenced by `route.calls`.

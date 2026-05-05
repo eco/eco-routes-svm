@@ -44,6 +44,10 @@ pub struct AppendFlashFulfillIntentChunk<'info> {
 /// bytes; subsequent calls realloc the buffer to its current length plus `chunk.len()`
 /// and copy `chunk` into the trailing slice. The PDA's binding to `writer` makes
 /// the (per-writer) ordering of chunks the writer's responsibility.
+///
+/// Caller's transaction must prepend
+/// `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` — see the
+/// crate-level docs (applies to every instruction in this program).
 pub fn append_flash_fulfill_intent_chunk(
     ctx: Context<AppendFlashFulfillIntentChunk>,
     args: AppendFlashFulfillIntentChunkArgs,

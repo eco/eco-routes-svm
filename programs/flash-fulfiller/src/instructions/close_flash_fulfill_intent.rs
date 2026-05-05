@@ -38,6 +38,10 @@ pub struct CloseFlashFulfillIntent<'info> {
 /// Closes the writer's buffer and refunds rent to `writer`. Bypasses Borsh
 /// deserialization so a writer who streamed malformed bytes via `append`
 /// can still reclaim the rent and retry.
+///
+/// Caller's transaction must prepend
+/// `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` — see the
+/// crate-level docs (applies to every instruction in this program).
 pub fn close_flash_fulfill_intent(
     ctx: Context<CloseFlashFulfillIntent>,
     _args: CloseFlashFulfillIntentArgs,

@@ -6,6 +6,18 @@
 //! Living in its own program (rather than extending `local-prover`) avoids
 //! Solana's reentrancy rule — `local_prover` only appears on the stack
 //! inside portal's `close_proof` CPI, never twice.
+//!
+//! # Client requirement
+//!
+//! Every transaction invoking *any* instruction in this program must prepend
+//! `ComputeBudgetInstruction::request_heap_frame(256 * 1024)`. The 256 KB
+//! [`BumpAllocator`] (see `ALLOCATOR` below) is `#[global_allocator]`, so it
+//! services every heap allocation in the binary — Anchor's account validation
+//! and Borsh arg deserialization on entry to any handler included. The VM
+//! only maps the default 32 KB heap region unless the caller asks for more,
+//! and without the request the first allocation access-violates immediately.
+//!
+//! [`BumpAllocator`]: anchor_lang::solana_program::entrypoint::BumpAllocator
 
 use anchor_lang::prelude::*;
 
