@@ -59,7 +59,7 @@ jobs:
           anchor run build-mainnet
           mkdir -p dist/idl/mainnet
           for program in portal hyper_prover local_prover flash_fulfiller proof_helper; do
-            cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.json"
+            cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.mainnet.json"
           done
 
       - name: Build devnet IDLs
@@ -69,7 +69,7 @@ jobs:
           anchor run build-devnet
           mkdir -p dist/idl/devnet
           for program in portal hyper_prover local_prover flash_fulfiller proof_helper; do
-            cp "target/idl/${program}.json" "dist/idl/devnet/${program}.json"
+            cp "target/idl/${program}.json" "dist/idl/devnet/${program}.devnet.json"
           done
 
       - name: Release
