@@ -1,4 +1,3 @@
-use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{AnchorSerialize, Discriminator};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
@@ -381,7 +380,9 @@ fn flash_fulfill_intent_hash_missing_buffer_fail() {
         vec![],
     );
 
-    assert!(result.is_err_and(common::is_error(ErrorCode::AccountNotInitialized)));
+    assert!(result.is_err_and(common::is_error(
+        FlashFulfillerError::InvalidFlashFulfillIntentAccount
+    )));
 }
 
 #[test]
