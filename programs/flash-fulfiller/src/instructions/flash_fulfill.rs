@@ -53,15 +53,20 @@ pub struct FlashFulfill<'info> {
     /// CHECK: address is validated
     #[account(mut, address = flash_vault_pda().0 @ FlashFulfillerError::InvalidFlashVault)]
     pub flash_vault: UncheckedAccount<'info>,
-    /// CHECK: only read for the IntentHash variant; address validated in handler.
-    /// Closed manually at the end of the handler when present, refunding rent
-    /// to `writer`. The `writer` account is validated transitively by the PDA
-    /// re-derivation in `resolve_intent`. Anchor does not support
-    /// `Option<NestedAccounts>` (composite Optionals), so the bundle is
-    /// expressed as two separate Optionals plus a runtime "both or neither"
-    /// check in the handler.
+    /// CHECK: declared as `UncheckedAccount` (not `Account<_, FlashFulfillIntentAccount>`)
+    /// to skip Anchor's auto owner-check + discriminator-check + Borsh deserialize on
+    /// instruction entry, since this account is unused for the inline `Intent` variant
+    /// and we want a single deserialize at consume time. The full security boundary —
+    /// owner == this program, first 8 bytes match `FlashFulfillIntentAccount`'s
+    /// discriminator, and the PDA re-derives from `(writer, intent_hash)` — is enforced
+    /// manually in `resolve_intent` before any field of the buffer is trusted. Closed
+    /// manually at the end of the handler when present, refunding rent to `writer`.
+    /// The `writer` account is validated transitively by the PDA re-derivation in
+    /// `resolve_intent`. Anchor does not support `Option<NestedAccounts>` (composite
+    /// Optionals), so the bundle is expressed as two separate Optionals plus a runtime
+    /// "both or neither" check in the handler.
     #[account(mut)]
-    pub flash_fulfill_intent: Option<Account<'info, FlashFulfillIntentAccount>>,
+    pub flash_fulfill_intent: Option<UncheckedAccount<'info>>,
     /// CHECK: validated transitively by the buffer PDA re-derivation in
     /// `resolve_intent`. Required when `FlashFulfillIntent::IntentHash` is used
     /// (the buffer's rent refund target); omitted with the inline `Intent`
@@ -125,7 +130,7 @@ pub struct FlashFulfill<'info> {
 /// support `Option<NestedAccounts>`, so the pairing is enforced at runtime
 /// (`WriterRequired` if buffer is supplied without writer).
 pub fn flash_fulfill<'info>(
-    mut ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,
 ) -> Result<()> {
     let FlashFulfillArgs { intent } = args;
@@ -136,7 +141,7 @@ pub fn flash_fulfill<'info>(
     );
 
     let should_close = matches!(intent, FlashFulfillIntent::IntentHash(_));
-    let (route, reward, route_hash, reward_hash, intent_hash) = resolve_intent(&mut ctx, intent)?;
+    let (route, reward, route_hash, reward_hash, intent_hash) = resolve_intent(&ctx, intent)?;
     let native_fee = reward.native_amount.saturating_sub(route.native_amount);
     let flash_vault = ctx.accounts.flash_vault.key();
     let (_, flash_vault_bump) = flash_vault_pda();
@@ -231,7 +236,26 @@ pub fn flash_fulfill<'info>(
             ctx.accounts.writer.as_ref().expect(
                 "writer must be Some when intent is IntentHash (validated in resolve_intent)",
             );
-        buffer.close(writer.to_account_info())?;
+        // Manual replication of Anchor's `Account::close` for an `UncheckedAccount`,
+        // since the buffer is no longer wrapped by `Account<_, T>`. Sequence:
+        //   1. Drain lamports from `buffer` into `writer` (rent refund target).
+        //   2. Zero the 8-byte discriminator so any code path that re-reads the
+        //      account in the same tx cannot match a `FlashFulfillIntentAccount`.
+        //   3. Realloc data to 0 bytes.
+        //   4. Reassign ownership to the system program — completes the close.
+        let dest_starting_lamports = writer.lamports();
+        **writer.lamports.borrow_mut() = dest_starting_lamports
+            .checked_add(buffer.lamports())
+            .ok_or(FlashFulfillerError::BufferLengthOverflow)?;
+        **buffer.lamports.borrow_mut() = 0;
+        {
+            let mut data = buffer.try_borrow_mut_data()?;
+            if data.len() >= 8 {
+                data[..8].fill(0);
+            }
+        }
+        buffer.realloc(0, false)?;
+        buffer.assign(&anchor_lang::system_program::ID);
     }
 
     emit_cpi!(FlashFulfilled {
@@ -417,7 +441,7 @@ fn sweep_leftover_native<'info>(
 }
 
 fn resolve_intent(
-    ctx: &mut Context<FlashFulfill>,
+    ctx: &Context<FlashFulfill>,
     intent: FlashFulfillIntent,
 ) -> Result<(Route, Reward, Bytes32, Bytes32, Bytes32)> {
     match intent {
@@ -428,16 +452,46 @@ fn resolve_intent(
             Ok((route, reward, route_hash, reward_hash, intent_hash))
         }
         FlashFulfillIntent::IntentHash(intent_hash) => {
-            let intent = ctx
+            let buffer = ctx
                 .accounts
                 .flash_fulfill_intent
-                .as_mut()
+                .as_ref()
                 .ok_or(FlashFulfillerError::InvalidFlashFulfillIntentAccount)?;
             let writer = ctx
                 .accounts
                 .writer
                 .as_ref()
                 .ok_or(FlashFulfillerError::WriterRequired)?;
+
+            // Owner check: the buffer wrapper is now `UncheckedAccount`, so Anchor no
+            // longer auto-verifies the account is owned by this program. Without this
+            // check, a caller could pass a system-program-owned (or other-program-owned)
+            // account whose contents happen to deserialize as `FlashFulfillIntentAccount`.
+            require!(
+                buffer.owner == &crate::ID,
+                FlashFulfillerError::InvalidFlashFulfillIntentAccount
+            );
+
+            let data = buffer.try_borrow_data()?;
+            // Discriminator-length check: needed before slicing `data[..8]`. Catches
+            // freshly-created uninitialized buffers (size 0) and undersized accounts.
+            require!(
+                data.len() >= 8,
+                FlashFulfillerError::InvalidFlashFulfillIntentAccount
+            );
+            // Discriminator check: Anchor previously enforced that the first 8 bytes
+            // identify this exact account type. Now done manually using the
+            // `DISCRIMINATOR` const exposed by `#[account]` (Anchor 0.30+).
+            require!(
+                &data[..8] == FlashFulfillIntentAccount::DISCRIMINATOR,
+                FlashFulfillerError::InvalidFlashFulfillIntentAccount
+            );
+            // Borsh deserialize: replaces the auto-deserialize Anchor's `Account<_, T>`
+            // did on entry. Done once here; no re-serialize at exit since the buffer
+            // is closed at the end of the handler.
+            let intent_account: FlashFulfillIntentAccount =
+                AnchorDeserialize::deserialize(&mut &data[8..])?;
+            drop(data);
 
             // Security boundary: the writer account is the rent-refund target, so we
             // must verify it actually owns this buffer's PDA. The seed binding
@@ -447,41 +501,22 @@ fn resolve_intent(
             // buffer.key(). Without this re-derivation, any pubkey could be supplied
             // as `writer` and redirect the close-rent refund.
             require!(
-                intent.key() == FlashFulfillIntentAccount::pda(&writer.key(), &intent_hash).0,
+                buffer.key() == FlashFulfillIntentAccount::pda(&writer.key(), &intent_hash).0,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
             // `append_flash_fulfill_intent_chunk` does not validate streamed bytes
             // against the seed `intent_hash` — without this check, `args.intent_hash`
             // and the intent actually fulfilled (recomputed from the buffer downstream)
             // could diverge silently.
-            let route_hash = intent.route.hash();
-            let reward_hash = intent.reward.hash();
+            let FlashFulfillIntentAccount { route, reward } = intent_account;
+            let route_hash = route.hash();
+            let reward_hash = reward.hash();
             let computed_intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
             require!(
                 intent_hash == computed_intent_hash,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
 
-            // The buffer is closed at the end of the handler, so move the Vec
-            // payloads out of it instead of cloning the (potentially ~2.5 KB)
-            // Route + Reward. Small Copy fields are read inline; only the Vec
-            // fields go through `mem::take` to avoid requiring Default on
-            // portal types.
-            let route = Route {
-                salt: intent.route.salt,
-                deadline: intent.route.deadline,
-                portal: intent.route.portal,
-                native_amount: intent.route.native_amount,
-                tokens: std::mem::take(&mut intent.route.tokens),
-                calls: std::mem::take(&mut intent.route.calls),
-            };
-            let reward = Reward {
-                deadline: intent.reward.deadline,
-                creator: intent.reward.creator,
-                prover: intent.reward.prover,
-                native_amount: intent.reward.native_amount,
-                tokens: std::mem::take(&mut intent.reward.tokens),
-            };
             Ok((route, reward, route_hash, reward_hash, intent_hash))
         }
     }
