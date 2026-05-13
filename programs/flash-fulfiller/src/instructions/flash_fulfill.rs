@@ -56,15 +56,16 @@ pub struct FlashFulfill<'info> {
     /// CHECK: declared as `UncheckedAccount` (not `Account<_, FlashFulfillIntentAccount>`)
     /// to skip Anchor's auto owner-check + discriminator-check + Borsh deserialize on
     /// instruction entry, since this account is unused for the inline `Intent` variant
-    /// and we want a single deserialize at consume time. The full security boundary —
-    /// owner == this program, first 8 bytes match `FlashFulfillIntentAccount`'s
-    /// discriminator, and the PDA re-derives from `(writer, intent_hash)` — is enforced
-    /// manually in `resolve_intent` before any field of the buffer is trusted. Closed
-    /// manually at the end of the handler when present, refunding rent to `writer`.
-    /// The `writer` account is validated transitively by the PDA re-derivation in
-    /// `resolve_intent`. Anchor does not support `Option<NestedAccounts>` (composite
-    /// Optionals), so the bundle is expressed as two separate Optionals plus a runtime
-    /// "both or neither" check in the handler.
+    /// and we want a single deserialize at consume time. The full security boundary is
+    /// enforced manually in `resolve_intent` before any field of the buffer is trusted:
+    /// (1) owner == this program, (2) `data.len() >= 8`, (3) first 8 bytes match
+    /// `FlashFulfillIntentAccount`'s discriminator, (4) the PDA re-derives from
+    /// `(writer, intent_hash)`, and (5) the recomputed `intent_hash` matches the
+    /// seed-supplied one. Closed manually at the end of the handler when present,
+    /// refunding rent to `writer`. The `writer` account is validated transitively by
+    /// the PDA re-derivation in `resolve_intent`. Anchor does not support
+    /// `Option<NestedAccounts>` (composite Optionals), so the bundle is expressed as
+    /// two separate Optionals plus a runtime "both or neither" check in the handler.
     #[account(mut)]
     pub flash_fulfill_intent: Option<UncheckedAccount<'info>>,
     /// CHECK: validated transitively by the buffer PDA re-derivation in
@@ -300,10 +301,9 @@ fn init_flash_vault_reward_ata<'info>(
     ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     transfer: &TokenTransferAccounts<'info>,
 ) -> Result<()> {
-    // Short-circuit: if the ATA already exists, the SPL-level idempotent op is
-    // a no-op anyway, but the CPI itself still costs ~5-15K CU. The PDA
-    // derivation is deterministic and ownership is verified downstream by the
-    // SPL Token transfer, so it is safe to skip when data is non-empty.
+    // The `create` CPI below is non-idempotent — it errors on an already-initialized
+    // ATA. This guard turns it into a no-op when the ATA exists. Downstream SPL
+    // transfer re-verifies ownership, so skipping the create is safe.
     if !transfer.to.data_is_empty() {
         return Ok(());
     }
@@ -453,31 +453,25 @@ fn resolve_intent(
                 .as_ref()
                 .ok_or(FlashFulfillerError::WriterRequired)?;
 
-            // Owner check: the buffer wrapper is now `UncheckedAccount`, so Anchor no
-            // longer auto-verifies the account is owned by this program. Without this
-            // check, a caller could pass a system-program-owned (or other-program-owned)
-            // account whose contents happen to deserialize as `FlashFulfillIntentAccount`.
+            // UncheckedAccount skips Anchor's auto owner-check; without this, a
+            // foreign-owned account whose bytes happen to deserialize as
+            // `FlashFulfillIntentAccount` would slip through.
             require!(
                 buffer.owner == &crate::ID,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
 
             let data = buffer.try_borrow_data()?;
-            // Discriminator-length check: needed before slicing `data[..8]`. Catches
-            // freshly-created uninitialized buffers (size 0) and undersized accounts.
+            // Required before slicing `data[..8]` — catches uninitialized buffers (size 0).
             require!(
                 data.len() >= 8,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
-            // Discriminator check: Anchor previously enforced that the first 8 bytes
-            // identify this exact account type. Now done manually using the
-            // `DISCRIMINATOR` const exposed by `#[account]` (Anchor 0.30+).
             require!(
                 &data[..8] == FlashFulfillIntentAccount::DISCRIMINATOR,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
-            // Borsh deserialize: replaces the auto-deserialize Anchor's `Account<_, T>`
-            // did on entry. Done once here; no re-serialize at exit since the buffer
+            // Single deserialize at consume time — no exit-serialize since the buffer
             // is closed at the end of the handler.
             let intent_account: FlashFulfillIntentAccount =
                 AnchorDeserialize::deserialize(&mut &data[8..])?;

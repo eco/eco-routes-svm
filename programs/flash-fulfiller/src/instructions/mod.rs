@@ -39,11 +39,9 @@ pub fn close_buffer<'info>(
     let dest_starting_lamports = destination.lamports();
     **destination.lamports.borrow_mut() = dest_starting_lamports
         .checked_add(buffer.lamports())
-        .ok_or(FlashFulfillerError::BufferLengthOverflow)?;
+        .expect("lamport sum cannot overflow u64");
     **buffer.lamports.borrow_mut() = 0;
 
-    buffer.realloc(0, false)?;
     buffer.assign(&anchor_lang::system_program::ID);
-
-    Ok(())
+    buffer.realloc(0, false).map_err(Into::into)
 }
