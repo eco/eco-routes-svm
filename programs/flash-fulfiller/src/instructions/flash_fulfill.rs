@@ -125,7 +125,7 @@ pub struct FlashFulfill<'info> {
 /// support `Option<NestedAccounts>`, so the pairing is enforced at runtime
 /// (`WriterRequired` if buffer is supplied without writer).
 pub fn flash_fulfill<'info>(
-    ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    mut ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,
 ) -> Result<()> {
     let FlashFulfillArgs { intent } = args;
@@ -136,7 +136,7 @@ pub fn flash_fulfill<'info>(
     );
 
     let should_close = matches!(intent, FlashFulfillIntent::IntentHash(_));
-    let (route, reward) = resolve_intent(&ctx, intent)?;
+    let (route, reward) = resolve_intent(&mut ctx, intent)?;
     let route_hash = route.hash();
     let reward_hash = reward.hash();
     let intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
@@ -420,7 +420,7 @@ fn sweep_leftover_native<'info>(
 }
 
 fn resolve_intent(
-    ctx: &Context<FlashFulfill>,
+    ctx: &mut Context<FlashFulfill>,
     intent: FlashFulfillIntent,
 ) -> Result<(Route, Reward)> {
     match intent {
@@ -429,7 +429,7 @@ fn resolve_intent(
             let intent = ctx
                 .accounts
                 .flash_fulfill_intent
-                .as_ref()
+                .as_mut()
                 .ok_or(FlashFulfillerError::InvalidFlashFulfillIntentAccount)?;
             let writer = ctx
                 .accounts
@@ -458,7 +458,27 @@ fn resolve_intent(
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
 
-            Ok((intent.route.clone(), intent.reward.clone()))
+            // The buffer is closed at the end of the handler, so move the Vec
+            // payloads out of it instead of cloning the (potentially ~2.5 KB)
+            // Route + Reward. Small Copy fields are read inline; only the Vec
+            // fields go through `mem::take` to avoid requiring Default on
+            // portal types.
+            let route = Route {
+                salt: intent.route.salt,
+                deadline: intent.route.deadline,
+                portal: intent.route.portal,
+                native_amount: intent.route.native_amount,
+                tokens: std::mem::take(&mut intent.route.tokens),
+                calls: std::mem::take(&mut intent.route.calls),
+            };
+            let reward = Reward {
+                deadline: intent.reward.deadline,
+                creator: intent.reward.creator,
+                prover: intent.reward.prover,
+                native_amount: intent.reward.native_amount,
+                tokens: std::mem::take(&mut intent.reward.tokens),
+            };
+            Ok((route, reward))
         }
     }
 }
