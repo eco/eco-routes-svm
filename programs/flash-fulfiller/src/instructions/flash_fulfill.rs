@@ -287,15 +287,16 @@ fn extract_flash_fulfill_accounts<'a, 'info>(
     init_flash_vault_reward_atas(ctx, &reward)?;
 
     let route = VecTokenTransferAccounts::try_from(route_slice)?.into_inner();
-    let claimant = reward
-        .iter()
-        .zip(claimant_atas.iter())
-        .map(|(reward_transfer, claimant_ata)| TokenTransferAccounts {
+    // Pre-size to avoid bump-allocator doubling waste — see `cpi/fulfill.rs:26-33`
+    // for the full rationale (Solana's bump allocator never frees).
+    let mut claimant = Vec::with_capacity(reward_token_count);
+    claimant.extend(reward.iter().zip(claimant_atas.iter()).map(
+        |(reward_transfer, claimant_ata)| TokenTransferAccounts {
             from: reward_transfer.to.to_account_info(),
             to: claimant_ata.to_account_info(),
             mint: reward_transfer.mint.to_account_info(),
-        })
-        .collect();
+        },
+    ));
 
     Ok(FlashFulfillAccounts {
         reward,
