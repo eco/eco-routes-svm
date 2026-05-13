@@ -31,3 +31,19 @@ pub enum FlashFulfillerError {
     /// or arithmetic on the prefix length overflows.
     InvalidCallData,
 }
+
+pub fn close_buffer<'info>(
+    buffer: &AccountInfo<'info>,
+    destination: &AccountInfo<'info>,
+) -> Result<()> {
+    let dest_starting_lamports = destination.lamports();
+    **destination.lamports.borrow_mut() = dest_starting_lamports
+        .checked_add(buffer.lamports())
+        .ok_or(FlashFulfillerError::BufferLengthOverflow)?;
+    **buffer.lamports.borrow_mut() = 0;
+
+    buffer.realloc(0, false)?;
+    buffer.assign(&anchor_lang::system_program::ID);
+
+    Ok(())
+}

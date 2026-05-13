@@ -17,7 +17,7 @@ use spl_pod::option::Nullable;
 
 use crate::cpi;
 use crate::events::FlashFulfilled;
-use crate::instructions::FlashFulfillerError;
+use crate::instructions::{close_buffer, FlashFulfillerError};
 use crate::state::{flash_vault_pda, FlashFulfillIntentAccount, FLASH_VAULT_SEED};
 
 struct FlashFulfillAccounts<'a, 'info> {
@@ -236,26 +236,7 @@ pub fn flash_fulfill<'info>(
             ctx.accounts.writer.as_ref().expect(
                 "writer must be Some when intent is IntentHash (validated in resolve_intent)",
             );
-        // Manual replication of Anchor's `Account::close` for an `UncheckedAccount`,
-        // since the buffer is no longer wrapped by `Account<_, T>`. Sequence:
-        //   1. Drain lamports from `buffer` into `writer` (rent refund target).
-        //   2. Zero the 8-byte discriminator so any code path that re-reads the
-        //      account in the same tx cannot match a `FlashFulfillIntentAccount`.
-        //   3. Realloc data to 0 bytes.
-        //   4. Reassign ownership to the system program — completes the close.
-        let dest_starting_lamports = writer.lamports();
-        **writer.lamports.borrow_mut() = dest_starting_lamports
-            .checked_add(buffer.lamports())
-            .ok_or(FlashFulfillerError::BufferLengthOverflow)?;
-        **buffer.lamports.borrow_mut() = 0;
-        {
-            let mut data = buffer.try_borrow_mut_data()?;
-            if data.len() >= 8 {
-                data[..8].fill(0);
-            }
-        }
-        buffer.realloc(0, false)?;
-        buffer.assign(&anchor_lang::system_program::ID);
+        close_buffer(buffer, writer)?;
     }
 
     emit_cpi!(FlashFulfilled {
@@ -332,7 +313,7 @@ fn init_flash_vault_reward_ata<'info>(
         &ctx.accounts.token_2022_program,
     )?;
 
-    associated_token::create_idempotent(CpiContext::new(
+    associated_token::create(CpiContext::new(
         ctx.accounts.associated_token_program.to_account_info(),
         associated_token::Create {
             payer: ctx.accounts.payer.to_account_info(),
@@ -500,7 +481,6 @@ fn resolve_intent(
             // is closed at the end of the handler.
             let intent_account: FlashFulfillIntentAccount =
                 AnchorDeserialize::deserialize(&mut &data[8..])?;
-            drop(data);
 
             // Security boundary: the writer account is the rent-refund target, so we
             // must verify it actually owns this buffer's PDA. The seed binding

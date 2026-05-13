@@ -1,8 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_lang::system_program;
 use eco_svm_std::Bytes32;
 
-use crate::instructions::FlashFulfillerError;
+use crate::instructions::{close_buffer, FlashFulfillerError};
 use crate::state::FLASH_FULFILL_INTENT_SEED;
 
 /// Args for [`close_flash_fulfill_intent`]: the intent hash identifying the
@@ -46,15 +45,5 @@ pub fn close_flash_fulfill_intent(
     ctx: Context<CloseFlashFulfillIntent>,
     _args: CloseFlashFulfillIntentArgs,
 ) -> Result<()> {
-    let buffer = ctx.accounts.flash_fulfill_intent.to_account_info();
-    let writer = ctx.accounts.writer.to_account_info();
-
-    let dest_starting_lamports = writer.lamports();
-    **writer.lamports.borrow_mut() = dest_starting_lamports
-        .checked_add(buffer.lamports())
-        .expect("lamport sum cannot overflow u64");
-    **buffer.lamports.borrow_mut() = 0;
-
-    buffer.assign(&system_program::ID);
-    buffer.realloc(0, false).map_err(Into::into)
+    close_buffer(&ctx.accounts.flash_fulfill_intent, &ctx.accounts.writer)
 }
