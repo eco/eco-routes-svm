@@ -318,6 +318,14 @@ fn init_flash_vault_reward_ata<'info>(
     ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
     transfer: &TokenTransferAccounts<'info>,
 ) -> Result<()> {
+    // Short-circuit: if the ATA already exists, the SPL-level idempotent op is
+    // a no-op anyway, but the CPI itself still costs ~5-15K CU. The PDA
+    // derivation is deterministic and ownership is verified downstream by the
+    // SPL Token transfer, so it is safe to skip when data is non-empty.
+    if !transfer.to.data_is_empty() {
+        return Ok(());
+    }
+
     let token_program = transfer.token_program(
         &ctx.accounts.token_program,
         &ctx.accounts.token_2022_program,
