@@ -136,10 +136,7 @@ pub fn flash_fulfill<'info>(
     );
 
     let should_close = matches!(intent, FlashFulfillIntent::IntentHash(_));
-    let (route, reward) = resolve_intent(&mut ctx, intent)?;
-    let route_hash = route.hash();
-    let reward_hash = reward.hash();
-    let intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
+    let (route, reward, route_hash, reward_hash, intent_hash) = resolve_intent(&mut ctx, intent)?;
     let native_fee = reward.native_amount.saturating_sub(route.native_amount);
     let flash_vault = ctx.accounts.flash_vault.key();
     let (_, flash_vault_bump) = flash_vault_pda();
@@ -422,9 +419,14 @@ fn sweep_leftover_native<'info>(
 fn resolve_intent(
     ctx: &mut Context<FlashFulfill>,
     intent: FlashFulfillIntent,
-) -> Result<(Route, Reward)> {
+) -> Result<(Route, Reward, Bytes32, Bytes32, Bytes32)> {
     match intent {
-        FlashFulfillIntent::Intent { route, reward } => Ok((route, reward)),
+        FlashFulfillIntent::Intent { route, reward } => {
+            let route_hash = route.hash();
+            let reward_hash = reward.hash();
+            let intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
+            Ok((route, reward, route_hash, reward_hash, intent_hash))
+        }
         FlashFulfillIntent::IntentHash(intent_hash) => {
             let intent = ctx
                 .accounts
@@ -452,9 +454,11 @@ fn resolve_intent(
             // against the seed `intent_hash` — without this check, `args.intent_hash`
             // and the intent actually fulfilled (recomputed from the buffer downstream)
             // could diverge silently.
+            let route_hash = intent.route.hash();
+            let reward_hash = intent.reward.hash();
+            let computed_intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
             require!(
-                intent_hash
-                    == types::intent_hash(CHAIN_ID, &intent.route.hash(), &intent.reward.hash()),
+                intent_hash == computed_intent_hash,
                 FlashFulfillerError::InvalidFlashFulfillIntentAccount
             );
 
@@ -478,7 +482,7 @@ fn resolve_intent(
                 native_amount: intent.reward.native_amount,
                 tokens: std::mem::take(&mut intent.reward.tokens),
             };
-            Ok((route, reward))
+            Ok((route, reward, route_hash, reward_hash, intent_hash))
         }
     }
 }
