@@ -228,10 +228,6 @@ pub struct Route {
 
 impl Route {
     pub fn hash(&self) -> Bytes32 {
-        self.hash_streaming()
-    }
-
-    fn hash_streaming(&self) -> Bytes32 {
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
 
@@ -804,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn route_streaming_hash_matches_borsh_serialized_hash() {
+    fn route_hash_matches_borsh_serialized_hash() {
         let routes = [
             Route {
                 deadline: 1700000000,
@@ -857,17 +853,17 @@ mod tests {
         ];
 
         for route in routes {
-            assert_route_streaming_hash_matches_borsh(&route);
+            assert_route_hash_matches_borsh(&route);
         }
     }
 
-    fn assert_route_streaming_hash_matches_borsh(route: &Route) {
+    fn assert_route_hash_matches_borsh(route: &Route) {
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
         hasher.update(&route.try_to_vec().unwrap());
         hasher.finalize(&mut hash);
 
-        assert_eq!(route.hash_streaming(), Bytes32::from(hash));
+        assert_eq!(route.hash(), Bytes32::from(hash));
     }
 
     #[test]
