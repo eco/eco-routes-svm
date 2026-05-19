@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::log::sol_log_compute_units;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::system_program;
 use anchor_spl::{associated_token, token, token_2022};
@@ -83,9 +84,24 @@ pub fn fulfill_intent<'info>(
     let route = execute_route_calls(ctx.accounts.executor.key, route, call_accounts)?;
     msg!("portal.fulfill: after_execute_route_calls");
 
+    msg!(
+        "portal.fulfill: route_hash_input tokens={} calls={} estimated_route_bytes={}",
+        route.tokens.len(),
+        route.calls.len(),
+        route.estimated_serialized_len()
+    );
+    for (index, call) in route.calls.iter().enumerate() {
+        msg!(
+            "portal.fulfill: route_hash_call call={} data_len={}",
+            index,
+            call.data.len()
+        );
+    }
+    sol_log_compute_units();
     msg!("portal.fulfill: before_route_hash");
     let route_hash = route.hash();
     msg!("portal.fulfill: after_route_hash");
+    sol_log_compute_units();
     let intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
     require!(
         intent_hash == expected_intent_hash,
