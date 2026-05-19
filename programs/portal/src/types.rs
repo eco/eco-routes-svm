@@ -805,32 +805,63 @@ mod tests {
 
     #[test]
     fn route_streaming_hash_matches_borsh_serialized_hash() {
-        let route = Route {
-            deadline: 1700000000,
-            salt: [1u8; 32].into(),
-            portal: [2u8; 32].into(),
-            native_amount: 10,
-            tokens: vec![
-                TokenAmount {
-                    token: Pubkey::new_from_array([3u8; 32]),
-                    amount: 100,
-                },
-                TokenAmount {
-                    token: Pubkey::new_from_array([4u8; 32]),
-                    amount: 200,
-                },
-            ],
-            calls: vec![
-                Call {
-                    target: [5u8; 32].into(),
-                    data: vec![1, 2, 3],
-                },
-                Call {
-                    target: [6u8; 32].into(),
-                    data: vec![4, 5, 6, 7, 8],
-                },
-            ],
-        };
+        let routes = [
+            Route {
+                deadline: 1700000000,
+                salt: [1u8; 32].into(),
+                portal: [2u8; 32].into(),
+                native_amount: 10,
+                tokens: vec![
+                    TokenAmount {
+                        token: Pubkey::new_from_array([3u8; 32]),
+                        amount: 100,
+                    },
+                    TokenAmount {
+                        token: Pubkey::new_from_array([4u8; 32]),
+                        amount: 200,
+                    },
+                ],
+                calls: vec![
+                    Call {
+                        target: [5u8; 32].into(),
+                        data: vec![1, 2, 3],
+                    },
+                    Call {
+                        target: [6u8; 32].into(),
+                        data: vec![4, 5, 6, 7, 8],
+                    },
+                ],
+            },
+            Route {
+                deadline: 0,
+                salt: [7u8; 32].into(),
+                portal: [8u8; 32].into(),
+                native_amount: 0,
+                tokens: vec![],
+                calls: vec![],
+            },
+            Route {
+                deadline: 0,
+                salt: [9u8; 32].into(),
+                portal: [10u8; 32].into(),
+                native_amount: 0,
+                tokens: vec![TokenAmount {
+                    token: Pubkey::new_from_array([11u8; 32]),
+                    amount: 0,
+                }],
+                calls: vec![Call {
+                    target: [12u8; 32].into(),
+                    data: vec![],
+                }],
+            },
+        ];
+
+        for route in routes {
+            assert_route_streaming_hash_matches_borsh(&route);
+        }
+    }
+
+    fn assert_route_streaming_hash_matches_borsh(route: &Route) {
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
         hasher.update(&route.try_to_vec().unwrap());
