@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-use anchor_lang::solana_program::log::sol_log_compute_units;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::system_program;
 use anchor_spl::{associated_token, token, token_2022};
@@ -64,52 +63,16 @@ pub fn fulfill_intent<'info>(
         PortalError::RouteExpired
     );
 
-    msg!(
-        "portal.fulfill: start tokens={} calls={} native_amount={} remaining_accounts={}",
-        route.tokens.len(),
-        route.calls.len(),
-        route.native_amount,
-        ctx.remaining_accounts.len()
-    );
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
-    msg!(
-        "portal.fulfill: split_accounts token_transfer_accounts={} call_accounts={}",
-        route.tokens.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
-        call_accounts.len()
-    );
-    msg!("portal.fulfill: before_fund_executor");
     fund_executor(&ctx, &route, token_transfer_accounts)?;
-    msg!("portal.fulfill: after_fund_executor");
-    msg!("portal.fulfill: before_execute_route_calls");
     let route = execute_route_calls(ctx.accounts.executor.key, route, call_accounts)?;
-    msg!("portal.fulfill: after_execute_route_calls");
 
-    msg!(
-        "portal.fulfill: route_hash_input tokens={} calls={} estimated_route_bytes={}",
-        route.tokens.len(),
-        route.calls.len(),
-        route.estimated_serialized_len()
-    );
-    for (index, call) in route.calls.iter().enumerate() {
-        msg!(
-            "portal.fulfill: route_hash_call call={} data_len={}",
-            index,
-            call.data.len()
-        );
-    }
-    sol_log_compute_units();
-    msg!("portal.fulfill: before_route_hash");
-    let route_hash = route.hash();
-    msg!("portal.fulfill: after_route_hash");
-    sol_log_compute_units();
-    let intent_hash = types::intent_hash(CHAIN_ID, &route_hash, &reward_hash);
+    let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     require!(
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    msg!("portal.fulfill: before_mark_fulfilled");
     mark_fulfilled(&ctx, &intent_hash, &claimant)?;
-    msg!("portal.fulfill: after_mark_fulfilled");
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
 
@@ -168,58 +131,26 @@ fn execute_route_calls(
     let signer_seeds = [EXECUTOR_SEED, &[bump]];
     let mut call_accounts = call_accounts.iter();
 
-    route
-        .calls
-        .iter_mut()
-        .enumerate()
-        .try_for_each(|(index, call)| {
-            msg!(
-                "portal.exec: call={} before_calldata_decode compact_len={}",
-                index,
-                call.data.len()
-            );
-            let calldata = Calldata::try_from_slice(&call.data)?;
-            let target = Pubkey::new_from_array(call.target.into());
-            msg!(
-                "portal.exec: call={} decoded account_count={} data_len={}",
-                index,
-                calldata.account_count,
-                calldata.data.len()
-            );
-            let call_accounts: Vec<_> = call_accounts
-                .by_ref()
-                .take(calldata.account_count as usize)
-                .map(ToAccountInfo::to_account_info)
-                .collect();
-            msg!(
-                "portal.exec: call={} collected_accounts={}",
-                index,
-                call_accounts.len()
-            );
+    route.calls.iter_mut().try_for_each(|call| {
+        let calldata = Calldata::try_from_slice(&call.data)?;
+        let call_accounts: Vec<_> = call_accounts
+            .by_ref()
+            .take(calldata.account_count as usize)
+            .map(ToAccountInfo::to_account_info)
+            .collect();
 
-            msg!("portal.exec: call={} before_invoke", index);
-            execute_route_call(
-                executor,
-                target,
-                &calldata.data,
-                &call_accounts,
-                &signer_seeds,
-            )?;
-            msg!("portal.exec: call={} after_invoke", index);
+        execute_route_call(
+            executor,
+            Pubkey::new_from_array(call.target.into()),
+            &calldata.data,
+            &call_accounts,
+            &signer_seeds,
+        )?;
 
-            msg!("portal.exec: call={} before_rebuild_full_calldata", index);
-            let calldata_with_accounts = CalldataWithAccounts::new(calldata, call_accounts)?;
-            msg!("portal.exec: call={} after_rebuild_full_calldata", index);
-            msg!("portal.exec: call={} before_serialize_full_calldata", index);
-            call.data = calldata_with_accounts.try_to_vec()?;
-            msg!(
-                "portal.exec: call={} after_serialize_full_calldata len={}",
-                index,
-                call.data.len()
-            );
+        call.data = CalldataWithAccounts::new(calldata, call_accounts)?.try_to_vec()?;
 
-            Result::Ok(())
-        })?;
+        Result::Ok(())
+    })?;
 
     Ok(route)
 }

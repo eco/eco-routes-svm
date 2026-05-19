@@ -256,21 +256,6 @@ impl Route {
         }
     }
 
-    pub fn estimated_serialized_len(&self) -> usize {
-        32 // salt
-            + 8 // deadline
-            + 32 // portal
-            + 8 // native_amount
-            + 4 // tokens vec length
-            + self.tokens.len() * (32 + 8)
-            + 4 // calls vec length
-            + self
-                .calls
-                .iter()
-                .map(|call| 32 + 4 + call.data.len())
-                .sum::<usize>()
-    }
-
     pub fn token_amounts(&self) -> Result<BTreeMap<Pubkey, u64>> {
         token_amounts(&self.tokens)
     }
@@ -852,41 +837,6 @@ mod tests {
         hasher.finalize(&mut hash);
 
         assert_eq!(route.hash_streaming(), Bytes32::from(hash));
-    }
-
-    #[test]
-    fn route_estimated_serialized_len_matches_borsh() {
-        let route = Route {
-            deadline: 1700000000,
-            salt: [1u8; 32].into(),
-            portal: [2u8; 32].into(),
-            native_amount: 10,
-            tokens: vec![
-                TokenAmount {
-                    token: Pubkey::new_from_array([3u8; 32]),
-                    amount: 100,
-                },
-                TokenAmount {
-                    token: Pubkey::new_from_array([4u8; 32]),
-                    amount: 200,
-                },
-            ],
-            calls: vec![
-                Call {
-                    target: [5u8; 32].into(),
-                    data: vec![1, 2, 3],
-                },
-                Call {
-                    target: [6u8; 32].into(),
-                    data: vec![4, 5, 6, 7, 8],
-                },
-            ],
-        };
-
-        assert_eq!(
-            route.estimated_serialized_len(),
-            route.try_to_vec().unwrap().len()
-        );
     }
 
     #[test]
