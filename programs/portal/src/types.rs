@@ -298,6 +298,7 @@ pub struct Call {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_alloc;
 
     #[test]
     fn intent_hash_deterministic() {
@@ -905,5 +906,45 @@ mod tests {
 
         let result = CalldataWithAccounts::new(calldata, accounts);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn route_hash_no_heap_allocation() {
+        let route = Route {
+            deadline: 1700000000,
+            salt: [1u8; 32].into(),
+            portal: [2u8; 32].into(),
+            native_amount: 10,
+            tokens: vec![TokenAmount {
+                token: Pubkey::new_from_array([3u8; 32]),
+                amount: 100,
+            }],
+            calls: vec![Call {
+                target: [4u8; 32].into(),
+                data: vec![1, 2, 3],
+            }],
+        };
+        let _ = route.hash(); // warm up any lazy init before counting
+        test_alloc::start_counting();
+        let _ = route.hash();
+        assert_eq!(test_alloc::stop_counting(), 0);
+    }
+
+    #[test]
+    fn reward_hash_no_heap_allocation() {
+        let reward = Reward {
+            deadline: 1700000000,
+            creator: Pubkey::new_from_array([1u8; 32]),
+            prover: Pubkey::new_from_array([2u8; 32]),
+            native_amount: 500,
+            tokens: vec![TokenAmount {
+                token: Pubkey::new_from_array([3u8; 32]),
+                amount: 100,
+            }],
+        };
+        let _ = reward.hash(); // warm up any lazy init before counting
+        test_alloc::start_counting();
+        let _ = reward.hash();
+        assert_eq!(test_alloc::stop_counting(), 0);
     }
 }
