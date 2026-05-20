@@ -4,6 +4,7 @@ declare_id!("Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo");
 
 pub mod events;
 pub mod instructions;
+mod keccak_writer;
 pub mod state;
 pub mod types;
 
@@ -48,4 +49,44 @@ pub mod portal {
     ) -> Result<()> {
         prove_intent(ctx, args)
     }
+}
+
+#[cfg(test)]
+pub(crate) mod test_alloc {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    pub(crate) struct TrackingAllocator;
+
+    thread_local! {
+        static ALLOC_COUNT: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    /// Begin counting heap allocations on this thread. Resets any prior count.
+    pub(crate) fn start_counting() {
+        ALLOC_COUNT.with(|c| c.set(Some(0)));
+    }
+
+    /// Stop counting and return the number of allocations since `start_counting`.
+    pub(crate) fn stop_counting() -> usize {
+        ALLOC_COUNT.with(|c| c.take()).unwrap_or(0)
+    }
+
+    unsafe impl GlobalAlloc for TrackingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOC_COUNT.with(|c| {
+                if let Some(n) = c.get() {
+                    c.set(Some(n + 1));
+                }
+            });
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: TrackingAllocator = TrackingAllocator;
 }
