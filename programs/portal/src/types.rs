@@ -9,6 +9,7 @@ use itertools::Itertools;
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::PortalError;
+use crate::keccak_writer::KeccakWriter;
 
 pub const VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE: usize = 3;
 
@@ -231,25 +232,11 @@ impl Route {
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
 
-        self.update_hash(&mut hasher);
+        self.serialize(&mut KeccakWriter::new(&mut hasher))
+            .expect("Route borsh serialization is infallible");
         hasher.finalize(&mut hash);
 
         hash.into()
-    }
-
-    fn update_hash(&self, hasher: &mut Keccak) {
-        hasher.update(self.salt.as_ref());
-        update_hash_u64(hasher, self.deadline);
-        hasher.update(self.portal.as_ref());
-        update_hash_u64(hasher, self.native_amount);
-        update_hash_len(hasher, self.tokens.len());
-        for token in &self.tokens {
-            token.update_hash(hasher);
-        }
-        update_hash_len(hasher, self.calls.len());
-        for call in &self.calls {
-            call.update_hash(hasher);
-        }
     }
 
     pub fn token_amounts(&self) -> Result<BTreeMap<Pubkey, u64>> {
@@ -268,11 +255,11 @@ pub struct Reward {
 
 impl Reward {
     pub fn hash(&self) -> Bytes32 {
-        let encoded = self.try_to_vec().expect("Failed to serialize Reward");
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
 
-        hasher.update(&encoded);
+        self.serialize(&mut KeccakWriter::new(&mut hasher))
+            .expect("Reward borsh serialization is infallible");
         hasher.finalize(&mut hash);
 
         hash.into()
@@ -302,34 +289,10 @@ pub struct TokenAmount {
     pub amount: u64,
 }
 
-impl TokenAmount {
-    fn update_hash(&self, hasher: &mut Keccak) {
-        hasher.update(self.token.as_ref());
-        update_hash_u64(hasher, self.amount);
-    }
-}
-
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Call {
     pub target: Bytes32,
     pub data: Vec<u8>,
-}
-
-impl Call {
-    fn update_hash(&self, hasher: &mut Keccak) {
-        hasher.update(self.target.as_ref());
-        update_hash_len(hasher, self.data.len());
-        hasher.update(&self.data);
-    }
-}
-
-fn update_hash_len(hasher: &mut Keccak, len: usize) {
-    let len = u32::try_from(len).expect("Borsh vec length exceeds u32");
-    hasher.update(&len.to_le_bytes());
-}
-
-fn update_hash_u64(hasher: &mut Keccak, value: u64) {
-    hasher.update(&value.to_le_bytes());
 }
 
 #[cfg(test)]

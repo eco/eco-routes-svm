@@ -4,6 +4,7 @@ declare_id!("Ecoo5HDM2XCBy7QzkhDGrAmnRcWw7emU6xGr7CcCmooo");
 
 pub mod events;
 pub mod instructions;
+mod keccak_writer;
 pub mod state;
 pub mod types;
 
