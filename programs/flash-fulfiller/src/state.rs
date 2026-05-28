@@ -15,6 +15,15 @@ pub fn flash_vault_pda() -> (Pubkey, u8) {
 
 /// Stored `(route, reward)` pair that lets `flash_fulfill` be invoked by
 /// intent hash alone, avoiding re-sending the full payload.
+///
+/// **Open consumption**: the PDA is seeded by `(writer, intent_hash)` to
+/// prevent squatting on *write* (only the writer can extend or close their
+/// buffer), but `flash_fulfill` imposes no signer check on the caller — any
+/// third party may consume a committed buffer and direct the spread to their
+/// own claimant. The writer receives only the buffer's rent refund. Writers
+/// who want to capture the spread should bundle the final
+/// `append_flash_fulfill_intent_chunk` with their own `flash_fulfill` in a
+/// single transaction where the combined account list fits in 1232 bytes.
 #[account]
 pub struct FlashFulfillIntentAccount {
     /// Route committed by the buffered intent.
