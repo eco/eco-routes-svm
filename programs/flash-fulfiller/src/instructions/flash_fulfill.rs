@@ -31,7 +31,11 @@ struct FlashFulfillAccounts<'a, 'info> {
 /// referencing a buffer previously written via `set_flash_fulfill_intent`.
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub enum FlashFulfillIntent {
-    /// Read `(route, reward)` from the buffered `FlashFulfillIntentAccount` for this intent hash.
+    /// Read `(route, reward)` from the buffered `FlashFulfillIntentAccount` for
+    /// this intent hash. Any caller may consume a committed buffer — see
+    /// [`FlashFulfillIntentAccount`] for the open-consumption note. The
+    /// buffer's rent is refunded to the original `writer` regardless of who
+    /// invokes `flash_fulfill`.
     IntentHash(Bytes32),
     /// Inline `(route, reward)` pair; no buffer account is required.
     Intent { route: Route, reward: Reward },

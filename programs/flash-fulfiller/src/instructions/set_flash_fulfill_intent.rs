@@ -28,6 +28,13 @@ pub struct SetFlashFulfillIntent<'info> {
 
 /// Creates the `FlashFulfillIntentAccount` buffer at the PDA for the supplied `(route, reward)`.
 ///
+/// **Open consumption**: once committed, any caller may invoke `flash_fulfill`
+/// against this buffer and direct the reward spread to their own claimant.
+/// The writer recovers only the buffer's rent. To guarantee capture of the
+/// spread, bundle the final `append_flash_fulfill_intent_chunk` and
+/// `flash_fulfill` in a single transaction where the combined account list
+/// fits within 1232 bytes.
+///
 /// Caller's transaction must prepend
 /// `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` — see the
 /// crate-level docs (applies to every instruction in this program).

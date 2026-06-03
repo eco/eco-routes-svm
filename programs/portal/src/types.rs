@@ -76,22 +76,7 @@ impl<'info> TokenTransferAccounts<'info> {
         authority: &AccountInfo<'info>,
         amount: u64,
     ) -> Result<()> {
-        match amount {
-            0 => Ok(()),
-            amount => transfer_checked(
-                CpiContext::new(
-                    token_program.to_account_info(),
-                    anchor_spl::token_interface::TransferChecked {
-                        from: self.from.to_account_info(),
-                        to: self.to.to_account_info(),
-                        mint: self.mint.to_account_info(),
-                        authority: authority.to_account_info(),
-                    },
-                ),
-                amount,
-                self.mint_data()?.decimals,
-            ),
-        }
+        self.transfer_with_signer(token_program, authority, &[], amount)
     }
 
     pub fn transfer_with_signer(
