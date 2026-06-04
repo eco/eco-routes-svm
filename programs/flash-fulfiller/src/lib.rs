@@ -21,7 +21,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("7iyEV1UD7Xs2eWNKp2xsiRh3W2kbNtiZ1ANBvNvwbn2Z");
+declare_id!("EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx");
 
 // Install a 256 KB bump allocator so flash_fulfill can actually use the
 // heap space requested by `ComputeBudgetInstruction::request_heap_frame`

@@ -7,25 +7,25 @@ skip-lint = false
 
 [programs.localnet]
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
-flash-fulfiller = "7iyEV1UD7Xs2eWNKp2xsiRh3W2kbNtiZ1ANBvNvwbn2Z"
-hyper-prover = "8TzcypP5wvoWCxBu4cW32PtT9ZRAN64Nv8ATY8PGXzT8"
-local-prover = "84obnegjG8PZd8PyGim4PkEtWhB77qYNkxW9Ap6Nnq3i"
-portal = "BhZtMCFgqQSzZgkUmq4WuAvCkk7cZnNDUMDQmkL7KwEi"
-proof-helper = "6xWQzJJNGZnKKvGCM48zB8nPCLeZBGdRFKnrW4dpnvNo"
+flash-fulfiller = "EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx"
+hyper-prover = "EcooVeaWfmakN2sDgPFRPZpShjtLSAKd7JNHmFAq6Jyq"
+local-prover = "Ecoog459avhoPbVoNnh8616uSHixCQdPPtedqNXohLLK"
+portal = "EcooM1j9JpiW6dKyHQXKQxSE6RA9J9Kob89ByYW4pg3j"
+proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.devnet]
-flash-fulfiller = "7iyEV1UD7Xs2eWNKp2xsiRh3W2kbNtiZ1ANBvNvwbn2Z"
-hyper-prover = "8TzcypP5wvoWCxBu4cW32PtT9ZRAN64Nv8ATY8PGXzT8"
-portal = "BhZtMCFgqQSzZgkUmq4WuAvCkk7cZnNDUMDQmkL7KwEi"
-local-prover = "84obnegjG8PZd8PyGim4PkEtWhB77qYNkxW9Ap6Nnq3i"
-proof-helper = "6xWQzJJNGZnKKvGCM48zB8nPCLeZBGdRFKnrW4dpnvNo"
+flash-fulfiller = "EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx"
+hyper-prover = "EcooVeaWfmakN2sDgPFRPZpShjtLSAKd7JNHmFAq6Jyq"
+portal = "EcooM1j9JpiW6dKyHQXKQxSE6RA9J9Kob89ByYW4pg3j"
+local-prover = "Ecoog459avhoPbVoNnh8616uSHixCQdPPtedqNXohLLK"
+proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
-flash-fulfiller = "7iyEV1UD7Xs2eWNKp2xsiRh3W2kbNtiZ1ANBvNvwbn2Z"
-hyper-prover = "8TzcypP5wvoWCxBu4cW32PtT9ZRAN64Nv8ATY8PGXzT8"
-portal = "BhZtMCFgqQSzZgkUmq4WuAvCkk7cZnNDUMDQmkL7KwEi"
-local-prover = "84obnegjG8PZd8PyGim4PkEtWhB77qYNkxW9Ap6Nnq3i"
-proof-helper = "6xWQzJJNGZnKKvGCM48zB8nPCLeZBGdRFKnrW4dpnvNo"
+flash-fulfiller = "EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx"
+hyper-prover = "EcooVeaWfmakN2sDgPFRPZpShjtLSAKd7JNHmFAq6Jyq"
+portal = "EcooM1j9JpiW6dKyHQXKQxSE6RA9J9Kob89ByYW4pg3j"
+local-prover = "Ecoog459avhoPbVoNnh8616uSHixCQdPPtedqNXohLLK"
+proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [registry]
 url = "https://api.apr.dev"
