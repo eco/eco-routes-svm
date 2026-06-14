@@ -499,7 +499,10 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
     let token_program = &ctx.token_program.clone();
 
-    ctx.airdrop(&vault, 50_000).unwrap();
+    // rent-exempt native excess: withdraw leaves it in the vault, refund returns
+    // it to the creator (sub-rent excess would instead drain to the claimant)
+    let excess = 1_000_000;
+    ctx.airdrop(&vault, excess).unwrap();
     reward.tokens.iter().for_each(|token| {
         ctx.airdrop_token_ata(&token.token, &vault, 1000);
     });
@@ -574,7 +577,7 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
         intent_hash,
         creator,
     ))));
-    assert_eq!(ctx.balance(&creator), 50_000);
+    assert_eq!(ctx.balance(&creator), excess);
     assert_eq!(ctx.balance(&vault), 0);
     reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);

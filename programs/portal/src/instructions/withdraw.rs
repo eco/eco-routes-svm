@@ -118,7 +118,18 @@ fn withdraw_native<'info>(
     reward: &Reward,
     signer_seeds: &[&[u8]],
 ) -> Result<()> {
-    match reward.native_amount.min(ctx.accounts.vault.lamports()) {
+    let vault_balance = ctx.accounts.vault.lamports();
+    let reward_amount = reward.native_amount.min(vault_balance);
+    // pay the reward and leave a rent-exempt surplus for refund; otherwise drain
+    // fully (the vault is a bare lamport holder, so a sub-rent residual would fail
+    // the tx via a `RentExempt -> RentPaying` transition)
+    let amount = if vault_balance - reward_amount >= Rent::get()?.minimum_balance(0) {
+        reward_amount
+    } else {
+        vault_balance
+    };
+
+    match amount {
         0 => Ok(()),
         amount => invoke_signed(
             &system_instruction::transfer(

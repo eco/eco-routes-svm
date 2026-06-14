@@ -199,6 +199,69 @@ fn withdraw_intent_native_and_token_2022_success() {
 }
 
 #[test]
+fn withdraw_intent_over_funded_native_sub_rent_dust_success() {
+    let (mut ctx, intent, route_hash) = setup(false);
+    let (destination, _route, reward) = &intent;
+    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
+    let claimant = Pubkey::new_unique();
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+    let token_program = &ctx.token_program.clone();
+
+    // address-poisoning dust below the rent-exempt floor: draining only
+    // reward.native_amount would leave a sub-rent residual and fail the tx
+    let dust = 1_000;
+    ctx.airdrop(&vault, dust).unwrap();
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &claimant, 0);
+    });
+
+    let token_accounts: Vec<_> = reward
+        .tokens
+        .iter()
+        .flat_map(|token| {
+            let claimant_token = get_associated_token_address_with_program_id(
+                &claimant,
+                &token.token,
+                token_program,
+            );
+            let vault_ata =
+                get_associated_token_address_with_program_id(&vault, &token.token, token_program);
+
+            vec![
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new(claimant_token, false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect();
+
+    let (destination, _route, reward) = &intent;
+    let result = ctx.portal().withdraw_intent(
+        *destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        claimant,
+        proof,
+        withdrawn_marker,
+        proof_closer_pda().0,
+        token_accounts,
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+    assert!(
+        result.is_ok_and(common::contains_event(IntentWithdrawn::new(
+            intent_hash,
+            claimant,
+        )))
+    );
+    assert_eq!(ctx.balance(&vault), 0);
+    assert_eq!(ctx.balance(&claimant), reward.native_amount + dust);
+}
+
+#[test]
 fn withdraw_intent_invalid_vault_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let (destination, _route, reward) = &intent;
