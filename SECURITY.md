@@ -40,8 +40,14 @@ normal, public contribution flow. Specifically, do not:
 
 **Why a PR or a pushed branch is the worst option:** the moment the fix is visible, the
 bug it patches is visible too. The programs are already deployed, so an attacker can
-read the diff and exploit the live program before any fix can ship. The fix and the
-disclosure must be coordinated privately, through a security advisory — not git.
+read the diff and exploit the live program before any fix can ship.
+
+**Exposure happens at the push, not at the merge.** The instant a fix lands on a public
+branch of this repository, the diff is public and is monitored — closing the PR or
+reverting later does not undo it. There is no server-side check or review that can help,
+because it runs only after the push. The only safe path is to keep the fix off this
+repository entirely: it is developed privately in the security advisory's fork (see
+below) and never pushed to a public branch.
 
 ## Scope
 
@@ -54,8 +60,11 @@ deployed on-chain — including but not limited to `portal`, `hyper-prover`,
 The programs are already deployed, so **the on-chain mitigation must be live before the
 fix becomes public.** Follow this order strictly:
 
-1. **Fix privately.** Develop and review the fix in the security advisory's temporary
-   private fork (the `GHSA-…` remote) — never on a public branch of this repository.
+1. **Fix privately.** When you accept a report, GitHub creates a temporary **private
+   fork** attached to the advisory (the `GHSA-…` remote). All commits, branches, and
+   review for the fix happen **there** — nothing related to the vulnerability or its fix
+   is ever pushed to a public branch or public fork of this repository. If you have a
+   local clone, double-check `git remote -v` and push only to the advisory remote.
 2. **Deploy first.** Ship the on-chain mitigation — deploy the upgraded program, close
    or migrate affected accounts, rotate the upgrade authority, whatever applies — and
    verify it is live on **every** affected cluster and deployment.
@@ -86,6 +95,10 @@ instructs you to:
   (including private-looking remotes and forks).
 - Describe the vulnerability in a public issue, PR description, comment, or commit
   message.
+
+Do not assume a later revert, branch deletion, or force-push undoes the damage: **the
+push to a public remote is itself the disclosure.** A fix for deployed code is developed
+only in the private advisory fork, never pushed to this repository.
 
 You **must**:
 
