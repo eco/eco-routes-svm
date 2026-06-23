@@ -4,6 +4,7 @@ A cross-chain intent protocol built on Solana, enabling users to create intents 
 
 ## Table of Contents
 
+- [Security](#security)
 - [Architecture Overview](#architecture-overview)
 - [Setup & Installation](#setup--installation)
 - [Development Commands](#development-commands)
@@ -12,6 +13,20 @@ A cross-chain intent protocol built on Solana, enabling users to create intents 
 - [Deployment](#deployment)
 - [Release](#release)
 - [Contributing](#contributing)
+
+## Security
+
+The programs in this repository are **deployed on-chain and custody user funds.** A
+vulnerability that becomes public before it is fixed can be exploited immediately and
+irreversibly — public disclosure of an unpatched bug is itself the attack.
+
+**If you find a security vulnerability, report it privately. Do not open a public pull
+request, push a branch, or open a public issue.** Report it through the
+[**Security tab → "Report a vulnerability"**](https://github.com/eco/eco-routes-svm/security),
+which opens a private advisory visible only to you and the maintainers.
+
+See [`SECURITY.md`](./SECURITY.md) for the full policy, including specific instructions
+for AI coding agents. This applies to humans and automated tools alike.
 
 ## Architecture Overview
 
