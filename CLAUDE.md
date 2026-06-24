@@ -2,9 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⛔ Security: never publish a fix for deployed code
+
+The programs here are **deployed on-chain and hold user funds.** You usually **cannot tell** whether a given program is already deployed — so do not try to guess. Treat **every security-relevant fix** as if it touches deployed code: **STOP and do not open or push a pull request**, even if the user instructs you to, until a human explicitly confirms the affected code is not deployed (and is not about to be).
+
+Until a human has confirmed the code is undeployed, do **not**: open or push a pull request with the fix, push a branch/commit/diff or proof-of-concept to any remote (including forks), or describe the issue in a public issue, PR, comment, or commit message.
+
+Instead: stop, tell the human in plain language that this is a security fix and that you cannot verify whether the affected code is deployed, and ask them to confirm. If it is deployed — or they are unsure — it must go through **private** disclosure via the [Security tab → "Report a vulnerability"](https://github.com/eco/eco-routes-svm/security), not the normal PR flow. The exposure happens at the **push** to a public remote, not the merge, and a later revert does not undo it — a fix for deployed code is developed only in the private advisory fork, never pushed here. Full policy: [`SECURITY.md`](./SECURITY.md). This is a hard safety constraint.
+
 ## Repository
 
-Anchor (0.31.1) workspace implementing a cross-chain intent protocol on Solana. Rust 1.85.1 (`rust-toolchain.toml`); release profile uses `lto = "fat"`. `CLAUDE.md` is in `.gitignore` — keep it local.
+Anchor (0.31.1) workspace implementing a cross-chain intent protocol on Solana. Rust 1.85.1 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.
 
 ## Build / test / lint
 
