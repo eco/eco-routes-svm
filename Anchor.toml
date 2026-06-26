@@ -7,24 +7,24 @@ skip-lint = false
 
 [programs.localnet]
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
-flash-fulfiller = "EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx"
-hyper-prover = "EcooVeaWfmakN2sDgPFRPZpShjtLSAKd7JNHmFAq6Jyq"
-local-prover = "Ecoog459avhoPbVoNnh8616uSHixCQdPPtedqNXohLLK"
-portal = "EcooM1j9JpiW6dKyHQXKQxSE6RA9J9Kob89ByYW4pg3j"
+flash-fulfiller = "EcoFXc9egMWmADWMHqDcJgMc13iytrdjfZmGtyn7Zxig"
+hyper-prover = "EcoHDiDaKXryeHsvRwoJNPEeS56uhmPDd9ksuPyF68ky"
+local-prover = "EcoLAP7GStetXHQa3R1UcKb2iBbodpwcSajQkiJKgF2U"
+portal = "EcooiHrTiMnfUBMw297gvPwX55HD8SCxA61tBBLV3yaV"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.devnet]
-flash-fulfiller = "EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx"
-hyper-prover = "EcooVeaWfmakN2sDgPFRPZpShjtLSAKd7JNHmFAq6Jyq"
-portal = "EcooM1j9JpiW6dKyHQXKQxSE6RA9J9Kob89ByYW4pg3j"
-local-prover = "Ecoog459avhoPbVoNnh8616uSHixCQdPPtedqNXohLLK"
+flash-fulfiller = "EcoFXc9egMWmADWMHqDcJgMc13iytrdjfZmGtyn7Zxig"
+hyper-prover = "EcoHDiDaKXryeHsvRwoJNPEeS56uhmPDd9ksuPyF68ky"
+portal = "EcooiHrTiMnfUBMw297gvPwX55HD8SCxA61tBBLV3yaV"
+local-prover = "EcoLAP7GStetXHQa3R1UcKb2iBbodpwcSajQkiJKgF2U"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
-flash-fulfiller = "EcoomzsaoaceYwxUSkiNqDYRyP5djqCY3AFExxKyX5rx"
-hyper-prover = "EcooVeaWfmakN2sDgPFRPZpShjtLSAKd7JNHmFAq6Jyq"
-portal = "EcooM1j9JpiW6dKyHQXKQxSE6RA9J9Kob89ByYW4pg3j"
-local-prover = "Ecoog459avhoPbVoNnh8616uSHixCQdPPtedqNXohLLK"
+flash-fulfiller = "EcoFXc9egMWmADWMHqDcJgMc13iytrdjfZmGtyn7Zxig"
+hyper-prover = "EcoHDiDaKXryeHsvRwoJNPEeS56uhmPDd9ksuPyF68ky"
+portal = "EcooiHrTiMnfUBMw297gvPwX55HD8SCxA61tBBLV3yaV"
+local-prover = "EcoLAP7GStetXHQa3R1UcKb2iBbodpwcSajQkiJKgF2U"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [registry]
