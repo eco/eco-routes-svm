@@ -57,7 +57,7 @@ pub fn igp_account_pda(salt: &[u8; 32]) -> Pubkey {
 pub struct ProofHelper<'a>(&'a mut Context);
 
 impl Context {
-    pub fn proof_helper(&mut self) -> ProofHelper {
+    pub fn proof_helper(&mut self) -> ProofHelper<'_> {
         ProofHelper(self)
     }
 }

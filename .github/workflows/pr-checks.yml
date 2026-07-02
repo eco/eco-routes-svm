@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 env:
-  RUST_VERSION: "1.85.1"
+  RUST_VERSION: "1.89.0"
   ANCHOR_VERSION: "0.31.1"
 
 jobs:
