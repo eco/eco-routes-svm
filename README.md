@@ -134,8 +134,8 @@ cargo install cargo-sort
 cargo install goldie
 
 # Set Rust toolchain
-rustup toolchain install 1.85.1
-rustup default 1.85.1
+rustup toolchain install 1.89.0
+rustup default 1.89.0
 ```
 
 ### Project Setup

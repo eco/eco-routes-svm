@@ -12,7 +12,7 @@ Instead: stop, tell the human in plain language that this is a security fix and 
 
 ## Repository
 
-Anchor (0.31.1) workspace implementing a cross-chain intent protocol on Solana. Rust 1.85.1 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.
+Anchor (0.31.1) workspace implementing a cross-chain intent protocol on Solana. Rust 1.89.0 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.
 
 ## Build / test / lint
 
