@@ -17,7 +17,7 @@ local-prover = { workspace = true, features = ["no-entrypoint"] }
 mock-igp = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }
-rand = "0.9.1"
-solana-sdk = "2.2.1"
+rand = "0.10.2"
+solana-sdk = "4.0.1"
 spl-noop = { version = "1.0.0", features = ["no-entrypoint"] }
 tiny-keccak = "2.0.2"
