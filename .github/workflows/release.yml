@@ -20,7 +20,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -36,13 +36,13 @@ jobs:
           anchor-version: ${{ env.ANCHOR_VERSION }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
       - name: Compute next version (dry run)
         id: dry
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v6
         with:
           dry_run: true
         env:
@@ -75,7 +75,7 @@ jobs:
       - name: Release
         id: semantic
         if: steps.dry.outputs.new_release_published == 'true'
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
