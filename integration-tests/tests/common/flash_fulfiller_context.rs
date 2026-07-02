@@ -31,7 +31,7 @@ const FLASH_FULFILLER_HEAP_BYTES: u32 = 256 * 1024;
 pub struct FlashFulfiller<'a>(&'a mut Context);
 
 impl Context {
-    pub fn flash_fulfiller(&mut self) -> FlashFulfiller {
+    pub fn flash_fulfiller(&mut self) -> FlashFulfiller<'_> {
         FlashFulfiller(self)
     }
 }

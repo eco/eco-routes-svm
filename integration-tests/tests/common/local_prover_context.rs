@@ -16,7 +16,7 @@ use crate::common::{Context, TransactionResult};
 pub struct LocalProver<'a>(&'a mut Context);
 
 impl Context {
-    pub fn local_prover(&mut self) -> LocalProver {
+    pub fn local_prover(&mut self) -> LocalProver<'_> {
         LocalProver(self)
     }
 }
