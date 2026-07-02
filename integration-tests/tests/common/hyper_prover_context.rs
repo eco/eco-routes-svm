@@ -19,7 +19,7 @@ use crate::common::{sol_amount, Context, TransactionResult};
 pub struct HyperProver<'a>(&'a mut Context);
 
 impl Context {
-    pub fn hyper_prover(&mut self) -> HyperProver {
+    pub fn hyper_prover(&mut self) -> HyperProver<'_> {
         HyperProver(self)
     }
 }

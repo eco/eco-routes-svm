@@ -150,7 +150,7 @@ pub fn dispatched_message_pda(unique_message: &Pubkey) -> Pubkey {
 pub struct Hyperlane<'a>(&'a mut Context);
 
 impl Context {
-    pub fn hyperlane(&mut self) -> Hyperlane {
+    pub fn hyperlane(&mut self) -> Hyperlane<'_> {
         Hyperlane(self)
     }
 }
