@@ -19,7 +19,7 @@ use crate::common::{hyperlane_context, Context, TransactionResult, COMPUTE_UNIT_
 pub struct Portal<'a>(&'a mut Context);
 
 impl Context {
-    pub fn portal(&mut self) -> Portal {
+    pub fn portal(&mut self) -> Portal<'_> {
         Portal(self)
     }
 }
