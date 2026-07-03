@@ -42,16 +42,20 @@ runs:
     - name: Install AVM (Anchor Version Manager)
       if: steps.cache-anchor.outputs.cache-hit != 'true'
       shell: bash
+      # Build the Anchor toolchain with stable Rust: avm/anchor-cli pull
+      # cargo_metadata -> cargo-platform, which now requires rustc >= 1.91,
+      # newer than the programs' pinned 1.89. The programs still build on 1.89.
       run: |
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-        cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+        rustup toolchain install stable --profile minimal --no-self-update
+        cargo +stable install --git https://github.com/coral-xyz/anchor avm --locked --force
 
     - name: Install Anchor CLI
       if: steps.cache-anchor.outputs.cache-hit != 'true'
       shell: bash
       run: |
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
-        avm install ${{ inputs.anchor-version }}
+        RUSTUP_TOOLCHAIN=stable avm install ${{ inputs.anchor-version }}
         avm use ${{ inputs.anchor-version }}
 
     - name: Add Anchor to PATH
