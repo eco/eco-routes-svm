@@ -18,10 +18,7 @@ pub struct Prove<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn prove_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Prove<'info>>,
-    args: ProveArgs,
-) -> Result<()> {
+pub fn prove_intent<'info>(ctx: Context<'info, Prove<'info>>, args: ProveArgs) -> Result<()> {
     let ProveArgs {
         domain_id,
         proof_data,
@@ -44,7 +41,7 @@ pub fn prove_intent<'info>(
 }
 
 fn mark_intent_hashes_proven<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Prove<'info>>,
+    ctx: &Context<'info, Prove<'info>>,
     proof_data: ProofData,
 ) -> Result<()> {
     require!(
@@ -67,7 +64,7 @@ fn mark_intent_hashes_proven<'info>(
 }
 
 fn mark_intent_hash_proven<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Prove<'info>>,
+    ctx: &Context<'info, Prove<'info>>,
     proof: &AccountInfo<'info>,
     intent_hash_claimant: IntentHashClaimant,
 ) -> Result<()> {

@@ -15,14 +15,14 @@ pub struct IsmAccountMetas<'info> {
         ],
         bump
     )]
-    pub ism_account_metas: AccountInfo<'info>,
+    pub ism_account_metas: UncheckedAccount<'info>,
 }
 
 /// Returns an empty list of account metas for the ISM. Because this recipient
 /// defers to Hyperlane's default ISM (no custom ISM is configured), no
 /// additional accounts are required for the ISM verification step.
 pub fn ism_account_metas(_ctx: Context<IsmAccountMetas>) -> Result<()> {
-    set_return_data(&Vec::<SerializableAccountMeta>::new().try_to_vec()?);
+    set_return_data(&borsh::to_vec(&Vec::<SerializableAccountMeta>::new())?);
 
     Ok(())
 }

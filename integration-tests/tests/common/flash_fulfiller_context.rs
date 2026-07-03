@@ -11,7 +11,7 @@ use flash_fulfiller::instructions::{
 use flash_fulfiller::state::{flash_vault_pda, FlashFulfillIntentAccount};
 use portal::state::{executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{intent_hash, Reward, Route};
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;

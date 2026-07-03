@@ -173,7 +173,7 @@ impl HyperProver<'_> {
             dispatcher: dispatcher_pda().0,
             payer: self.payer.pubkey(),
             outbox_pda,
-            spl_noop_program: spl_noop::ID,
+            spl_noop_program: super::SPL_NOOP_ID,
             unique_message: unique_message.pubkey(),
             dispatched_message_pda,
             system_program: anchor_lang::system_program::ID,

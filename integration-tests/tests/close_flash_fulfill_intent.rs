@@ -1,4 +1,5 @@
-use anchor_lang::{AccountDeserialize, AnchorSerialize, Discriminator};
+use anchor_lang::prelude::borsh;
+use anchor_lang::{AccountDeserialize, Discriminator};
 use eco_svm_std::CHAIN_ID;
 use flash_fulfiller::instructions::FlashFulfillerError;
 use flash_fulfiller::state::FlashFulfillIntentAccount;
@@ -125,8 +126,8 @@ fn close_flash_fulfill_intent_closes_append_built_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     let split = payload.len() / 2;
     let first_chunk = payload[..split].to_vec();

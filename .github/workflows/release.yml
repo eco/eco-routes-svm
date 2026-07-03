@@ -9,7 +9,7 @@ concurrency:
 
 env:
   RUST_VERSION: "1.89.0"
-  ANCHOR_VERSION: "0.31.1"
+  ANCHOR_VERSION: "1.1.2"
 
 jobs:
   release:

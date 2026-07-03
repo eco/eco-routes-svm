@@ -33,6 +33,7 @@ mod portal_context;
 pub mod proof_helper_context;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
+pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
@@ -58,10 +59,11 @@ impl Default for Context {
     fn default() -> Self {
         let mut svm = LiteSVM::new();
 
-        svm.add_program(portal::ID, PORTAL_BIN);
-        svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
-        svm.add_program(local_prover::ID, LOCAL_PROVER_BIN);
-        svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN);
+        svm.add_program(portal::ID, PORTAL_BIN).unwrap();
+        svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN).unwrap();
+        svm.add_program(local_prover::ID, LOCAL_PROVER_BIN).unwrap();
+        svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN)
+            .unwrap();
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);

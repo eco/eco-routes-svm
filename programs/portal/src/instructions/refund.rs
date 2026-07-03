@@ -39,10 +39,7 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn refund_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Refund<'info>>,
-    args: RefundArgs,
-) -> Result<()> {
+pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs) -> Result<()> {
     let RefundArgs {
         destination,
         route_hash,
@@ -77,7 +74,7 @@ pub fn refund_intent<'info>(
 
 // TODO: allow early recover if the token specified is not a reward token (before anything)
 fn validate_intent_status<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Refund<'info>>,
+    ctx: &Context<'info, Refund<'info>>,
     reward: &Reward,
     destination: u64,
 ) -> Result<()> {
@@ -131,10 +128,7 @@ fn refund_native(ctx: &Context<Refund>, signer_seeds: &[&[u8]]) -> Result<()> {
     }
 }
 
-fn refund_tokens<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Refund<'info>>,
-    signer_seeds: &[&[u8]],
-) -> Result<()> {
+fn refund_tokens<'info>(ctx: &Context<'info, Refund<'info>>, signer_seeds: &[&[u8]]) -> Result<()> {
     let accounts: VecTokenTransferAccounts<'info> = ctx.remaining_accounts.try_into()?;
 
     accounts
@@ -144,7 +138,7 @@ fn refund_tokens<'info>(
 }
 
 fn refund_token<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Refund<'info>>,
+    ctx: &Context<'info, Refund<'info>>,
     signer_seeds: &[&[u8]],
     accounts: TokenTransferAccounts<'info>,
 ) -> Result<()> {
@@ -166,7 +160,7 @@ fn refund_token<'info>(
     )?;
 
     close_account(CpiContext::new_with_signer(
-        token_program,
+        token_program.key(),
         CloseAccount {
             account: accounts.from.to_account_info(),
             destination: ctx.accounts.payer.to_account_info(),

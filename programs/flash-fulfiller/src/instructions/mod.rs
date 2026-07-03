@@ -43,5 +43,5 @@ pub fn close_buffer<'info>(
     **buffer.lamports.borrow_mut() = 0;
 
     buffer.assign(&anchor_lang::system_program::ID);
-    buffer.realloc(0, false).map_err(Into::into)
+    buffer.resize(0).map_err(Into::into)
 }

@@ -8,6 +8,6 @@ pub struct Ism {}
 /// recipient has no custom Interchain Security Module. The mailbox will
 /// therefore fall back to its configured default ISM for message verification.
 pub fn ism(_ctx: Context<Ism>) -> Result<()> {
-    set_return_data(None::<Pubkey>.try_to_vec()?.as_slice());
+    set_return_data(borsh::to_vec(&None::<Pubkey>)?.as_slice());
     Ok(())
 }

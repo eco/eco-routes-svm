@@ -1,7 +1,6 @@
 use std::iter;
 
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::system_program;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use eco_svm_std::prover::Proof;
 use eco_svm_std::Bytes32;
@@ -125,10 +124,7 @@ fn withdraw_intent_native_and_token_success() {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &claimant), token.amount);
     });
-    let proof_account = ctx.get_account(&proof).unwrap();
-    assert!(proof_account.data.is_empty());
-    assert_eq!(proof_account.owner, system_program::ID);
-    assert_eq!(proof_account.lamports, 0);
+    assert!(ctx.get_account(&proof).is_none());
 }
 
 #[test]
@@ -192,10 +188,7 @@ fn withdraw_intent_native_and_token_2022_success() {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &claimant), token.amount);
     });
-    let proof_account = ctx.get_account(&proof).unwrap();
-    assert!(proof_account.data.is_empty());
-    assert_eq!(proof_account.owner, system_program::ID);
-    assert_eq!(proof_account.lamports, 0);
+    assert!(ctx.get_account(&proof).is_none());
 }
 
 #[test]

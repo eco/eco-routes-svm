@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
 use anchor_lang::system_program;
-use borsh::BorshSerialize;
 use eco_svm_std::prover::{Proof, ProofData};
 use eco_svm_std::{event_authority_pda, SerializableAccountMeta};
 
@@ -14,7 +13,7 @@ pub struct HandleAccountMetas<'info> {
         seeds = [b"hyperlane_message_recipient", b"-", b"handle", b"-", b"account_metas"],
         bump
     )]
-    pub handle_account_metas: AccountInfo<'info>,
+    pub handle_account_metas: UncheckedAccount<'info>,
 }
 
 pub fn handle_account_metas(
@@ -47,7 +46,7 @@ pub fn handle_account_metas(
     .map(Into::into)
     .collect();
 
-    set_return_data(&account_metas.try_to_vec()?);
+    set_return_data(&borsh::to_vec(&account_metas)?);
 
     Ok(())
 }

@@ -89,6 +89,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Rent fields are deprecated but still the way to build a fixed test fixture
     fn withdrawn_marker_min_balance_deterministic() {
         let rent = Rent {
             lamports_per_byte_year: 3480,

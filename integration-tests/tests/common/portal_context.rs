@@ -5,7 +5,7 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{event_authority_pda, Bytes32};
 use portal::types::{Reward, Route};
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -329,7 +329,7 @@ impl Portal<'_> {
                 AccountMeta::new_readonly(prover_dispatcher, false),
                 AccountMeta::new(self.payer.pubkey(), true),
                 AccountMeta::new(outbox_pda, false),
-                AccountMeta::new_readonly(spl_noop::ID, false),
+                AccountMeta::new_readonly(super::SPL_NOOP_ID, false),
                 AccountMeta::new_readonly(unique_message.pubkey(), true),
                 AccountMeta::new(dispatched_message_pda, false),
                 AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
@@ -367,7 +367,7 @@ impl Portal<'_> {
                 AccountMeta::new_readonly(prover_dispatcher, false),
                 AccountMeta::new(self.payer.pubkey(), true),
                 AccountMeta::new(outbox_pda, false),
-                AccountMeta::new_readonly(spl_noop::ID, false),
+                AccountMeta::new_readonly(super::SPL_NOOP_ID, false),
                 AccountMeta::new_readonly(unique_message.pubkey(), true),
                 AccountMeta::new(dispatched_message_pda, false),
                 AccountMeta::new_readonly(anchor_lang::system_program::ID, false),

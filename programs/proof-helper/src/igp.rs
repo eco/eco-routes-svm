@@ -1,4 +1,3 @@
-use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
@@ -18,7 +17,7 @@ pub const MAILBOX_ID: Pubkey = pubkey!("75HBBLae3ddeneJVrZeyrDfv6vb7SMC3aCpBucSX
 
 /// Hyperlane IGP instruction enum. Variant order is critical for Borsh
 /// serialization — the `PayForGas` variant must remain at index 3.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 #[allow(dead_code)]
 pub enum IgpInstruction {
     Init,
@@ -34,46 +33,46 @@ pub enum IgpInstruction {
     Claim,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct InitIgp {
     pub salt: [u8; 32],
     pub owner: Option<Pubkey>,
     pub beneficiary: Pubkey,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct InitOverheadIgp {
     pub salt: [u8; 32],
     pub owner: Option<Pubkey>,
     pub inner: Pubkey,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct PayForGasData {
     pub message_id: [u8; 32],
     pub destination_domain: u32,
     pub gas_amount: u64,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct QuoteGasPayment {
     pub destination_domain: u32,
     pub gas_amount: u64,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct GasOverheadConfig {
     pub destination_domain: u32,
     pub gas_overhead: Option<u64>,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct GasOracleConfig {
     pub domain: u32,
     pub gas_oracle: Option<GasOracle>,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct GasOracle {
     pub token_exchange_rate: u128,
     pub gas_price: u128,
@@ -106,7 +105,7 @@ pub fn pay_for_gas(
     let ix = Instruction {
         program_id: ctx.accounts.igp_program.key(),
         accounts,
-        data: igp_instruction.try_to_vec()?,
+        data: borsh::to_vec(&igp_instruction)?,
     };
 
     let mut account_infos = vec![

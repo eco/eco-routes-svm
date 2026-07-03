@@ -90,7 +90,7 @@ impl<'info> TokenTransferAccounts<'info> {
             0 => Ok(()),
             amount => transfer_checked(
                 CpiContext::new_with_signer(
-                    token_program.to_account_info(),
+                    token_program.key(),
                     anchor_spl::token_interface::TransferChecked {
                         from: self.from.to_account_info(),
                         to: self.to.to_account_info(),
@@ -376,7 +376,6 @@ mod tests {
             &mut data_1,
             &token_program,
             false,
-            0,
         );
         let to_account = AccountInfo::new(
             &to_key,
@@ -386,7 +385,6 @@ mod tests {
             &mut data_2,
             &token_program,
             false,
-            0,
         );
         let mint_account = AccountInfo::new(
             &mint_key,
@@ -396,7 +394,6 @@ mod tests {
             &mut data_3,
             &token_program,
             false,
-            0,
         );
 
         let accounts: &[AccountInfo] = &[from_account, to_account, mint_account];
@@ -422,7 +419,6 @@ mod tests {
             &mut data_1,
             &token_program,
             false,
-            0,
         );
         let account_2 = AccountInfo::new(
             &key,
@@ -432,7 +428,6 @@ mod tests {
             &mut data_2,
             &token_program,
             false,
-            0,
         );
 
         let accounts: &[AccountInfo] = &[account_1, account_2];
@@ -455,7 +450,6 @@ mod tests {
             &mut data,
             &token_program,
             false,
-            0,
         );
 
         let two_accounts = vec![&account, &account];
@@ -489,7 +483,6 @@ mod tests {
             &mut data_1,
             &token_program,
             false,
-            0,
         );
         let to_account = AccountInfo::new(
             &to_key,
@@ -499,7 +492,6 @@ mod tests {
             &mut data_2,
             &different_program,
             false,
-            0,
         );
         let mint_account = AccountInfo::new(
             &mint_key,
@@ -509,7 +501,6 @@ mod tests {
             &mut data_3,
             &token_program,
             false,
-            0,
         );
 
         let accounts = vec![&from_account, &to_account, &mint_account];
@@ -538,7 +529,6 @@ mod tests {
             &mut data_1,
             &token_program,
             false,
-            0,
         );
         let to_account = AccountInfo::new(
             &to_key,
@@ -548,7 +538,6 @@ mod tests {
             &mut data_2,
             &token_program,
             false,
-            0,
         );
         let mint_account = AccountInfo::new(
             &mint_key,
@@ -558,7 +547,6 @@ mod tests {
             &mut data_3,
             &token_program,
             false,
-            0,
         );
 
         let accounts = vec![&from_account, &to_account, &mint_account];
@@ -588,7 +576,6 @@ mod tests {
             &mut data_1,
             &token_program,
             false,
-            0,
         );
         let empty_to_account = AccountInfo::new(
             &to_key,
@@ -598,7 +585,6 @@ mod tests {
             &mut data_2,
             &system_program,
             false,
-            0,
         );
         let mint_account = AccountInfo::new(
             &mint_key,
@@ -608,7 +594,6 @@ mod tests {
             &mut data_3,
             &token_program,
             false,
-            0,
         );
 
         let accounts = vec![&from_account, &empty_to_account, &mint_account];
@@ -637,7 +622,6 @@ mod tests {
             &mut data_1,
             &token_program,
             false,
-            0,
         );
         let to_account = AccountInfo::new(
             &to_key,
@@ -647,7 +631,6 @@ mod tests {
             &mut data_2,
             &token_program,
             false,
-            0,
         );
         let mint_account = AccountInfo::new(
             &mint_key,
@@ -657,7 +640,6 @@ mod tests {
             &mut data_3,
             &token_program,
             false,
-            0,
         );
 
         let accounts = vec![&from_account, &to_account, &mint_account];
@@ -687,7 +669,6 @@ mod tests {
             &mut data_1,
             &token_2022_program,
             false,
-            0,
         );
         let to_account = AccountInfo::new(
             &to_key,
@@ -697,7 +678,6 @@ mod tests {
             &mut data_2,
             &token_2022_program,
             false,
-            0,
         );
         let mint_account = AccountInfo::new(
             &mint_key,
@@ -707,7 +687,6 @@ mod tests {
             &mut data_3,
             &token_2022_program,
             false,
-            0,
         );
 
         let accounts = vec![&from_account, &to_account, &mint_account];
@@ -809,7 +788,7 @@ mod tests {
     fn assert_route_hash_matches_borsh(route: &Route) {
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
-        hasher.update(&route.try_to_vec().unwrap());
+        hasher.update(&borsh::to_vec(&route).unwrap());
         hasher.finalize(&mut hash);
 
         assert_eq!(route.hash(), Bytes32::from(hash));

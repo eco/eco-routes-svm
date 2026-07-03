@@ -97,7 +97,7 @@ pub fn append_flash_fulfill_intent_chunk(
             ],
         )?;
     }
-    buffer.realloc(new_len, false)?;
+    buffer.resize(new_len)?;
     buffer.try_borrow_mut_data()?[current_len..].copy_from_slice(&chunk);
 
     Ok(())

@@ -18,8 +18,8 @@ pub struct FundTokenContext<'a, 'info> {
     pub system_program: &'a Program<'info, System>,
 }
 
-impl<'a, 'info> From<&'a Context<'_, '_, '_, 'info, Fund<'info>>> for FundTokenContext<'a, 'info> {
-    fn from(ctx: &'a Context<'_, '_, '_, 'info, Fund<'info>>) -> Self {
+impl<'a, 'info> From<&'a Context<'info, Fund<'info>>> for FundTokenContext<'a, 'info> {
+    fn from(ctx: &'a Context<'info, Fund<'info>>) -> Self {
         Self {
             payer: &ctx.accounts.payer,
             funder: &ctx.accounts.funder,
@@ -32,10 +32,8 @@ impl<'a, 'info> From<&'a Context<'_, '_, '_, 'info, Fund<'info>>> for FundTokenC
     }
 }
 
-impl<'a, 'info> From<&'a Context<'_, '_, '_, 'info, Fulfill<'info>>>
-    for FundTokenContext<'a, 'info>
-{
-    fn from(ctx: &'a Context<'_, '_, '_, 'info, Fulfill<'info>>) -> Self {
+impl<'a, 'info> From<&'a Context<'info, Fulfill<'info>>> for FundTokenContext<'a, 'info> {
+    fn from(ctx: &'a Context<'info, Fulfill<'info>>) -> Self {
         Self {
             payer: &ctx.accounts.payer,
             funder: &ctx.accounts.solver,
@@ -117,10 +115,7 @@ impl<'info> FundTokenContext<'_, 'info> {
                 system_program: self.system_program.to_account_info(),
                 token_program: token_program.to_account_info(),
             };
-            let cpi_ctx = CpiContext::new(
-                self.associated_token_program.to_account_info(),
-                cpi_accounts,
-            );
+            let cpi_ctx = CpiContext::new(self.associated_token_program.key(), cpi_accounts);
 
             associated_token::create(cpi_ctx)?;
         }

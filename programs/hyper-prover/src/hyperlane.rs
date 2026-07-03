@@ -1,4 +1,3 @@
-use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
@@ -35,7 +34,7 @@ pub fn process_authority_pda() -> (Pubkey, u8) {
 // Even though we are only using OutboxDispatch, it
 // is critical to keep the rest because borsh serialization
 // is dependent on the enum variant order.
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 #[allow(dead_code)]
 pub enum MailboxInstruction {
     Init(Init),
@@ -52,10 +51,10 @@ pub enum MailboxInstruction {
     SetProtocolFeeConfig,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct Init {}
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct OutboxDispatch {
     pub sender: Pubkey,
     pub destination_domain: u32,
@@ -63,7 +62,7 @@ pub struct OutboxDispatch {
     pub message_body: Vec<u8>,
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct InboxProcess {}
 
 pub fn dispatch_msg(
@@ -90,7 +89,7 @@ pub fn dispatch_msg(
             AccountMeta::new_readonly(ctx.accounts.unique_message.key(), true),
             AccountMeta::new(ctx.accounts.dispatched_message_pda.key(), false),
         ],
-        data: outbox_dispatch.try_to_vec()?,
+        data: borsh::to_vec(&outbox_dispatch)?,
     };
 
     invoke_signed(

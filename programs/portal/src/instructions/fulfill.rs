@@ -42,10 +42,7 @@ pub struct Fulfill<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn fulfill_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Fulfill<'info>>,
-    args: FulfillArgs,
-) -> Result<()> {
+pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillArgs) -> Result<()> {
     let FulfillArgs {
         intent_hash: expected_intent_hash,
         route,
@@ -79,10 +76,10 @@ pub fn fulfill_intent<'info>(
     Ok(())
 }
 
-fn token_transfer_and_call_accounts<'c, 'info>(
-    ctx: &Context<'_, '_, 'c, 'info, Fulfill<'info>>,
+fn token_transfer_and_call_accounts<'info>(
+    ctx: &Context<'info, Fulfill<'info>>,
     route: &Route,
-) -> Result<(VecTokenTransferAccounts<'info>, &'c [AccountInfo<'info>])> {
+) -> Result<(VecTokenTransferAccounts<'info>, &'info [AccountInfo<'info>])> {
     let split_index = route.tokens.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE;
     require!(
         split_index <= ctx.remaining_accounts.len(),
@@ -94,7 +91,7 @@ fn token_transfer_and_call_accounts<'c, 'info>(
 }
 
 fn fund_executor<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Fulfill<'info>>,
+    ctx: &Context<'info, Fulfill<'info>>,
     route: &Route,
     accounts: VecTokenTransferAccounts<'info>,
 ) -> Result<()> {
@@ -109,7 +106,7 @@ fn fund_executor<'info>(
     if route.native_amount > 0 {
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.solver.to_account_info(),
                     to: ctx.accounts.executor.to_account_info(),
@@ -147,7 +144,7 @@ fn execute_route_calls(
             &signer_seeds,
         )?;
 
-        call.data = CalldataWithAccounts::new(calldata, call_accounts)?.try_to_vec()?;
+        call.data = borsh::to_vec(&CalldataWithAccounts::new(calldata, call_accounts)?)?;
 
         Result::Ok(())
     })?;

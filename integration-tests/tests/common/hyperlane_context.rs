@@ -1,5 +1,4 @@
-use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
-use anchor_lang::prelude::{borsh, AccountMeta};
+use anchor_lang::prelude::{borsh, AccountMeta, AnchorDeserialize, AnchorSerialize};
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::CHAIN_ID;
@@ -19,9 +18,9 @@ const DUMMY_ISM_BIN: &[u8] = include_bytes!("../../../target/deploy/dummy_ism.so
 const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 pub fn add_hyperlane_programs(svm: &mut LiteSVM) {
-    svm.add_program(MAILBOX_ID, MAILBOX_BIN);
-    svm.add_program(dummy_ism::ID, DUMMY_ISM_BIN);
-    svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
+    svm.add_program(MAILBOX_ID, MAILBOX_BIN).unwrap();
+    svm.add_program(dummy_ism::ID, DUMMY_ISM_BIN).unwrap();
+    svm.add_program(super::SPL_NOOP_ID, SPL_NOOP_BIN).unwrap();
 }
 
 pub fn init_hyperlane(svm: &mut LiteSVM) {
@@ -29,20 +28,20 @@ pub fn init_hyperlane(svm: &mut LiteSVM) {
     init_mailbox(svm, dummy_ism::ID);
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(AnchorDeserialize, AnchorSerialize)]
 enum MailboxInstruction {
     Init(Init),
     InboxProcess(InboxProcess),
     OutboxDispatch(OutboxDispatch),
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(AnchorDeserialize, AnchorSerialize)]
 struct InboxProcess {
     pub metadata: Vec<u8>,
     pub message: Vec<u8>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(AnchorDeserialize, AnchorSerialize)]
 struct OutboxDispatch {
     pub sender: Pubkey,
     pub destination_domain: u32,
@@ -50,7 +49,7 @@ struct OutboxDispatch {
     pub message_body: Vec<u8>,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(AnchorDeserialize, AnchorSerialize)]
 struct Init {
     pub local_domain: u32,
     pub default_ism: Pubkey,
@@ -58,7 +57,7 @@ struct Init {
     pub protocol_fee: ProtocolFee,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(AnchorDeserialize, AnchorSerialize)]
 struct ProtocolFee {
     pub fee: u64,
     pub beneficiary: Pubkey,
@@ -195,7 +194,7 @@ impl Hyperlane<'_> {
         );
         accounts.extend(vec![
             // 6: SPL-noop
-            AccountMeta::new_readonly(spl_noop::ID, false),
+            AccountMeta::new_readonly(super::SPL_NOOP_ID, false),
             // 7: ISM program id (dummy ISM)
             AccountMeta::new_readonly(dummy_ism::ID, false),
             // 8: ISM verify accounts (dummy ISM state)

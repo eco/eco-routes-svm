@@ -66,7 +66,7 @@ pub fn set_flash_fulfill_intent(
         &ctx.accounts.writer.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
         &crate::ID,
-        8 + flash_fulfill_intent.try_to_vec()?.len(),
+        8 + borsh::to_vec(&flash_fulfill_intent)?.len(),
         &[&signer_seeds],
     )?;
 

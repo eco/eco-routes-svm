@@ -27,7 +27,7 @@ pub mod hyper_prover {
 
     #[instruction(discriminator = &hyperlane::HANDLE_DISCRIMINATOR)]
     pub fn handle<'info>(
-        ctx: Context<'_, '_, '_, 'info, Handle<'info>>,
+        ctx: Context<'info, Handle<'info>>,
         origin: u32,
         sender: [u8; 32],
         payload: Vec<u8>,

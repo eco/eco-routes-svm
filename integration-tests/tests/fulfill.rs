@@ -1,6 +1,6 @@
-use anchor_lang::prelude::AccountMeta;
+use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::solana_program::system_instruction;
-use anchor_lang::{system_program, AnchorSerialize, InstructionData};
+use anchor_lang::{system_program, InstructionData};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022;
@@ -22,7 +22,7 @@ fn route_with_calldatas(mut route: Route, calldatas: Vec<(Pubkey, Calldata)>) ->
         .into_iter()
         .map(|(target, calldata)| Call {
             target: target.to_bytes().into(),
-            data: calldata.try_to_vec().unwrap(),
+            data: borsh::to_vec(&calldata).unwrap(),
         })
         .collect();
 
@@ -37,7 +37,7 @@ fn route_with_calldatas_with_accounts(
         .into_iter()
         .map(|(target, calldata_with_accounts)| Call {
             target: target.to_bytes().into(),
-            data: calldata_with_accounts.try_to_vec().unwrap(),
+            data: borsh::to_vec(&calldata_with_accounts).unwrap(),
         })
         .collect();
 
@@ -323,7 +323,7 @@ fn fulfill_intent_native_transfer_success() {
     let call_accounts = vec![
         AccountMeta::new(executor, false),
         AccountMeta::new(recipient, false),
-        AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
     ];
     let calldata_with_accounts =
         CalldataWithAccounts::new(calldata.clone(), call_accounts.clone()).unwrap();
@@ -519,7 +519,7 @@ fn fulfill_intent_invalid_calldata_fail() {
     let call_accounts = vec![
         AccountMeta::new(executor, false),
         AccountMeta::new(recipient, false),
-        AccountMeta::new_readonly(solana_sdk::system_program::id(), false),
+        AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
     ];
     let calldata_with_accounts =
         CalldataWithAccounts::new(calldata.clone(), call_accounts.clone()).unwrap();
@@ -650,7 +650,7 @@ fn fulfill_intent_call_prover_with_executor_instead_of_dispatcher_fail() {
         AccountMeta::new_readonly(hyper_prover::state::dispatcher_pda().0, false),
         AccountMeta::new(ctx.payer.pubkey(), false),
         AccountMeta::new(Pubkey::new_unique(), false),
-        AccountMeta::new_readonly(spl_noop::ID, false),
+        AccountMeta::new_readonly(common::SPL_NOOP_ID, false),
         AccountMeta::new_readonly(unique_message.pubkey(), true),
         AccountMeta::new(Pubkey::new_unique(), false),
         AccountMeta::new_readonly(system_program::ID, false),
