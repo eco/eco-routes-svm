@@ -1,3 +1,4 @@
+use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
@@ -34,7 +35,8 @@ pub fn process_authority_pda() -> (Pubkey, u8) {
 // Even though we are only using OutboxDispatch, it
 // is critical to keep the rest because borsh serialization
 // is dependent on the enum variant order.
-#[derive(AnchorSerialize, AnchorDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 #[allow(dead_code)]
 pub enum MailboxInstruction {
     Init(Init),
@@ -51,10 +53,12 @@ pub enum MailboxInstruction {
     SetProtocolFeeConfig,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 pub struct Init {}
 
-#[derive(AnchorSerialize, AnchorDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 pub struct OutboxDispatch {
     pub sender: Pubkey,
     pub destination_domain: u32,
@@ -62,7 +66,8 @@ pub struct OutboxDispatch {
     pub message_body: Vec<u8>,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 pub struct InboxProcess {}
 
 pub fn dispatch_msg(

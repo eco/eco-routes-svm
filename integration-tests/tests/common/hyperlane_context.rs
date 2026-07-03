@@ -1,4 +1,5 @@
-use anchor_lang::prelude::{borsh, AccountMeta, AnchorDeserialize, AnchorSerialize};
+use anchor_lang::prelude::borsh::{BorshDeserialize, BorshSerialize};
+use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::CHAIN_ID;
@@ -28,20 +29,23 @@ pub fn init_hyperlane(svm: &mut LiteSVM) {
     init_mailbox(svm, dummy_ism::ID);
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize)]
+#[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 enum MailboxInstruction {
     Init(Init),
     InboxProcess(InboxProcess),
     OutboxDispatch(OutboxDispatch),
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize)]
+#[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct InboxProcess {
     pub metadata: Vec<u8>,
     pub message: Vec<u8>,
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize)]
+#[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct OutboxDispatch {
     pub sender: Pubkey,
     pub destination_domain: u32,
@@ -49,7 +53,8 @@ struct OutboxDispatch {
     pub message_body: Vec<u8>,
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize)]
+#[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct Init {
     pub local_domain: u32,
     pub default_ism: Pubkey,
@@ -57,7 +62,8 @@ struct Init {
     pub protocol_fee: ProtocolFee,
 }
 
-#[derive(AnchorDeserialize, AnchorSerialize)]
+#[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct ProtocolFee {
     pub fee: u64,
     pub beneficiary: Pubkey,
