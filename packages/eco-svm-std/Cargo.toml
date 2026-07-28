@@ -9,7 +9,6 @@ mainnet = []
 [dependencies]
 anchor-lang = { workspace = true }
 derive-new = { workspace = true }
-derive_more = { version = "2.0.1", features = ["deref"] }
 
 [dev-dependencies]
 goldie = { workspace = true }

@@ -56,13 +56,17 @@ impl ProofData {
             .collect()
     }
 
+    // `clippy::manual_is_multiple_of` (new in 1.97) wants `is_multiple_of` here, but that
+    // method does not exist in the rustc the Solana platform-tools ship, so the on-chain
+    // build cannot use it. Keep the `%` form until the platform-tools rustc catches up.
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         require!(
             bytes.len() >= 8,
             anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
         );
         require!(
-            (bytes.len() - 8).is_multiple_of(64),
+            (bytes.len() - 8) % 64 == 0,
             anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
         );
 
