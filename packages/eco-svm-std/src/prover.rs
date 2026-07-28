@@ -62,7 +62,7 @@ impl ProofData {
             anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
         );
         require!(
-            (bytes.len() - 8) % 64 == 0,
+            (bytes.len() - 8).is_multiple_of(64),
             anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
         );
 
