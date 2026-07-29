@@ -14,6 +14,15 @@ Instead: stop, tell the human in plain language that this is a security fix and 
 
 Anchor (0.31.1) workspace implementing a cross-chain intent protocol on Solana. Rust 1.97.1 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.
 
+Two toolchains matter and they are not the same one. `rust-toolchain.toml` is the **host**
+compiler (clippy, tests, `avm`). The **on-chain** programs are compiled by the rustc inside
+Solana's platform-tools, which `anchor build` resolves itself — currently 1.79.0-dev, far
+older than the host. Anything in program code or in a dependency of `eco-svm-std` must
+compile under *that* rustc, so a new-ish stdlib method or a dependency raising its MSRV
+will break the on-chain build while the host build stays green. CI pins `SOLANA_VERSION`
+and asserts the SBF rustc after every build (`scripts/assert-sbf-rustc.sh`) so this cannot
+change silently.
+
 ## Build / test / lint
 
 ```bash
