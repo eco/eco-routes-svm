@@ -1088,7 +1088,6 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "derive-new",
- "derive_more",
  "goldie",
 ]
 

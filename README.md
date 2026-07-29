@@ -114,9 +114,13 @@ source ~/.cargo/env
 
 #### 2. Install Solana CLI
 ```bash
-sh -c "$(curl -sSfL https://release.solana.com/v1.18.26/install)"
+sh -c "$(curl -sSfL https://release.anza.xyz/v4.1.1/install)"
 export PATH="~/.local/share/solana/install/active_release/bin:$PATH"
 ```
+
+Use this exact version. CI pins it (`SOLANA_VERSION` in `.github/workflows/`) because it
+decides which platform-tools rustc compiles the on-chain programs; installing a different
+one locally can produce different bytecode than a release build.
 
 #### 3. Install Anchor CLI
 ```bash
@@ -134,8 +138,8 @@ cargo install cargo-sort
 cargo install goldie
 
 # Set Rust toolchain
-rustup toolchain install 1.89.0
-rustup default 1.89.0
+rustup toolchain install 1.97.1
+rustup default 1.97.1
 ```
 
 ### Project Setup

@@ -4,10 +4,28 @@ inputs:
   anchor-version:
     description: 'Anchor CLI version to install'
     required: true
+  solana-version:
+    description: 'Solana CLI version to install (exact, no leading v)'
+    required: true
 
 runs:
   using: 'composite'
   steps:
+    # Native deps for building avm / anchor-cli from source. These used to arrive as a side
+    # effect of the upstream "latest stable" install script; declared here so they do not
+    # depend on what that script happens to do.
+    - name: Install build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libssl-dev libudev-dev \
+          llvm libclang-dev protobuf-compiler libprotobuf-dev
+
+    # The cache key must contain the Solana version. Keyed on "stable" instead, an eviction
+    # silently swaps in whatever the installer serves that day -- including the platform-tools
+    # under ~/.cache/solana that compile the on-chain programs.
     - name: Cache Solana installation
       id: cache-solana
       uses: actions/cache@v4
@@ -15,13 +33,16 @@ runs:
         path: |
           ~/.cache/solana
           ~/.local/share/solana
-        key: solana-stable-${{ runner.os }}
+        key: solana-v${{ inputs.solana-version }}-${{ runner.os }}
 
+    # Pinned installer, not the "latest stable" convenience script: that one resolves to a
+    # moving target and also side-installs Anchor, surfpool, and Node, none of which this
+    # workflow uses (Anchor comes from avm below).
     - name: Install Solana CLI
       if: steps.cache-solana.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
+        sh -c "$(curl --proto '=https' --tlsv1.2 -sSfL https://release.anza.xyz/v${{ inputs.solana-version }}/install)"
         echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
     - name: Add Solana to PATH
@@ -81,3 +102,6 @@ runs:
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.avm/bin:$PATH"
         solana --version
         anchor --version
+        # Records the platform-tools/rustc this Solana CLI defaults to. Note `anchor build`
+        # may still resolve a different one -- assert-sbf-rustc.sh checks what it actually used.
+        cargo build-sbf --version
