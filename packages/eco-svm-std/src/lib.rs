@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use derive_more::Deref;
 
 pub mod account;
 pub mod prover;
@@ -11,10 +10,16 @@ pub const CHAIN_ID: u64 = 1399811150;
 
 const EVENT_AUTHORITY_SEED: &[u8] = b"__event_authority";
 
-#[derive(
-    AnchorSerialize, AnchorDeserialize, InitSpace, Deref, Clone, Copy, Debug, PartialEq, Eq,
-)]
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bytes32([u8; 32]);
+
+impl std::ops::Deref for Bytes32 {
+    type Target = [u8; 32];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl From<[u8; 32]> for Bytes32 {
     fn from(bytes: [u8; 32]) -> Self {

@@ -8,8 +8,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RUST_VERSION: "1.89.0"
+  RUST_VERSION: "1.97.1"
   ANCHOR_VERSION: "0.31.1"
+  # Exact Solana CLI version. This decides the platform-tools that compile the on-chain
+  # programs, so it is pinned rather than tracking "stable".
+  SOLANA_VERSION: "4.1.1"
+  # The rustc `anchor build` actually uses for the programs, asserted after every build.
+  # Changing this changes the compiler that produces deployed bytecode -- do it deliberately.
+  SBF_RUSTC_VERSION: "1.79.0-dev"
 
 jobs:
   release:
@@ -34,6 +40,7 @@ jobs:
         uses: ./.github/actions/setup-anchor
         with:
           anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -61,6 +68,10 @@ jobs:
           for program in portal hyper_prover local_prover flash_fulfiller proof_helper; do
             cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.mainnet.json"
           done
+
+      - name: Assert on-chain compiler
+        if: steps.dry.outputs.new_release_published == 'true'
+        run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }}
 
       - name: Build devnet IDLs
         if: steps.dry.outputs.new_release_published == 'true'
