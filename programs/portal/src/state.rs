@@ -42,8 +42,12 @@ impl WithdrawnMarker {
     }
 }
 
-/// `claimant` must stay the first field: `prove` reads it and nothing else, and
-/// `payer` is the sole authority allowed to close the marker and reclaim its rent.
+/// The whole field order is on-chain ABI: `prove` deserializes the full struct
+/// (`prove.rs`), so reordering breaks it, not just moving `claimant`.
+/// `fulfill_marker_layout_deterministic` pins the encoding.
+///
+/// `payer` is the sole authority allowed to close the marker and reclaim its
+/// rent; `deadline` is `route.deadline`, which gates that close.
 #[account]
 #[derive(InitSpace, Debug, PartialEq, new)]
 pub struct FulfillMarker {
@@ -126,9 +130,19 @@ mod tests {
         )));
     }
 
+    /// Pins the account size *and* the field order — `prove` deserializes the
+    /// whole struct, so a reorder is an ABI break that a size-only assertion
+    /// would not catch. Each field gets a distinct byte pattern.
     #[test]
-    fn fulfill_marker_space_deterministic() {
-        goldie::assert_json!(8 + FulfillMarker::INIT_SPACE);
+    fn fulfill_marker_layout_deterministic() {
+        let marker = FulfillMarker::new(
+            [1u8; 32].into(),
+            Pubkey::new_from_array([2u8; 32]),
+            0x0304050607080910,
+            11,
+        );
+
+        goldie::assert_json!((8 + FulfillMarker::INIT_SPACE, marker.try_to_vec().unwrap()));
     }
 
     #[test]

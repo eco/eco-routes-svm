@@ -17,6 +17,14 @@ pub use publish::*;
 pub use refund::*;
 pub use withdraw::*;
 
+pub fn now() -> u64 {
+    Clock::get()
+        .expect("clock sysvar must be available")
+        .unix_timestamp
+        .try_into()
+        .expect("timestamp must fit in u64")
+}
+
 #[error_code]
 pub enum PortalError {
     InvalidCreator,

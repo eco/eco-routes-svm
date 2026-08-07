@@ -8,7 +8,7 @@ use eco_svm_std::{Bytes32, CHAIN_ID};
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
-use crate::instructions::PortalError;
+use crate::instructions::{now, PortalError};
 use crate::state::{executor_pda, FulfillMarker, EXECUTOR_SEED, FULFILL_MARKER_SEED};
 use crate::types::{
     self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
@@ -54,14 +54,7 @@ pub fn fulfill_intent<'info>(
     } = args;
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
-    require!(
-        route.deadline
-            >= Clock::get()?
-                .unix_timestamp
-                .try_into()
-                .expect("timestamp must fit in u64"),
-        PortalError::RouteExpired
-    );
+    require!(route.deadline >= now(), PortalError::RouteExpired);
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;

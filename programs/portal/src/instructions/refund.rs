@@ -7,7 +7,7 @@ use eco_svm_std::prover::Proof;
 use eco_svm_std::Bytes32;
 
 use crate::events::IntentRefunded;
-use crate::instructions::PortalError;
+use crate::instructions::{now, PortalError};
 use crate::state::{vault_pda, WithdrawnMarker, VAULT_SEED};
 use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts};
 
@@ -93,14 +93,7 @@ fn validate_intent_status<'info>(
     );
 
     // not fulfilled and not expired
-    require!(
-        reward.deadline
-            <= Clock::get()?
-                .unix_timestamp
-                .try_into()
-                .expect("timestamp must fit in u64"),
-        PortalError::RewardNotExpired
-    );
+    require!(reward.deadline <= now(), PortalError::RewardNotExpired);
 
     Ok(())
 }
