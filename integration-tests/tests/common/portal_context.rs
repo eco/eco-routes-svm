@@ -301,6 +301,51 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
+    pub fn close_fulfill_marker(
+        &mut self,
+        intent_hash: Bytes32,
+        fulfill_marker: Pubkey,
+    ) -> TransactionResult {
+        let payer = self.payer.pubkey();
+
+        self.close_fulfill_markers(vec![(intent_hash, fulfill_marker)], payer, vec![])
+    }
+
+    /// `payer` is the marker's stored payer (the close authority and refund
+    /// target), which is not necessarily the transaction's fee payer — the
+    /// latter is always `self.payer`.
+    pub fn close_fulfill_markers(
+        &mut self,
+        markers: Vec<(Bytes32, Pubkey)>,
+        payer: Pubkey,
+        additional_signers: Vec<&Keypair>,
+    ) -> TransactionResult {
+        let instructions: Vec<_> = markers
+            .into_iter()
+            .map(|(intent_hash, fulfill_marker)| Instruction {
+                program_id: portal::ID,
+                accounts: portal::accounts::CloseFulfillMarker {
+                    payer,
+                    fulfill_marker,
+                }
+                .to_account_metas(None),
+                data: portal::instruction::CloseFulfillMarker {
+                    args: portal::instructions::CloseFulfillMarkerArgs { intent_hash },
+                }
+                .data(),
+            })
+            .collect();
+
+        let signers: Vec<_> = iter::once(&self.payer).chain(additional_signers).collect();
+        let transaction = Transaction::new(
+            &signers,
+            Message::new(&instructions, Some(&self.payer.pubkey())),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prove_intent_via_hyper_prover(
         &mut self,

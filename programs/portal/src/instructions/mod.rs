@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+mod close_fulfill_marker;
 mod fulfill;
 mod fund;
 mod fund_context;
@@ -8,6 +9,7 @@ mod publish;
 mod refund;
 mod withdraw;
 
+pub use close_fulfill_marker::*;
 pub use fulfill::*;
 pub use fund::*;
 pub use prove::*;
@@ -44,4 +46,7 @@ pub enum PortalError {
     InvalidProofCloser,
     InvalidIntentHash,
     EmptyIntentHashes,
+    // Anchor assigns error codes positionally from 6000 — append only, never insert.
+    InvalidFulfillMarkerPayer,
+    RouteNotExpired,
 }

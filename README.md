@@ -264,10 +264,11 @@ anchor test --skip-deploy
 - `prove` - Submit proof of fulfillment from destination chain
 - `refund` - Refund intent if not fulfilled within timeout
 - `withdraw` - Withdraw rewards after successful proof validation
+- `close_fulfill_marker` - Reclaim a `FulfillMarker`'s rent once `route.deadline` has passed. Signed by the marker's stored `payer`, which is also the refund target. **Only close after the intent is proven** — the marker holds the claimant that `prove` reads, so closing early makes the intent permanently unprovable and the fulfillment unrecoverable. The deadline alone is not sufficient: it only retires the double-fulfill guard, since `prove` runs against the later source-side `reward.deadline`.
 
 #### Key Accounts:
 - `Vault` - Escrows reward tokens for intent funding
-- `FulfillMarker` - Tracks intent fulfillment status with claimant address
+- `FulfillMarker` - Tracks intent fulfillment status with claimant address, plus the payer allowed to close it and the route deadline gating that close
 - `WithdrawnMarker` - Prevents double withdrawals of rewards
 
 ### Hyper-Prover Program

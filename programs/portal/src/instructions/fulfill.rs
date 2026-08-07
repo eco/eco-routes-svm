@@ -72,7 +72,7 @@ pub fn fulfill_intent<'info>(
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    mark_fulfilled(&ctx, &intent_hash, &claimant)?;
+    mark_fulfilled(&ctx, &intent_hash, &claimant, route.deadline)?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
 
@@ -178,7 +178,12 @@ fn execute_route_call(
     invoke_signed(&instruction, call_accounts, &[signer_seeds]).map_err(Into::into)
 }
 
-fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Bytes32) -> Result<()> {
+fn mark_fulfilled(
+    ctx: &Context<Fulfill>,
+    intent_hash: &Bytes32,
+    claimant: &Bytes32,
+    deadline: u64,
+) -> Result<()> {
     let (fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
     require!(
         ctx.accounts.fulfill_marker.key() == fulfill_marker,
@@ -186,7 +191,7 @@ fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Byte
     );
     let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
 
-    FulfillMarker::new(*claimant, bump)
+    FulfillMarker::new(*claimant, ctx.accounts.payer.key(), deadline, bump)
         .init(
             &ctx.accounts.fulfill_marker,
             &ctx.accounts.payer,

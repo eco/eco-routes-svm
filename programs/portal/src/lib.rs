@@ -49,6 +49,13 @@ pub mod portal {
     ) -> Result<()> {
         prove_intent(ctx, args)
     }
+
+    pub fn close_fulfill_marker(
+        ctx: Context<CloseFulfillMarker>,
+        args: CloseFulfillMarkerArgs,
+    ) -> Result<()> {
+        instructions::close_fulfill_marker(ctx, args)
+    }
 }
 
 #[cfg(test)]

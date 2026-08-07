@@ -42,10 +42,14 @@ impl WithdrawnMarker {
     }
 }
 
+/// `claimant` must stay the first field: `prove` reads it and nothing else, and
+/// `payer` is the sole authority allowed to close the marker and reclaim its rent.
 #[account]
 #[derive(InitSpace, Debug, PartialEq, new)]
 pub struct FulfillMarker {
     pub claimant: Bytes32,
+    pub payer: Pubkey,
+    pub deadline: u64,
     pub bump: u8,
 }
 
@@ -120,6 +124,11 @@ mod tests {
             &route_hash,
             &reward_hash,
         )));
+    }
+
+    #[test]
+    fn fulfill_marker_space_deterministic() {
+        goldie::assert_json!(8 + FulfillMarker::INIT_SPACE);
     }
 
     #[test]

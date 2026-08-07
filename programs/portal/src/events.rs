@@ -48,3 +48,10 @@ pub struct IntentProven {
     intent_hash: Bytes32,
     claimant: Bytes32,
 }
+
+#[event]
+#[derive(new)]
+pub struct FulfillMarkerClosed {
+    intent_hash: Bytes32,
+    payer: Pubkey,
+}
