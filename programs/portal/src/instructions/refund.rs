@@ -93,7 +93,7 @@ fn validate_intent_status<'info>(
     );
 
     // not fulfilled and not expired
-    require!(reward.deadline <= now(), PortalError::RewardNotExpired);
+    require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
 
     Ok(())
 }

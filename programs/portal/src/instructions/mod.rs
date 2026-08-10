@@ -17,12 +17,11 @@ pub use publish::*;
 pub use refund::*;
 pub use withdraw::*;
 
-pub fn now() -> u64 {
-    Clock::get()
-        .expect("clock sysvar must be available")
+pub fn now() -> Result<u64> {
+    Ok(Clock::get()?
         .unix_timestamp
         .try_into()
-        .expect("timestamp must fit in u64")
+        .expect("timestamp must fit in u64"))
 }
 
 #[error_code]

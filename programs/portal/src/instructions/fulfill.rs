@@ -54,7 +54,7 @@ pub fn fulfill_intent<'info>(
     } = args;
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
-    require!(route.deadline >= now(), PortalError::RouteExpired);
+    require!(route.deadline >= now()?, PortalError::RouteExpired);
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
