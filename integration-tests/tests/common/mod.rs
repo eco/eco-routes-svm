@@ -9,11 +9,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::Proof;
+use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::state::ProofAccount;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
-use portal::state::WithdrawnMarker;
-use portal::types::{Call, Reward, Route, TokenAmount};
+use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
+use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
 use solana_sdk::instruction::InstructionError;
@@ -39,6 +40,14 @@ const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_pro
 const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_fulfiller.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
+
+/// An intent already put through `fulfill` by [`Context::fulfill_rand_intents`].
+/// `route` and `reward_hash` are kept so callers can replay the same `fulfill`.
+pub struct FulfilledIntent {
+    pub intent_hash: Bytes32,
+    pub route: Route,
+    pub reward_hash: Bytes32,
+}
 
 #[derive(Deref, DerefMut)]
 pub struct Context {
@@ -150,6 +159,45 @@ impl Context {
                 tokens: reward_tokens,
             },
         )
+    }
+
+    /// Fulfills `intent_count` minimal intents — no route tokens, calls, or
+    /// native amount — against `prover`.
+    pub fn fulfill_rand_intents(
+        &mut self,
+        intent_count: usize,
+        prover: Pubkey,
+    ) -> Vec<FulfilledIntent> {
+        (0..intent_count)
+            .map(|_| {
+                let (_, mut route, mut reward) = self.rand_intent();
+                route.tokens.clear();
+                route.calls.clear();
+                route.native_amount = 0;
+                reward.prover = prover;
+                let reward_hash = reward.hash();
+                let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
+
+                self.portal()
+                    .fulfill_intent(
+                        intent_hash,
+                        &route,
+                        reward_hash,
+                        Pubkey::new_unique().to_bytes().into(),
+                        executor_pda().0,
+                        FulfillMarker::pda(&intent_hash).0,
+                        vec![],
+                        vec![],
+                    )
+                    .unwrap();
+
+                FulfilledIntent {
+                    intent_hash,
+                    route,
+                    reward_hash,
+                }
+            })
+            .collect()
     }
 
     pub fn set_mint_account(&mut self, mint: &Pubkey) {

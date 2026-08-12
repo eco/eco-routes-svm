@@ -8,7 +8,7 @@ use eco_svm_std::{Bytes32, CHAIN_ID};
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
-use crate::instructions::PortalError;
+use crate::instructions::{now, PortalError};
 use crate::state::{executor_pda, FulfillMarker, EXECUTOR_SEED, FULFILL_MARKER_SEED};
 use crate::types::{
     self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
@@ -54,14 +54,7 @@ pub fn fulfill_intent<'info>(
     } = args;
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
-    require!(
-        route.deadline
-            >= Clock::get()?
-                .unix_timestamp
-                .try_into()
-                .expect("timestamp must fit in u64"),
-        PortalError::RouteExpired
-    );
+    require!(route.deadline >= now()?, PortalError::RouteExpired);
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
@@ -72,7 +65,7 @@ pub fn fulfill_intent<'info>(
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    mark_fulfilled(&ctx, &intent_hash, &claimant)?;
+    mark_fulfilled(&ctx, &intent_hash, &claimant, route.deadline)?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
 
@@ -178,7 +171,12 @@ fn execute_route_call(
     invoke_signed(&instruction, call_accounts, &[signer_seeds]).map_err(Into::into)
 }
 
-fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Bytes32) -> Result<()> {
+fn mark_fulfilled(
+    ctx: &Context<Fulfill>,
+    intent_hash: &Bytes32,
+    claimant: &Bytes32,
+    deadline: u64,
+) -> Result<()> {
     let (fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
     require!(
         ctx.accounts.fulfill_marker.key() == fulfill_marker,
@@ -186,7 +184,7 @@ fn mark_fulfilled(ctx: &Context<Fulfill>, intent_hash: &Bytes32, claimant: &Byte
     );
     let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
 
-    FulfillMarker::new(*claimant, bump)
+    FulfillMarker::new(*claimant, ctx.accounts.payer.key(), deadline, bump)
         .init(
             &ctx.accounts.fulfill_marker,
             &ctx.accounts.payer,

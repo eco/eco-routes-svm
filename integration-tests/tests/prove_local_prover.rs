@@ -1,42 +1,17 @@
 use eco_svm_std::{prover, CHAIN_ID};
 use local_prover::instructions::LocalProverError;
 use local_prover::state::ProofAccount;
-use portal::{state, types};
+use portal::state;
 use solana_sdk::pubkey::Pubkey;
 
 pub mod common;
 
 fn setup(intent_count: usize) -> (common::Context, Vec<eco_svm_std::Bytes32>) {
     let mut ctx = common::Context::default();
-
-    let intent_hashes = (0..intent_count)
-        .map(|_| {
-            let (_, mut route, mut reward) = ctx.rand_intent();
-            route.tokens.clear();
-            route.calls.clear();
-            route.native_amount = 0;
-            reward.prover = local_prover::ID;
-            let claimant = Pubkey::new_unique().to_bytes().into();
-            let executor = state::executor_pda().0;
-
-            let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
-            let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
-
-            ctx.portal()
-                .fulfill_intent(
-                    intent_hash,
-                    &route,
-                    reward.hash(),
-                    claimant,
-                    executor,
-                    fulfill_marker,
-                    vec![],
-                    vec![],
-                )
-                .unwrap();
-
-            intent_hash
-        })
+    let intent_hashes = ctx
+        .fulfill_rand_intents(intent_count, local_prover::ID)
+        .iter()
+        .map(|intent| intent.intent_hash)
         .collect();
 
     (ctx, intent_hashes)

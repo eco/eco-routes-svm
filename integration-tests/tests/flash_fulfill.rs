@@ -152,9 +152,15 @@ fn flash_fulfill_should_succeed() {
     assert!(ctx
         .account::<WithdrawnMarker>(&WithdrawnMarker::pda(&intent_hash_value).0)
         .is_some());
-    assert!(ctx
-        .account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
-        .is_some());
+    // The marker records the signable caller, not `flash_vault` (which acts as
+    // the fulfill CPI's solver) — only that key can later reclaim the rent via
+    // `close_fulfill_marker`, so a PDA here would strand it permanently.
+    assert_eq!(
+        ctx.account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
+            .unwrap()
+            .payer,
+        ctx.payer.pubkey()
+    );
     assert!(ctx
         .account::<local_prover::state::ProofAccount>(
             &Proof::pda(&intent_hash_value, &local_prover::ID).0,

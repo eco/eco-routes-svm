@@ -7,7 +7,7 @@ use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::hyperlane::{self, MailboxInstruction, MAILBOX_ID};
 use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentProven;
-use portal::{state, types};
+use portal::state;
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
@@ -17,35 +17,10 @@ pub mod common;
 
 fn setup(intent_count: usize) -> (common::Context, Vec<Bytes32>) {
     let mut ctx = common::Context::default();
-
-    let intent_hashes = (0..intent_count)
-        .map(|_| {
-            let (_, mut route, _) = ctx.rand_intent();
-            route.tokens.clear();
-            route.calls.clear();
-            route.native_amount = 0;
-            let reward_hash = rand::random::<[u8; 32]>().into();
-            let claimant = Pubkey::new_unique().to_bytes().into();
-            let executor = state::executor_pda().0;
-
-            let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
-            let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
-
-            ctx.portal()
-                .fulfill_intent(
-                    intent_hash,
-                    &route,
-                    reward_hash,
-                    claimant,
-                    executor,
-                    fulfill_marker,
-                    vec![],
-                    vec![],
-                )
-                .unwrap();
-
-            intent_hash
-        })
+    let intent_hashes = ctx
+        .fulfill_rand_intents(intent_count, hyper_prover::ID)
+        .iter()
+        .map(|intent| intent.intent_hash)
         .collect();
 
     (ctx, intent_hashes)
