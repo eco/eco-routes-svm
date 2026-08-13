@@ -103,6 +103,64 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
+    /// Funds with a sponsor `payer` distinct from both `funder` and the
+    /// transaction fee payer, using `to_account_metas` so the `payer` account's
+    /// writability reflects the `Fund` struct's constraints (i.e. an IDL-driven
+    /// client). Exercises the sponsored-relayer configuration the default
+    /// `fund_intent` builder cannot express (it pins payer to the fee payer).
+    #[allow(clippy::too_many_arguments)]
+    pub fn fund_intent_sponsored(
+        &mut self,
+        payer: &Keypair,
+        fee_payer: &Keypair,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        allow_partial: bool,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+    ) -> TransactionResult {
+        let args = portal::instructions::FundArgs {
+            destination,
+            route_hash,
+            reward,
+            allow_partial,
+        };
+        let instruction = portal::instruction::Fund { args };
+        let accounts: Vec<_> = portal::accounts::Fund {
+            payer: payer.pubkey(),
+            funder: self.funder.pubkey(),
+            vault,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            associated_token_program: anchor_spl::associated_token::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_transfer_accounts)
+        .collect();
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: instruction.data(),
+        };
+
+        let transaction = Transaction::new(
+            &[fee_payer, payer, &self.funder],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+                    instruction,
+                ],
+                Some(&fee_payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
