@@ -211,7 +211,10 @@ fn withdraw_token<'info>(
         accounts.to_data()?.owner == ctx.accounts.claimant.key(),
         PortalError::InvalidClaimantToken
     );
-    require!(accounts.to.key() == claimant_ata, PortalError::InvalidAta);
+    require!(
+        accounts.to.key() == claimant_ata,
+        PortalError::InvalidClaimantAta
+    );
     let reward_token_amount = *reward_token_amounts
         .get(&mint_key)
         .ok_or(PortalError::InvalidMint)?;

@@ -56,4 +56,5 @@ pub enum PortalError {
     // Anchor assigns error codes positionally from 6000 — append only, never insert.
     InvalidFulfillMarkerPayer,
     RouteNotExpired,
+    InvalidClaimantAta,
 }
