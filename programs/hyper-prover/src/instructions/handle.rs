@@ -72,6 +72,18 @@ fn mark_intent_hash_proven<'info>(
     require!(proof.key() == proof_pda, HyperProverError::InvalidProof);
     let proof_signer_seeds = [PROOF_SEED, intent_hash.as_ref(), &[bump]];
 
+    // A dispatched payload is immutable, so every redelivery carries the same
+    // batch. Reaching the recorded state again is a no-op, and only a state
+    // that disagrees is an error — one entry must not decide the batch.
+    if let Some(recorded) = prover::Proof::try_from_account_info(proof)? {
+        require!(
+            recorded.destination == destination && recorded.claimant == claimant,
+            HyperProverError::IntentAlreadyProven
+        );
+
+        return Ok(());
+    }
+
     let (pda_payer_pda, bump) = pda_payer_pda();
     require!(
         ctx.accounts.pda_payer.key() == pda_payer_pda,
@@ -79,14 +91,12 @@ fn mark_intent_hash_proven<'info>(
     );
     let pda_payer_signer_seeds = [PDA_PAYER_SEED, &[bump]];
 
-    ProofAccount::from(prover::Proof::new(destination, claimant))
-        .init(
-            proof,
-            &ctx.accounts.pda_payer,
-            &ctx.accounts.system_program,
-            &[&pda_payer_signer_seeds, &proof_signer_seeds],
-        )
-        .map_err(|_| HyperProverError::IntentAlreadyProven)?;
+    ProofAccount::from(prover::Proof::new(destination, claimant)).init(
+        proof,
+        &ctx.accounts.pda_payer,
+        &ctx.accounts.system_program,
+        &[&pda_payer_signer_seeds, &proof_signer_seeds],
+    )?;
 
     emit_cpi!(IntentProven::new(intent_hash, claimant, destination));
 

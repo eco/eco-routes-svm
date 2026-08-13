@@ -336,7 +336,7 @@ fn handle_invalid_pda_payer_fail() {
 }
 
 #[test]
-fn handle_already_proven_fail() {
+fn handle_already_proven_same_state_success() {
     let mut ctx = setup();
     let destination: u32 = random();
     let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
@@ -373,7 +373,163 @@ fn handle_already_proven_fail() {
         ctx.hyper_prover()
             .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_ok());
+
+    let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
+    let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
+    assert_eq!(destination as u64, proof.0.destination);
+    assert_eq!(claimant, proof.0.claimant);
+}
+
+#[test]
+fn handle_already_proven_other_state_fail() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let sender = ctx.sender.pubkey();
+    let proven_payload = ProofData::new(
+        destination.into(),
+        vec![IntentHashClaimant::new(intent_hash, claimant)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        proven_payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), proven_payload);
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
+
+    // same intent hash, different claimant
+    let other_claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let payload = ProofData::new(
+        destination.into(),
+        vec![IntentHashClaimant::new(intent_hash, other_claimant)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
+}
+
+#[test]
+fn handle_already_proven_other_destination_fail() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let sender = ctx.sender.pubkey();
+    let proven_payload = ProofData::new(
+        destination.into(),
+        vec![IntentHashClaimant::new(intent_hash, claimant)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        proven_payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), proven_payload);
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
+
+    // same intent hash and claimant, different destination
+    let payload = ProofData::new(
+        u64::from(destination) + 1,
+        vec![IntentHashClaimant::new(intent_hash, claimant)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
+}
+
+#[test]
+fn handle_batch_with_already_proven_entry_success() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let sender = ctx.sender.pubkey();
+    let claimants: Vec<Bytes32> = (0..3)
+        .map(|_| Pubkey::new_unique().to_bytes().into())
+        .collect();
+    let intent_hashes: Vec<Bytes32> = (0..3).map(|_| random::<[u8; 32]>().into()).collect();
+    let entries: Vec<_> = intent_hashes
+        .iter()
+        .cloned()
+        .zip(claimants.iter().cloned())
+        .map(|(intent_hash, claimant)| IntentHashClaimant::new(intent_hash, claimant))
+        .collect();
+
+    // prove the middle entry on its own first
+    let single_payload = ProofData::new(destination.into(), vec![entries[1].clone()]).to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        single_payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), single_payload);
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
+
+    // the batch still lands, proving the entries the single delivery did not
+    let payload = ProofData::new(destination.into(), entries).to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_ok());
+
+    intent_hashes
+        .into_iter()
+        .zip(claimants)
+        .for_each(|(intent_hash, claimant)| {
+            let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
+            let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
+            assert_eq!(destination as u64, proof.0.destination);
+            assert_eq!(claimant, proof.0.claimant);
+        });
 }
 
 #[test]
