@@ -62,45 +62,18 @@ impl Portal<'_> {
         allow_partial: bool,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
-        let args = portal::instructions::FundArgs {
+        let payer = self.payer.insecure_clone();
+
+        self.fund_intent_sponsored(
+            &payer,
+            &payer,
             destination,
-            route_hash,
             reward,
-            allow_partial,
-        };
-        let instruction = portal::instruction::Fund { args };
-        let accounts: Vec<_> = portal::accounts::Fund {
-            payer: self.payer.pubkey(),
-            funder: self.funder.pubkey(),
             vault,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            associated_token_program: anchor_spl::associated_token::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
-
-        let transaction = Transaction::new(
-            &[&self.payer, &self.funder],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-                    instruction,
-                ],
-                Some(&self.payer.pubkey()),
-            ),
-            self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+            route_hash,
+            allow_partial,
+            token_transfer_accounts,
+        )
     }
 
     /// Funds with a sponsor `payer` distinct from both `funder` and the
