@@ -306,6 +306,32 @@ impl Context {
         self.send_transaction(transaction).unwrap();
     }
 
+    /// Writes an initialized token account at an arbitrary address, i.e. one the
+    /// associated token program would never derive for `owner`.
+    pub fn set_token_account(&mut self, address: Pubkey, mint: &Pubkey, owner: &Pubkey) {
+        let mut data = [0u8; spl_token::state::Account::LEN];
+        spl_token::state::Account::pack(
+            spl_token::state::Account {
+                mint: *mint,
+                owner: *owner,
+                state: spl_token::state::AccountState::Initialized,
+                ..Default::default()
+            },
+            &mut data,
+        )
+        .unwrap();
+
+        let account = solana_sdk::account::Account {
+            lamports: self.get_sysvar::<Rent>().minimum_balance(data.len()),
+            data: data.to_vec(),
+            owner: self.token_program,
+            executable: false,
+            rent_epoch: 0,
+        };
+
+        self.set_account(address, account).unwrap();
+    }
+
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }

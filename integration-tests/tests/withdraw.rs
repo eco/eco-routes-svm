@@ -626,6 +626,54 @@ fn withdraw_intent_invalid_claimant_token_fail() {
 }
 
 #[test]
+fn withdraw_intent_non_ata_claimant_token_fail() {
+    let (mut ctx, intent, route_hash) = setup(false);
+    let (destination, _route, reward) = &intent;
+    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
+    let claimant = Pubkey::new_unique();
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+    let token_program = &ctx.token_program.clone();
+
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
+
+    let token_accounts: Vec<_> = reward
+        .tokens
+        .iter()
+        .flat_map(|token| {
+            let claimant_token = Pubkey::new_unique();
+            ctx.set_token_account(claimant_token, &token.token, &claimant);
+            let vault_ata =
+                get_associated_token_address_with_program_id(&vault, &token.token, token_program);
+
+            vec![
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new(claimant_token, false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect();
+
+    let (destination, _route, reward) = &intent;
+    let result = ctx.portal().withdraw_intent(
+        *destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        claimant,
+        proof,
+        withdrawn_marker,
+        proof_closer_pda().0,
+        token_accounts,
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::InvalidAta
+    )));
+}
+
+#[test]
 fn withdraw_intent_already_withdrawn_fail() {
     let (mut ctx, intent, route_hash) = setup(false);
     let (destination, _route, reward) = &intent;

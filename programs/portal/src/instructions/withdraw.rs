@@ -199,12 +199,19 @@ fn withdraw_token<'info>(
         &mint_key,
         accounts.token_program_id(),
     );
+    // withdraw is permissionless, so the payout destination is derived, never caller-chosen
+    let claimant_ata = get_associated_token_address_with_program_id(
+        ctx.accounts.claimant.key,
+        &mint_key,
+        accounts.token_program_id(),
+    );
 
     require!(accounts.from.key() == vault_ata, PortalError::InvalidAta);
     require!(
         accounts.to_data()?.owner == ctx.accounts.claimant.key(),
         PortalError::InvalidClaimantToken
     );
+    require!(accounts.to.key() == claimant_ata, PortalError::InvalidAta);
     let reward_token_amount = *reward_token_amounts
         .get(&mint_key)
         .ok_or(PortalError::InvalidMint)?;
