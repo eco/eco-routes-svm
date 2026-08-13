@@ -373,7 +373,14 @@ fn handle_already_proven_same_state_success() {
         ctx.hyper_prover()
             .handle_account_metas(destination, sender.to_bytes(), payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
-    assert!(result.is_ok());
+    // the event repeats so a consumer that missed the first delivery still sees it
+    assert!(
+        result.is_ok_and(common::contains_cpi_event(prover::IntentProven::new(
+            intent_hash,
+            Pubkey::new_from_array(claimant.into()),
+            destination.into()
+        ),))
+    );
 
     let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
     let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
