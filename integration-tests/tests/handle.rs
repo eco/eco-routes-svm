@@ -429,6 +429,48 @@ fn handle_already_proven_other_state_fail() {
 }
 
 #[test]
+fn handle_already_proven_invalid_pda_payer_fail() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let sender = ctx.sender.pubkey();
+    let payload = ProofData::new(
+        destination.into(),
+        vec![IntentHashClaimant::new(intent_hash, claimant)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload.clone());
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
+
+    // a no-op entry still validates every account the instruction declares
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let mut handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    *handle_account_metas.get_mut(2).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPdaPayer)))
+}
+
+#[test]
 fn handle_already_proven_other_destination_fail() {
     let mut ctx = setup();
     let destination: u32 = random();

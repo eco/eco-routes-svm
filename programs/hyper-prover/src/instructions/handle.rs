@@ -72,6 +72,13 @@ fn mark_intent_hash_proven<'info>(
     require!(proof.key() == proof_pda, HyperProverError::InvalidProof);
     let proof_signer_seeds = [PROOF_SEED, intent_hash.as_ref(), &[bump]];
 
+    let (pda_payer_pda, bump) = pda_payer_pda();
+    require!(
+        ctx.accounts.pda_payer.key() == pda_payer_pda,
+        HyperProverError::InvalidPdaPayer
+    );
+    let pda_payer_signer_seeds = [PDA_PAYER_SEED, &[bump]];
+
     // A dispatched payload is immutable, so every redelivery carries the same
     // batch. Reaching the recorded state again is a no-op, and only a state
     // that disagrees is an error — one entry must not decide the batch.
@@ -83,13 +90,6 @@ fn mark_intent_hash_proven<'info>(
 
         return Ok(());
     }
-
-    let (pda_payer_pda, bump) = pda_payer_pda();
-    require!(
-        ctx.accounts.pda_payer.key() == pda_payer_pda,
-        HyperProverError::InvalidPdaPayer
-    );
-    let pda_payer_signer_seeds = [PDA_PAYER_SEED, &[bump]];
 
     ProofAccount::from(prover::Proof::new(destination, claimant)).init(
         proof,
