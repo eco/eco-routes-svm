@@ -13,6 +13,7 @@ use portal::types::intent_hash;
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
+use solana_sdk::system_instruction::SystemError;
 
 use crate::common::sol_amount;
 
@@ -333,6 +334,42 @@ fn handle_invalid_pda_payer_fail() {
     *handle_account_metas.get_mut(2).unwrap() = AccountMeta::new(Pubkey::new_unique(), false);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidPdaPayer)))
+}
+
+#[test]
+fn handle_unfunded_pda_payer_fail() {
+    // no `setup()`: `pda_payer` is left unfunded, so the proof init fails on rent
+    // inside the system-program CPI and surfaces that error rather than any
+    // prover-level one — the signal the `pda_payer` balance alarm keys on
+    let mut ctx = common::Context::default();
+    let sender = ctx.sender.pubkey();
+    ctx.hyper_prover()
+        .init(vec![sender.to_bytes().into()], Config::pda().0)
+        .unwrap();
+
+    let destination: u32 = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let payload = ProofData::new(
+        destination.into(),
+        vec![IntentHashClaimant::new(intent_hash, claimant)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_err_and(common::is_error(
+        SystemError::ResultWithNegativeLamports as u32
+    )));
 }
 
 #[test]
