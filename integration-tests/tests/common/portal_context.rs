@@ -77,10 +77,11 @@ impl Portal<'_> {
     }
 
     /// Funds with a sponsor `payer` distinct from both `funder` and the
-    /// transaction fee payer, using `to_account_metas` so the `payer` account's
-    /// writability reflects the `Fund` struct's constraints (i.e. an IDL-driven
-    /// client). Exercises the sponsored-relayer configuration the default
-    /// `fund_intent` builder cannot express (it pins payer to the fee payer).
+    /// transaction fee payer — the sponsored-relayer configuration the default
+    /// `fund_intent` builder cannot express, since it pins payer to the fee
+    /// payer. `payer`'s writability comes from `to_account_metas`, i.e. from the
+    /// `Fund` struct's constraints, so it models an IDL-driven client rather
+    /// than a hand-built meta.
     #[allow(clippy::too_many_arguments)]
     pub fn fund_intent_sponsored(
         &mut self,

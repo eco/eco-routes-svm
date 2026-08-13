@@ -2,12 +2,15 @@ use std::iter;
 
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
+use anchor_spl::token::spl_token;
 use portal::events::IntentFunded;
 use portal::instructions::PortalError;
 use portal::state;
 use portal::types::{intent_hash, TokenAmount};
 use rand::random;
+use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
@@ -148,8 +151,15 @@ fn fund_intent_tokens_distinct_sponsor_payer_success() {
         ctx.funder.pubkey(),
         false,
     ))));
-    // The sponsor paid the ATA rent (it is not the fee payer).
-    assert!(ctx.balance(&sponsor.pubkey()) < sponsor_balance);
+    // The sponsor paid exactly one vault ATA's rent per reward mint, and nothing
+    // else: it is neither the fee payer nor the funder.
+    let ata_rent = ctx
+        .get_sysvar::<Rent>()
+        .minimum_balance(spl_token::state::Account::LEN);
+    assert_eq!(
+        ctx.balance(&sponsor.pubkey()),
+        sponsor_balance - reward.tokens.len() as u64 * ata_rent
+    );
     reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
         assert_eq!(
