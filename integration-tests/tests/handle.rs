@@ -560,6 +560,104 @@ fn handle_already_proven_other_destination_fail() {
     assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)))
 }
 
+/// The same intent hash twice **in one payload**. `portal::prove` does not dedupe
+/// `intent_hashes`, so the runtime hands `mark_intent_hash_proven` the same
+/// aliased `AccountInfo` twice: the first entry initialises, the second takes the
+/// no-op branch. That relies on duplicate accounts within one instruction sharing
+/// a data buffer, so entry 1's write is visible to entry 2's read — load-bearing
+/// and otherwise unpinned. Before this change entry 2 hit `ConstraintZero` and
+/// reverted the whole message.
+#[test]
+fn handle_repeated_intent_hash_same_claimant_success() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let sender = ctx.sender.pubkey();
+    let payload = ProofData::new(
+        destination.into(),
+        vec![
+            IntentHashClaimant::new(intent_hash, claimant),
+            IntentHashClaimant::new(intent_hash, claimant),
+        ],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result
+        .clone()
+        .is_ok_and(common::contains_cpi_event(prover::IntentProven::new(
+            intent_hash,
+            Pubkey::new_from_array(claimant.into()),
+            destination.into()
+        ),)));
+
+    // both entries emit, so a consumer counting events rather than upserting by
+    // intent hash would double-count
+    assert_eq!(
+        result.map(common::count_cpi_events(prover::IntentProven::new(
+            intent_hash,
+            Pubkey::new_from_array(claimant.into()),
+            destination.into()
+        ))),
+        Ok(2)
+    );
+
+    let proof_pda = Proof::pda(&intent_hash, &hyper_prover::ID).0;
+    let proof: ProofAccount = ctx.account(&proof_pda).unwrap();
+    assert_eq!(destination as u64, proof.0.destination);
+    assert_eq!(claimant, proof.0.claimant);
+}
+
+/// The intra-payload twin of `handle_already_proven_other_state_fail`. The
+/// source-side caller cannot currently construct it — `portal::prove` reads the
+/// claimant from the `FulfillMarker`, so both entries carry the same one — but
+/// that is a property of the caller, not of this guard, and being wrong here
+/// means a wrong proof rather than a duplicate log line.
+#[test]
+fn handle_repeated_intent_hash_other_claimant_fail() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let other_claimant: Bytes32 = Pubkey::new_unique().to_bytes().into();
+    let intent_hash: Bytes32 = random::<[u8; 32]>().into();
+    let sender = ctx.sender.pubkey();
+    let payload = ProofData::new(
+        destination.into(),
+        vec![
+            IntentHashClaimant::new(intent_hash, claimant),
+            IntentHashClaimant::new(intent_hash, other_claimant),
+        ],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        sender.to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+
+    let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
+    assert!(result.is_err_and(common::is_error(HyperProverError::IntentAlreadyProven)));
+    assert!(ctx
+        .account::<ProofAccount>(&Proof::pda(&intent_hash, &hyper_prover::ID).0)
+        .is_none());
+}
+
 #[test]
 fn handle_batch_with_already_proven_entry_success() {
     let mut ctx = setup();
