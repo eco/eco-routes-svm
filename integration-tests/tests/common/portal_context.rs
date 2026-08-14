@@ -67,6 +67,7 @@ impl Portal<'_> {
         self.fund_intent_sponsored(
             &payer,
             &payer,
+            true,
             destination,
             reward,
             vault,
@@ -87,6 +88,7 @@ impl Portal<'_> {
         &mut self,
         payer: &Keypair,
         fee_payer: &Keypair,
+        payer_writable: bool,
         destination: u64,
         reward: Reward,
         vault: Pubkey,
@@ -112,6 +114,15 @@ impl Portal<'_> {
         }
         .to_account_metas(None)
         .into_iter()
+        .map(
+            |meta| match meta.pubkey == payer.pubkey() && !payer_writable {
+                // hand-built rather than derived: every other fund test takes the
+                // payer's writability from the same `Fund` struct it exercises, which
+                // is what made the missing `mut` invisible in the first place
+                true => AccountMeta::new_readonly(meta.pubkey, meta.is_signer),
+                false => meta,
+            },
+        )
         .chain(token_transfer_accounts)
         .collect();
         let instruction = Instruction {

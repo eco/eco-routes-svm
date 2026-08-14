@@ -1,5 +1,6 @@
 use std::iter;
 
+use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
@@ -103,6 +104,40 @@ fn fund_intent_tokens_success() {
 /// writability is taken from the `Fund` struct constraints (an IDL-driven
 /// client). First-time token funding must create the vault ATA, charging the
 /// sponsor for rent.
+/// The contract this PR introduces: `#[account(mut)]` is checked in
+/// `try_accounts`, so a read-only sponsor `payer` is rejected before
+/// `fund_intent` runs — including on paths that create no ATA at all. Native-only
+/// funding is deliberately the shape here, since it is the case that succeeds
+/// today and would silently start succeeding again if the constraint were
+/// dropped.
+#[test]
+fn fund_intent_read_only_sponsor_payer_fail() {
+    let mut ctx = common::Context::default();
+    let (destination, _, mut reward) = ctx.rand_intent();
+    reward.tokens.clear();
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(destination, &route_hash, &reward.hash())).0;
+    let funder = ctx.funder.pubkey();
+
+    let sponsor = Keypair::new();
+    ctx.airdrop(&sponsor.pubkey(), 1_000_000_000).unwrap();
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
+    let fee_payer = ctx.payer.insecure_clone();
+
+    let result = ctx.portal().fund_intent_sponsored(
+        &sponsor,
+        &fee_payer,
+        false,
+        destination,
+        reward.clone(),
+        vault_pda,
+        route_hash,
+        true,
+        vec![],
+    );
+    assert!(result.is_err_and(common::is_error(ErrorCode::ConstraintMut)));
+}
+
 #[test]
 fn fund_intent_tokens_distinct_sponsor_payer_success() {
     let mut ctx = common::Context::default();
@@ -125,6 +160,7 @@ fn fund_intent_tokens_distinct_sponsor_payer_success() {
     let result = ctx.portal().fund_intent_sponsored(
         &sponsor,
         &fee_payer,
+        true,
         destination,
         reward.clone(),
         vault_pda,
@@ -158,7 +194,7 @@ fn fund_intent_tokens_distinct_sponsor_payer_success() {
         .minimum_balance(spl_token::state::Account::LEN);
     assert_eq!(
         ctx.balance(&sponsor.pubkey()),
-        sponsor_balance - reward.tokens.len() as u64 * ata_rent
+        sponsor_balance - reward.token_amounts().unwrap().len() as u64 * ata_rent
     );
     reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
