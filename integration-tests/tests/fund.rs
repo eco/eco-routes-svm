@@ -1,13 +1,18 @@
 use std::iter;
 
+use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
+use anchor_spl::token::spl_token;
 use portal::events::IntentFunded;
 use portal::instructions::PortalError;
 use portal::state;
 use portal::types::{intent_hash, TokenAmount};
 use rand::random;
+use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
+use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 pub mod common;
@@ -85,6 +90,112 @@ fn fund_intent_tokens_success() {
         false,
     ))));
     assert!(ctx.balance(&ctx.payer.pubkey()) < payer_balance);
+    reward.tokens.iter().for_each(|token| {
+        assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &vault_pda),
+            token.amount
+        );
+    });
+}
+
+/// A sponsored-relayer configuration: the account paying ATA rent (`payer`) is
+/// distinct from both the token `funder` and the transaction fee payer, and its
+/// writability is taken from the `Fund` struct constraints (an IDL-driven
+/// client). First-time token funding must create the vault ATA, charging the
+/// sponsor for rent.
+/// The contract this PR introduces: `#[account(mut)]` is checked in
+/// `try_accounts`, so a read-only sponsor `payer` is rejected before
+/// `fund_intent` runs — including on paths that create no ATA at all. Native-only
+/// funding is deliberately the shape here, since it is the case that succeeds
+/// today and would silently start succeeding again if the constraint were
+/// dropped.
+#[test]
+fn fund_intent_read_only_sponsor_payer_fail() {
+    let mut ctx = common::Context::default();
+    let (destination, _, mut reward) = ctx.rand_intent();
+    reward.tokens.clear();
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(destination, &route_hash, &reward.hash())).0;
+    let funder = ctx.funder.pubkey();
+
+    let sponsor = Keypair::new();
+    ctx.airdrop(&sponsor.pubkey(), 1_000_000_000).unwrap();
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
+    let fee_payer = ctx.payer.insecure_clone();
+
+    let result = ctx.portal().fund_intent_sponsored(
+        &sponsor,
+        &fee_payer,
+        false,
+        destination,
+        reward.clone(),
+        vault_pda,
+        route_hash,
+        true,
+        vec![],
+    );
+    assert!(result.is_err_and(common::is_error(ErrorCode::ConstraintMut)));
+}
+
+#[test]
+fn fund_intent_tokens_distinct_sponsor_payer_success() {
+    let mut ctx = common::Context::default();
+    let (destination, _, reward) = ctx.rand_intent();
+    let route_hash = random::<[u8; 32]>().into();
+    let vault_pda = state::vault_pda(&intent_hash(destination, &route_hash, &reward.hash())).0;
+    let funder = ctx.funder.pubkey();
+    let token_program = &ctx.token_program.clone();
+
+    // Sponsor pays ATA rent; it is neither the funder nor the fee payer.
+    let sponsor = Keypair::new();
+    ctx.airdrop(&sponsor.pubkey(), 1_000_000_000).unwrap();
+    let sponsor_balance = ctx.balance(&sponsor.pubkey());
+    let fee_payer = ctx.payer.insecure_clone();
+
+    reward.tokens.iter().for_each(|token| {
+        ctx.airdrop_token_ata(&token.token, &funder, token.amount);
+    });
+
+    let result = ctx.portal().fund_intent_sponsored(
+        &sponsor,
+        &fee_payer,
+        true,
+        destination,
+        reward.clone(),
+        vault_pda,
+        route_hash,
+        true,
+        reward.tokens.iter().flat_map(|token| {
+            let funder_token =
+                get_associated_token_address_with_program_id(&funder, &token.token, token_program);
+            let vault_ata = get_associated_token_address_with_program_id(
+                &vault_pda,
+                &token.token,
+                token_program,
+            );
+
+            vec![
+                AccountMeta::new(funder_token, false),
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        }),
+    );
+    assert!(result.is_ok_and(common::contains_event(IntentFunded::new(
+        intent_hash(destination, &route_hash, &reward.hash()),
+        ctx.funder.pubkey(),
+        false,
+    ))));
+    // The sponsor paid exactly one vault ATA's rent per reward mint, and nothing
+    // else: it is neither the fee payer nor the funder.
+    let ata_rent = ctx
+        .get_sysvar::<Rent>()
+        .minimum_balance(spl_token::state::Account::LEN);
+    assert_eq!(
+        ctx.balance(&sponsor.pubkey()),
+        sponsor_balance - reward.token_amounts().unwrap().len() as u64 * ata_rent
+    );
     reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &funder), 0);
         assert_eq!(

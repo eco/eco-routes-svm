@@ -62,6 +62,40 @@ impl Portal<'_> {
         allow_partial: bool,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
+        let payer = self.payer.insecure_clone();
+
+        self.fund_intent_sponsored(
+            &payer,
+            &payer,
+            true,
+            destination,
+            reward,
+            vault,
+            route_hash,
+            allow_partial,
+            token_transfer_accounts,
+        )
+    }
+
+    /// Funds with a sponsor `payer` distinct from both `funder` and the
+    /// transaction fee payer — the sponsored-relayer configuration the default
+    /// `fund_intent` builder cannot express, since it pins payer to the fee
+    /// payer. `payer`'s writability comes from `to_account_metas`, i.e. from the
+    /// `Fund` struct's constraints, so it models an IDL-driven client rather
+    /// than a hand-built meta.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fund_intent_sponsored(
+        &mut self,
+        payer: &Keypair,
+        fee_payer: &Keypair,
+        payer_writable: bool,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        allow_partial: bool,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+    ) -> TransactionResult {
         let args = portal::instructions::FundArgs {
             destination,
             route_hash,
@@ -70,7 +104,7 @@ impl Portal<'_> {
         };
         let instruction = portal::instruction::Fund { args };
         let accounts: Vec<_> = portal::accounts::Fund {
-            payer: self.payer.pubkey(),
+            payer: payer.pubkey(),
             funder: self.funder.pubkey(),
             vault,
             token_program: anchor_spl::token::ID,
@@ -80,6 +114,15 @@ impl Portal<'_> {
         }
         .to_account_metas(None)
         .into_iter()
+        .map(
+            |meta| match meta.pubkey == payer.pubkey() && !payer_writable {
+                // hand-built rather than derived: every other fund test takes the
+                // payer's writability from the same `Fund` struct it exercises, which
+                // is what made the missing `mut` invisible in the first place
+                true => AccountMeta::new_readonly(meta.pubkey, meta.is_signer),
+                false => meta,
+            },
+        )
         .chain(token_transfer_accounts)
         .collect();
         let instruction = Instruction {
@@ -89,13 +132,13 @@ impl Portal<'_> {
         };
 
         let transaction = Transaction::new(
-            &[&self.payer, &self.funder],
+            &[fee_payer, payer, &self.funder],
             Message::new(
                 &[
                     ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
                     instruction,
                 ],
-                Some(&self.payer.pubkey()),
+                Some(&fee_payer.pubkey()),
             ),
             self.svm.latest_blockhash(),
         );
