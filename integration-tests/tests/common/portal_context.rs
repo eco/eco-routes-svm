@@ -170,6 +170,39 @@ impl Portal<'_> {
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
         remaining_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
+        self.withdraw_intent_with_signers(
+            destination,
+            reward,
+            vault,
+            route_hash,
+            claimant,
+            proof,
+            withdrawn_marker,
+            proof_closer,
+            token_transfer_accounts,
+            remaining_accounts,
+            vec![],
+        )
+    }
+
+    /// `signers` are appended to the transaction and marked as signers in the
+    /// account list — used for the claimant-signed destination override, the
+    /// recovery route when the derived claimant ATA cannot receive.
+    #[allow(clippy::too_many_arguments)]
+    pub fn withdraw_intent_with_signers(
+        &mut self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        claimant: Pubkey,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        proof_closer: Pubkey,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        signers: Vec<&Keypair>,
+    ) -> TransactionResult {
         let prover = reward.prover;
         let args = portal::instructions::WithdrawArgs {
             destination,
@@ -193,6 +226,15 @@ impl Portal<'_> {
         .into_iter()
         .chain(token_transfer_accounts)
         .chain(remaining_accounts)
+        .map(
+            |meta| match signers.iter().any(|s| s.pubkey() == meta.pubkey) {
+                true => AccountMeta {
+                    is_signer: true,
+                    ..meta
+                },
+                false => meta,
+            },
+        )
         .collect();
         let instruction = Instruction {
             program_id: portal::ID,
@@ -200,8 +242,9 @@ impl Portal<'_> {
             data: instruction.data(),
         };
 
+        let all_signers: Vec<&Keypair> = std::iter::once(&self.payer).chain(signers).collect();
         let transaction = Transaction::new(
-            &[&self.payer],
+            &all_signers,
             Message::new(
                 &[
                     ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
