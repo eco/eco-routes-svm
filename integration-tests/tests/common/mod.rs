@@ -456,6 +456,30 @@ where
     }
 }
 
+/// How many times `expected` was emitted as an `event_cpi` event. Duplicate
+/// entries in one payload each emit, so consumers must upsert by intent hash
+/// rather than count — pinning the number here keeps that contract visible.
+pub fn count_cpi_events<E>(expected: E) -> impl Fn(TransactionMetadata) -> usize
+where
+    E: Event,
+{
+    let expected = expected.data();
+
+    move |actual: TransactionMetadata| {
+        actual
+            .inner_instructions
+            .iter()
+            .flat_map(|inner_ix_list| inner_ix_list.iter())
+            .filter(
+                |inner_instruction| match inner_instruction.instruction.data.get(8..) {
+                    Some(data) => data == expected,
+                    None => false,
+                },
+            )
+            .count()
+    }
+}
+
 pub fn contains_event_and_msg<E, M>(expected: E, msg: M) -> impl Fn(TransactionMetadata) -> bool
 where
     E: Event,

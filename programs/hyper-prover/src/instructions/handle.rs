@@ -79,14 +79,23 @@ fn mark_intent_hash_proven<'info>(
     );
     let pda_payer_signer_seeds = [PDA_PAYER_SEED, &[bump]];
 
-    ProofAccount::from(prover::Proof::new(destination, claimant))
-        .init(
+    // A dispatched payload is immutable, so every redelivery carries the same
+    // batch. Reaching the recorded state again is a no-op, and only a state
+    // that disagrees is an error — one entry must not decide the batch. The
+    // event repeats either way: it asserts the recorded state rather than a
+    // transition, so a consumer that missed the first delivery still sees it.
+    match prover::Proof::try_from_account_info(proof)? {
+        Some(recorded) => require!(
+            recorded.destination == destination && recorded.claimant == claimant,
+            HyperProverError::IntentAlreadyProven
+        ),
+        None => ProofAccount::from(prover::Proof::new(destination, claimant)).init(
             proof,
             &ctx.accounts.pda_payer,
             &ctx.accounts.system_program,
             &[&pda_payer_signer_seeds, &proof_signer_seeds],
-        )
-        .map_err(|_| HyperProverError::IntentAlreadyProven)?;
+        )?,
+    }
 
     emit_cpi!(IntentProven::new(intent_hash, claimant, destination));
 
