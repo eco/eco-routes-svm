@@ -100,7 +100,7 @@ In `flash_fulfill`, `strip_call_accounts` truncates each call's Borsh tail in-pl
 
 ## Integration tests (`integration-tests/`)
 
-Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
+Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_token_account`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
 
 Per-program contexts live next to `mod.rs`: `portal_context.rs`, `hyper_prover_context.rs`, `local_prover_context.rs`, `flash_fulfiller_context.rs`, `hyperlane_context.rs`, `proof_helper_context.rs`. They host the per-instruction `build_*_transaction` builders that integration tests call.
 

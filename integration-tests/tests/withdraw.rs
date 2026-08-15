@@ -11,6 +11,7 @@ use portal::state::{self, proof_closer_pda};
 use portal::types::{intent_hash, Reward, Route};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 pub mod common;
@@ -622,6 +623,184 @@ fn withdraw_intent_invalid_claimant_token_fail() {
     );
     assert!(result.is_err_and(common::is_error(
         portal::instructions::PortalError::InvalidClaimantToken
+    )));
+}
+
+/// The recovery route. Pinning the destination to the derived ATA would be
+/// terminal if that ATA cannot receive — a mint freeze authority, or a
+/// token-2022 `DefaultAccountState::Frozen` mint — because the whole withdraw
+/// reverts, the `Proof` survives, and `refund` refuses for as long as it does.
+/// The claimant, and only the claimant, may direct the payout elsewhere.
+#[test]
+fn withdraw_intent_claimant_signed_non_ata_destination_success() {
+    let (mut ctx, intent, route_hash) = setup(false);
+    let (destination, _route, reward) = &intent;
+    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
+    let claimant_keypair = Keypair::new();
+    let claimant = claimant_keypair.pubkey();
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+    let token_program = &ctx.token_program.clone();
+
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
+
+    let destinations: Vec<Pubkey> = reward
+        .tokens
+        .iter()
+        .map(|token| {
+            let claimant_token = Pubkey::new_unique();
+            ctx.set_token_account(claimant_token, &token.token, &claimant);
+            claimant_token
+        })
+        .collect();
+    let token_accounts: Vec<_> = reward
+        .tokens
+        .iter()
+        .zip(&destinations)
+        .flat_map(|(token, claimant_token)| {
+            let vault_ata =
+                get_associated_token_address_with_program_id(&vault, &token.token, token_program);
+
+            vec![
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new(*claimant_token, false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect();
+
+    let (destination, _route, reward) = &intent;
+    let result = ctx.portal().withdraw_intent_with_signers(
+        *destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        claimant,
+        proof,
+        withdrawn_marker,
+        proof_closer_pda().0,
+        token_accounts,
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+        vec![&claimant_keypair],
+    );
+    assert!(
+        result.is_ok_and(common::contains_event(IntentWithdrawn::new(
+            intent_hash,
+            claimant,
+        )))
+    );
+    reward
+        .tokens
+        .iter()
+        .zip(&destinations)
+        .for_each(|(token, claimant_token)| {
+            assert_eq!(ctx.token_balance(claimant_token), token.amount);
+            assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
+        });
+}
+
+#[test]
+fn withdraw_intent_non_ata_claimant_token_2022_fail() {
+    let (mut ctx, intent, route_hash) = setup(true);
+    let (destination, _route, reward) = &intent;
+    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
+    let claimant = Pubkey::new_unique();
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+    let token_program = &ctx.token_program.clone();
+
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
+
+    let token_accounts: Vec<_> = reward
+        .tokens
+        .iter()
+        .flat_map(|token| {
+            // the claimant's ATA derived with the LEGACY program id, while the mint
+            // is token-2022 — a real claimant-owned account at an address only a
+            // wrong-program derivation would produce, so this fails only if
+            // `claimant_ata` is derived with the mint's own program
+            let claimant_token = get_associated_token_address_with_program_id(
+                &claimant,
+                &token.token,
+                &anchor_spl::token::ID,
+            );
+            ctx.set_token_account(claimant_token, &token.token, &claimant);
+            let vault_ata =
+                get_associated_token_address_with_program_id(&vault, &token.token, token_program);
+
+            vec![
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new(claimant_token, false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect();
+
+    let (destination, _route, reward) = &intent;
+    let result = ctx.portal().withdraw_intent(
+        *destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        claimant,
+        proof,
+        withdrawn_marker,
+        proof_closer_pda().0,
+        token_accounts,
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::ClaimantSignatureRequired
+    )));
+}
+
+#[test]
+fn withdraw_intent_non_ata_claimant_token_fail() {
+    let (mut ctx, intent, route_hash) = setup(false);
+    let (destination, _route, reward) = &intent;
+    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
+    let claimant = Pubkey::new_unique();
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+    let token_program = &ctx.token_program.clone();
+
+    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
+
+    let token_accounts: Vec<_> = reward
+        .tokens
+        .iter()
+        .flat_map(|token| {
+            let claimant_token = Pubkey::new_unique();
+            ctx.set_token_account(claimant_token, &token.token, &claimant);
+            let vault_ata =
+                get_associated_token_address_with_program_id(&vault, &token.token, token_program);
+
+            vec![
+                AccountMeta::new(vault_ata, false),
+                AccountMeta::new(claimant_token, false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect();
+
+    let (destination, _route, reward) = &intent;
+    let result = ctx.portal().withdraw_intent(
+        *destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        claimant,
+        proof,
+        withdrawn_marker,
+        proof_closer_pda().0,
+        token_accounts,
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::ClaimantSignatureRequired
     )));
 }
 

@@ -199,11 +199,26 @@ fn withdraw_token<'info>(
         &mint_key,
         accounts.token_program_id(),
     );
+    // withdraw is permissionless, so the payout destination is derived rather than
+    // caller-chosen — the claimant themselves may direct it elsewhere, which is
+    // the recovery route when the derived ATA cannot receive (a mint freeze
+    // authority, or a token-2022 `DefaultAccountState::Frozen` mint). Without it
+    // an unusable ATA would be terminal: the whole withdraw reverts, so the
+    // `Proof` survives and `refund` refuses for as long as it does.
+    let claimant_ata = get_associated_token_address_with_program_id(
+        ctx.accounts.claimant.key,
+        &mint_key,
+        accounts.token_program_id(),
+    );
 
     require!(accounts.from.key() == vault_ata, PortalError::InvalidAta);
     require!(
         accounts.to_data()?.owner == ctx.accounts.claimant.key(),
         PortalError::InvalidClaimantToken
+    );
+    require!(
+        accounts.to.key() == claimant_ata || ctx.accounts.claimant.is_signer,
+        PortalError::ClaimantSignatureRequired
     );
     let reward_token_amount = *reward_token_amounts
         .get(&mint_key)
