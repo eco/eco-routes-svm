@@ -97,6 +97,8 @@ pub fn append_flash_fulfill_intent_chunk(
             ],
         )?;
     }
+    // `resize` always zero-fills the growth, which the copy below immediately overwrites.
+    // solana-account-info 3.x removed `realloc(len, zero_init)`, so there is no opt-out.
     buffer.resize(new_len)?;
     buffer.try_borrow_mut_data()?[current_len..].copy_from_slice(&chunk);
 

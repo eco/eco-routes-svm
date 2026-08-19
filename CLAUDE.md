@@ -113,6 +113,8 @@ Per-program contexts live next to `mod.rs`: `portal_context.rs`, `hyper_prover_c
 
 Event assertions: `contains_event` (top-level `Program data:` log), `contains_cpi_event` (inner-instruction event_cpi), `contains_event_and_msg`. Error assertions: `is_error(SomeError::Variant)` matches `InstructionError::Custom`.
 
+**Closed accounts assert `get_account(&x).is_none()`, not a drained husk.** litesvm garbage-collects zero-lamport accounts, so a closed account is simply absent afterwards and its `owner`/`data` cannot be inspected. That matches real Solana, which also purges zero-lamport accounts at transaction end — the older `owner == system_program::ID` form was reading a simulator artifact, not a protocol guarantee, and cannot be restored. Anchor's `.close()` is what reassigns the owner; the property worth asserting here is that the account is gone and, where the rent recipient is a dedicated PDA rather than the fee payer (e.g. hyper-prover's `pda_payer`), that the rent came back.
+
 ## Goldie
 
 Many tests use `goldie::assert_json!` / `assert_debug!` / `assert_yaml!`. Snapshots live in a `testdata/` directory next to the source file the test is declared in (e.g. a test in `programs/portal/src/state.rs` snapshots to `programs/portal/src/state/testdata/`) — goldie 0.7 nests per-module rather than sharing one flat `<crate>/src/testdata/`. Update with `GOLDIE_UPDATE=1 cargo test` and review the diff before committing.
