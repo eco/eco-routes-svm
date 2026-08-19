@@ -90,16 +90,14 @@ fn setup_with_ctx(mut ctx: common::Context) -> (common::Context, Route, Reward, 
 
 fn claimant_atas(ctx: &common::Context, reward: &Reward, claimant: Pubkey) -> Vec<AccountMeta> {
     let token_program = ctx.token_program;
+    // must match the reward tuples: one per unique mint, same order
     reward
-        .tokens
-        .iter()
-        .map(|token| {
+        .token_amounts()
+        .unwrap()
+        .keys()
+        .map(|mint| {
             AccountMeta::new(
-                get_associated_token_address_with_program_id(
-                    &claimant,
-                    &token.token,
-                    &token_program,
-                ),
+                get_associated_token_address_with_program_id(&claimant, mint, &token_program),
                 false,
             )
         })
@@ -153,9 +151,15 @@ fn flash_fulfill_should_succeed() {
     assert!(ctx
         .account::<WithdrawnMarker>(&WithdrawnMarker::pda(&intent_hash_value).0)
         .is_some());
-    assert!(ctx
-        .account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
-        .is_some());
+    // The marker records the signable caller, not `flash_vault` (which acts as
+    // the fulfill CPI's solver) — only that key can later reclaim the rent via
+    // `close_fulfill_marker`, so a PDA here would strand it permanently.
+    assert_eq!(
+        ctx.account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
+            .unwrap()
+            .payer,
+        ctx.payer.pubkey()
+    );
     assert!(ctx
         .account::<local_prover::state::ProofAccount>(
             &Proof::pda(&intent_hash_value, &local_prover::ID).0,
@@ -1162,5 +1166,95 @@ fn flash_fulfill_large_route_consumes_without_oom() {
         .is_some());
     assert!(ctx
         .account::<FulfillMarker>(&FulfillMarker::pda(&intent_hash_value).0)
+        .is_some());
+}
+
+// Repeated mints on both sides: reward tuples are per unique mint (mirroring
+// portal's withdraw), route tuples per raw entry (mirroring portal's fulfill).
+#[test]
+fn flash_fulfill_duplicate_reward_mints_should_succeed() {
+    let mut ctx = common::Context::default();
+    let (_, mut route, mut reward) = ctx.rand_intent();
+    reward.prover = local_prover::ID;
+    let mint = reward.tokens[0].token;
+    reward.tokens = vec![
+        TokenAmount {
+            token: mint,
+            amount: 1_000_000,
+        },
+        TokenAmount {
+            token: mint,
+            amount: 2_000_000,
+        },
+    ];
+    route.calls.clear();
+    route.native_amount = reward.native_amount / 2;
+    route.tokens = reward
+        .tokens
+        .iter()
+        .map(|reward_token| TokenAmount {
+            token: reward_token.token,
+            amount: reward_token.amount / 2,
+        })
+        .collect();
+
+    let route_hash = route.hash();
+    let intent_hash_value = intent_hash(CHAIN_ID, &route_hash, &reward.hash());
+    let vault = vault_pda(&intent_hash_value).0;
+    let funder = ctx.funder.pubkey();
+    let token_program = ctx.token_program;
+
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
+    ctx.airdrop_token_ata(&mint, &funder, 3_000_000);
+
+    ctx.portal()
+        .fund_intent(
+            CHAIN_ID,
+            reward.clone(),
+            vault,
+            route_hash,
+            false,
+            vec![
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(&funder, &mint, &token_program),
+                    false,
+                ),
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(&vault, &mint, &token_program),
+                    false,
+                ),
+                AccountMeta::new_readonly(mint, false),
+            ],
+        )
+        .unwrap();
+
+    let claimant = Pubkey::new_unique();
+    ctx.airdrop_token_ata(&mint, &claimant, 0);
+    let claimant_ata_metas = claimant_atas(&ctx, &reward, claimant);
+
+    let result = ctx.flash_fulfiller().flash_fulfill(
+        FlashFulfillIntent::Intent {
+            route: route.clone(),
+            reward: reward.clone(),
+        },
+        None,
+        &route,
+        &reward,
+        claimant,
+        claimant_ata_metas,
+        vec![],
+    );
+
+    assert!(result.is_ok_and(common::contains_cpi_event(FlashFulfilled {
+        intent_hash: intent_hash_value,
+        claimant,
+        native_fee: reward.native_amount - route.native_amount,
+    })));
+    // 3_000_000 withdrawn, 1_500_000 delivered to the executor, remainder swept
+    assert_eq!(ctx.token_balance_ata(&mint, &claimant), 1_500_000);
+    assert_eq!(ctx.token_balance_ata(&mint, &vault), 0);
+    assert_eq!(ctx.token_balance_ata(&mint, &flash_vault_pda().0), 0);
+    assert!(ctx
+        .account::<WithdrawnMarker>(&WithdrawnMarker::pda(&intent_hash_value).0)
         .is_some());
 }

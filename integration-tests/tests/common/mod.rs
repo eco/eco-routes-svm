@@ -9,11 +9,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::Proof;
+use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::state::ProofAccount;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
-use portal::state::WithdrawnMarker;
-use portal::types::{Call, Reward, Route, TokenAmount};
+use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
+use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
 use solana_sdk::instruction::InstructionError;
@@ -38,8 +39,19 @@ const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
 const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_fulfiller.so");
+const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
+const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/malicious_proof_closer.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
+
+/// An intent already put through `fulfill` by [`Context::fulfill_rand_intents`].
+/// `route` and `reward_hash` are kept so callers can replay the same `fulfill`.
+pub struct FulfilledIntent {
+    pub intent_hash: Bytes32,
+    pub route: Route,
+    pub reward_hash: Bytes32,
+}
 
 #[derive(Deref, DerefMut)]
 pub struct Context {
@@ -63,6 +75,10 @@ impl Default for Context {
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN).unwrap();
         svm.add_program(local_prover::ID, LOCAL_PROVER_BIN).unwrap();
         svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN)
+            .unwrap();
+        svm.add_program(malicious_prover::ID, MALICIOUS_PROVER_BIN)
+            .unwrap();
+        svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN)
             .unwrap();
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
@@ -152,6 +168,45 @@ impl Context {
                 tokens: reward_tokens,
             },
         )
+    }
+
+    /// Fulfills `intent_count` minimal intents — no route tokens, calls, or
+    /// native amount — against `prover`.
+    pub fn fulfill_rand_intents(
+        &mut self,
+        intent_count: usize,
+        prover: Pubkey,
+    ) -> Vec<FulfilledIntent> {
+        (0..intent_count)
+            .map(|_| {
+                let (_, mut route, mut reward) = self.rand_intent();
+                route.tokens.clear();
+                route.calls.clear();
+                route.native_amount = 0;
+                reward.prover = prover;
+                let reward_hash = reward.hash();
+                let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
+
+                self.portal()
+                    .fulfill_intent(
+                        intent_hash,
+                        &route,
+                        reward_hash,
+                        Pubkey::new_unique().to_bytes().into(),
+                        executor_pda().0,
+                        FulfillMarker::pda(&intent_hash).0,
+                        vec![],
+                        vec![],
+                    )
+                    .unwrap();
+
+                FulfilledIntent {
+                    intent_hash,
+                    route,
+                    reward_hash,
+                }
+            })
+            .collect()
     }
 
     pub fn set_mint_account(&mut self, mint: &Pubkey) {
@@ -258,6 +313,32 @@ impl Context {
         );
 
         self.send_transaction(transaction).unwrap();
+    }
+
+    /// Writes an initialized token account at an arbitrary address, i.e. one the
+    /// associated token program would never derive for `owner`.
+    pub fn set_token_account(&mut self, address: Pubkey, mint: &Pubkey, owner: &Pubkey) {
+        let mut data = [0u8; spl_token::state::Account::LEN];
+        spl_token::state::Account::pack(
+            spl_token::state::Account {
+                mint: *mint,
+                owner: *owner,
+                state: spl_token::state::AccountState::Initialized,
+                ..Default::default()
+            },
+            &mut data,
+        )
+        .unwrap();
+
+        let account = solana_sdk::account::Account {
+            lamports: self.get_sysvar::<Rent>().minimum_balance(data.len()),
+            data: data.to_vec(),
+            owner: self.token_program,
+            executable: false,
+            rent_epoch: 0,
+        };
+
+        self.set_account(address, account).unwrap();
     }
 
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
@@ -384,6 +465,30 @@ where
     }
 }
 
+/// How many times `expected` was emitted as an `event_cpi` event. Duplicate
+/// entries in one payload each emit, so consumers must upsert by intent hash
+/// rather than count — pinning the number here keeps that contract visible.
+pub fn count_cpi_events<E>(expected: E) -> impl Fn(TransactionMetadata) -> usize
+where
+    E: Event,
+{
+    let expected = expected.data();
+
+    move |actual: TransactionMetadata| {
+        actual
+            .inner_instructions
+            .iter()
+            .flat_map(|inner_ix_list| inner_ix_list.iter())
+            .filter(
+                |inner_instruction| match inner_instruction.instruction.data.get(8..) {
+                    Some(data) => data == expected,
+                    None => false,
+                },
+            )
+            .count()
+    }
+}
+
 pub fn contains_event_and_msg<E, M>(expected: E, msg: M) -> impl Fn(TransactionMetadata) -> bool
 where
     E: Event,
@@ -401,6 +506,40 @@ where
                 .iter()
                 .any(|log| log.contains(msg.to_string().as_str()))
     }
+}
+
+/// Like [`is_error`], but also pins **which program** raised it.
+///
+/// Anchor numbers error codes positionally from 6000 per enum, so a bare
+/// `Custom(code)` is ambiguous across programs — `LocalProverError` variant 3 and
+/// `PortalError` variant 3 are both 6003. For a security assertion that
+/// ambiguity is the difference between "the gate rejected the exploit" and "some
+/// unrelated program failed first", so match the failing program's log line too.
+pub fn is_program_error<T, Err>(program_id: Pubkey, expected: Err) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+    Err: Into<u32>,
+{
+    let expected = expected.into();
+    let marker = format!("Program {program_id} failed: custom program error: {expected:#x}");
+
+    move |actual: T| match actual.err {
+        TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
+            error_code == expected && actual.meta.logs.iter().any(|log| log == &marker)
+        }
+        _ => false,
+    }
+}
+
+/// Asserts the failed transaction actually reached `program_id` — i.e. the CPI
+/// chain executed to the gate under test rather than tripping earlier.
+pub fn reached_program<T>(program_id: Pubkey) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+{
+    let marker = format!("Program {program_id} invoke");
+
+    move |actual: T| actual.meta.logs.iter().any(|log| log.starts_with(&marker))
 }
 
 pub fn is_error<T, Err>(expected: Err) -> impl Fn(T) -> bool

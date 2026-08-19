@@ -5,12 +5,24 @@ use portal::types::{Reward, Route};
 /// Seed for the program's single `flash_vault` PDA.
 pub const FLASH_VAULT_SEED: &[u8] = b"flash_vault";
 
+/// Seed for per-prover `prove_authority` PDAs.
+pub const PROVE_AUTHORITY_SEED: &[u8] = b"prove_authority";
+
 /// Seed for per-intent `FlashFulfillIntentAccount` buffer PDAs.
 pub const FLASH_FULFILL_INTENT_SEED: &[u8] = b"flash_fulfill_intent";
 
 /// Derives the program's `flash_vault` PDA (holds rewards during fulfillment).
 pub fn flash_vault_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[FLASH_VAULT_SEED], &crate::ID)
+}
+
+/// Prove-only authority the program signs into the caller-chosen prover during
+/// `flash_fulfill`'s prove leg, scoped to that prover's program ID. Kept distinct
+/// from `flash_vault` on purpose: the fund-holding vault must never double as a
+/// prover credential. Keep both the prover scoping and this separation — they are
+/// a security boundary.
+pub fn prove_authority_pda(prover: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROVE_AUTHORITY_SEED, prover.as_ref()], &crate::ID)
 }
 
 /// Stored `(route, reward)` pair that lets `flash_fulfill` be invoked by
@@ -55,6 +67,11 @@ mod tests {
     #[test]
     fn flash_vault_pda_deterministic() {
         goldie::assert_json!(flash_vault_pda());
+    }
+
+    #[test]
+    fn prove_authority_pda_deterministic() {
+        goldie::assert_json!(prove_authority_pda(&Pubkey::new_from_array([9u8; 32])));
     }
 
     #[test]

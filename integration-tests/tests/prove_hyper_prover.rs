@@ -7,7 +7,7 @@ use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::hyperlane::{self, MailboxInstruction, MAILBOX_ID};
 use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentProven;
-use portal::{state, types};
+use portal::state;
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
@@ -17,35 +17,10 @@ pub mod common;
 
 fn setup(intent_count: usize) -> (common::Context, Vec<Bytes32>) {
     let mut ctx = common::Context::default();
-
-    let intent_hashes = (0..intent_count)
-        .map(|_| {
-            let (_, mut route, _) = ctx.rand_intent();
-            route.tokens.clear();
-            route.calls.clear();
-            route.native_amount = 0;
-            let reward_hash = rand::random::<[u8; 32]>().into();
-            let claimant = Pubkey::new_unique().to_bytes().into();
-            let executor = state::executor_pda().0;
-
-            let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
-            let (fulfill_marker, _) = state::FulfillMarker::pda(&intent_hash);
-
-            ctx.portal()
-                .fulfill_intent(
-                    intent_hash,
-                    &route,
-                    reward_hash,
-                    claimant,
-                    executor,
-                    fulfill_marker,
-                    vec![],
-                    vec![],
-                )
-                .unwrap();
-
-            intent_hash
-        })
+    let intent_hashes = ctx
+        .fulfill_rand_intents(intent_count, hyper_prover::ID)
+        .iter()
+        .map(|intent| intent.intent_hash)
         .collect();
 
     (ctx, intent_hashes)
@@ -58,7 +33,7 @@ fn prove_intent_success() {
         .iter()
         .map(|hash| state::FulfillMarker::pda(hash).0)
         .collect::<Vec<_>>();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let source_prover = random::<[u8; 32]>();
     let claimants = fulfill_markers
@@ -126,7 +101,7 @@ fn prove_intent_multiple_success() {
         .iter()
         .map(|hash| state::FulfillMarker::pda(hash).0)
         .collect::<Vec<_>>();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let source_prover = random::<[u8; 32]>();
     let claimants = fulfill_markers
@@ -212,7 +187,7 @@ fn prove_intent_unfulfilled_fail() {
     let mut ctx = common::Context::default();
     let intent_hash = rand::random::<[u8; 32]>().into();
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
@@ -233,7 +208,7 @@ fn prove_intent_unfulfilled_fail() {
 fn prove_intent_insufficient_fulfill_markers_fail() {
     let (mut ctx, intent_hashes) = setup(2);
     let fulfill_marker_1 = state::FulfillMarker::pda(&intent_hashes[0]).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let source_prover = random::<[u8; 32]>();
 
@@ -257,7 +232,7 @@ fn prove_intent_wrong_fulfill_marker_pda_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let wrong_fulfill_marker = state::FulfillMarker::pda(&random::<[u8; 32]>().into()).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let source_prover = random::<[u8; 32]>();
 
@@ -281,7 +256,7 @@ fn prove_intent_invalid_hyper_prover_dispatcher_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let invalid_hyper_dispatcher = Pubkey::new_unique();
 
@@ -303,7 +278,7 @@ fn prove_intent_invalid_mailbox_not_executable_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let invalid_mailbox = Pubkey::new_unique();
 
@@ -325,7 +300,7 @@ fn prove_intent_invalid_mailbox_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
 
     let result = ctx.portal().prove_intent_via_hyper_prover(
@@ -378,7 +353,7 @@ fn prove_invalid_portal_dispatcher_fail() {
 #[test]
 fn prove_intent_empty_intent_hashes_fail() {
     let mut ctx = common::Context::default();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
     let source = random::<u32>() as u64;
     let source_prover = random::<[u8; 32]>();
 

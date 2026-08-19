@@ -8,7 +8,7 @@ use flash_fulfiller::instructions::{
     AppendFlashFulfillIntentChunkArgs, CloseFlashFulfillIntentArgs, FlashFulfillArgs,
     FlashFulfillIntent, SetFlashFulfillIntentArgs,
 };
-use flash_fulfiller::state::{flash_vault_pda, FlashFulfillIntentAccount};
+use flash_fulfiller::state::{flash_vault_pda, prove_authority_pda, FlashFulfillIntentAccount};
 use portal::state::{executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{intent_hash, Reward, Route};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -177,15 +177,17 @@ impl FlashFulfiller<'_> {
         let executor = executor_pda().0;
         let token_program = self.token_program;
 
+        // one triple per unique reward mint — `reward.tokens` may repeat a mint
         let reward_accounts = reward
-            .tokens
-            .iter()
-            .flat_map(|token| {
+            .token_amounts()
+            .unwrap()
+            .keys()
+            .flat_map(|mint| {
                 [
                     AccountMeta::new(
                         get_associated_token_address_with_program_id(
                             &intent_vault,
-                            &token.token,
+                            mint,
                             &token_program,
                         ),
                         false,
@@ -193,12 +195,12 @@ impl FlashFulfiller<'_> {
                     AccountMeta::new(
                         get_associated_token_address_with_program_id(
                             &flash_vault,
-                            &token.token,
+                            mint,
                             &token_program,
                         ),
                         false,
                     ),
-                    AccountMeta::new_readonly(token.token, false),
+                    AccountMeta::new_readonly(*mint, false),
                 ]
             })
             .collect();
@@ -277,6 +279,84 @@ impl FlashFulfiller<'_> {
         )
     }
 
+    /// Drives `flash_fulfill` with a caller-chosen `portal_program`,
+    /// `local_prover_program` and `prove_authority`, plus a fully
+    /// attacker-controlled `calls` tail — the degrees of freedom a real caller
+    /// has. `prove_authority` is taken as a parameter rather than derived here,
+    /// so a test can supply one the constraint should reject.
+    ///
+    /// Zero-token, zero-native inline intent so every remaining account lands in
+    /// `calls`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn flash_fulfill_via_program(
+        &mut self,
+        route: &Route,
+        reward: &Reward,
+        claimant: Pubkey,
+        portal_program: Pubkey,
+        local_prover_program: Pubkey,
+        prove_authority: Pubkey,
+        calls: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let intent_hash_value = intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+        let accounts = flash_fulfiller::accounts::FlashFulfill {
+            payer: self.payer.pubkey(),
+            flash_vault: flash_vault_pda().0,
+            flash_fulfill_intent: None,
+            writer: None,
+            claimant,
+            proof: Proof::pda(&intent_hash_value, &local_prover::ID).0,
+            intent_vault: vault_pda(&intent_hash_value).0,
+            withdrawn_marker: WithdrawnMarker::pda(&intent_hash_value).0,
+            proof_closer: proof_closer_pda(&local_prover::ID).0,
+            executor: executor_pda().0,
+            fulfill_marker: FulfillMarker::pda(&intent_hash_value).0,
+            portal_program,
+            local_prover_program,
+            prove_authority,
+            local_prover_event_authority: event_authority_pda(&local_prover::ID).0,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            associated_token_program: anchor_spl::associated_token::ID,
+            system_program: anchor_lang::system_program::ID,
+            event_authority: event_authority_pda(&flash_fulfiller::ID).0,
+            program: flash_fulfiller::ID,
+        };
+        let instruction_data = flash_fulfiller::instruction::FlashFulfill {
+            args: FlashFulfillArgs {
+                intent: FlashFulfillIntent::Intent {
+                    route: route.clone(),
+                    reward: reward.clone(),
+                },
+            },
+        };
+
+        let account_metas: Vec<AccountMeta> = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .chain(calls)
+            .collect();
+
+        let instruction = Instruction {
+            program_id: flash_fulfiller::ID,
+            accounts: account_metas,
+            data: instruction_data.data(),
+        };
+        let compute_budget = ComputeBudgetInstruction::set_compute_unit_limit(1_000_000);
+        let heap_frame = ComputeBudgetInstruction::request_heap_frame(FLASH_FULFILLER_HEAP_BYTES);
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(
+                &[compute_budget, heap_frame, instruction],
+                Some(&self.payer.pubkey()),
+            ),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn flash_fulfill_with_buffer(
         &mut self,
@@ -302,11 +382,12 @@ impl FlashFulfiller<'_> {
             proof: Proof::pda(&intent_hash_value, &local_prover::ID).0,
             intent_vault: vault_pda(&intent_hash_value).0,
             withdrawn_marker: WithdrawnMarker::pda(&intent_hash_value).0,
-            proof_closer: proof_closer_pda().0,
+            proof_closer: proof_closer_pda(&local_prover::ID).0,
             executor: executor_pda().0,
             fulfill_marker: FulfillMarker::pda(&intent_hash_value).0,
             portal_program: portal::ID,
             local_prover_program: local_prover::ID,
+            prove_authority: prove_authority_pda(&local_prover::ID).0,
             local_prover_event_authority: event_authority_pda(&local_prover::ID).0,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,

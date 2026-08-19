@@ -17,7 +17,10 @@ use portal::types::{
 use crate::cpi;
 use crate::events::FlashFulfilled;
 use crate::instructions::{close_buffer, FlashFulfillerError};
-use crate::state::{flash_vault_pda, FlashFulfillIntentAccount, FLASH_VAULT_SEED};
+use crate::state::{
+    flash_vault_pda, prove_authority_pda, FlashFulfillIntentAccount, FLASH_VAULT_SEED,
+    PROVE_AUTHORITY_SEED,
+};
 
 struct FlashFulfillAccounts<'a, 'info> {
     reward: Vec<TokenTransferAccounts<'info>>,
@@ -89,7 +92,9 @@ pub struct FlashFulfill<'info> {
     /// CHECK: validated by portal.withdraw against WithdrawnMarker::pda(intent_hash)
     #[account(mut)]
     pub withdrawn_marker: UncheckedAccount<'info>,
-    /// CHECK: validated by portal.withdraw against proof_closer_pda()
+    /// CHECK: validated by portal.withdraw against `proof_closer_pda(&reward.prover)`.
+    /// `local_prover_program` is executable-only here, so the caller must supply the
+    /// closer scoped to whichever prover they passed.
     pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: validated by portal.fulfill against executor_pda()
     #[account(mut)]
@@ -97,15 +102,33 @@ pub struct FlashFulfill<'info> {
     /// CHECK: validated by portal.fulfill against FulfillMarker::pda(intent_hash)
     #[account(mut)]
     pub fulfill_marker: UncheckedAccount<'info>,
-    /// CHECK: executable-only. Program ID is not validated because it's
-    /// deploy-keypair-dependent and passing a malicious look-alike can only
-    /// drain `payer`'s SOL (via CPI signer inheritance) — no third-party
-    /// harm. Assumes `payer` is the solver/caller, not a sponsored relayer.
-    #[account(executable)]
+    /// CHECK: pinned to `portal::ID`. This crate already depends on portal for
+    /// its ABI, so pinning adds no dependency edge, and portal's own
+    /// `route.portal == crate::ID` check makes routes portal-specific — a
+    /// different portal could never be a legitimate choice here. The pin is what
+    /// makes the withdraw and fulfill legs trustworthy: both run through this one
+    /// account, so a look-alike could otherwise no-op the withdraw leg and leave
+    /// a minted proof behind, or take `flash_vault`'s fulfill-leg signature.
+    #[account(executable, address = portal::ID @ FlashFulfillerError::InvalidPortalProgram)]
     pub portal_program: UncheckedAccount<'info>,
-    /// CHECK: executable-only. See `portal_program` above — same rationale.
+    /// CHECK: executable-only. Unlike `portal_program` this genuinely can't be
+    /// pinned — a crate dependency would cycle (local-prover depends on this
+    /// crate). Safe because the only PDA signed into it, `prove_authority`, is
+    /// scoped to this account's own key, so no honest prover accepts it.
+    ///
+    /// `prover::prove` also hands it `payer` as a writable signer. That is
+    /// self-inflicted: whoever supplies `payer` also chooses this account. The
+    /// buffered flow does not change that — the writer picks `reward.prover`,
+    /// but the prove and withdraw legs share one `proof` account, which pins
+    /// `reward.prover` to `local_prover::ID` before portal can forward anything
+    /// to it.
     #[account(executable)]
     pub local_prover_program: UncheckedAccount<'info>,
+    /// CHECK: address validated, scoped to the caller-chosen `local_prover_program`.
+    /// The prove-only credential the program signs into the prove leg — never
+    /// `flash_vault`. Keep the scoping and the separation; both are load-bearing.
+    #[account(address = prove_authority_pda(&local_prover_program.key()).0 @ FlashFulfillerError::InvalidProveAuthority)]
+    pub prove_authority: UncheckedAccount<'info>,
     /// CHECK: local_prover's event authority PDA, validated by local_prover during CPI
     pub local_prover_event_authority: UncheckedAccount<'info>,
     pub token_program: Program<'info, token::Token>,
@@ -122,10 +145,14 @@ pub struct FlashFulfill<'info> {
 ///
 /// # Remaining accounts layout
 ///
-/// reward 3-tuples (intent_vault_ata, flash_vault_ata, mint)
-/// × reward.tokens.len(), then route 3-tuples (flash_vault_ata, executor_ata, mint)
-/// × route.tokens.len(), then one claimant ATA per reward mint, then any accounts
-/// referenced by `route.calls`.
+/// reward 3-tuples (intent_vault_ata, flash_vault_ata, mint) × one per unique
+/// reward mint, then route 3-tuples (flash_vault_ata, executor_ata, mint)
+/// × route.tokens.len(), then one claimant ATA per unique reward mint in the same
+/// order as the reward tuples, then any accounts referenced by `route.calls`.
+///
+/// The reward count is per unique mint and the route count per raw entry because
+/// each mirrors how the portal instruction it feeds addresses its tokens:
+/// `withdraw` by `Reward::token_amounts`, `fulfill` by `route.tokens`.
 ///
 /// When invoked via `FlashFulfillIntent::IntentHash`, the consumed
 /// `FlashFulfillIntentAccount` buffer is closed at the end and its rent
@@ -151,10 +178,18 @@ pub fn flash_fulfill<'info>(
     let (_, flash_vault_bump) = flash_vault_pda();
     let flash_vault_seeds: &[&[u8]] = &[FLASH_VAULT_SEED, &[flash_vault_bump]];
 
+    let local_prover = ctx.accounts.local_prover_program.key();
+    let (_, prove_authority_bump) = prove_authority_pda(&local_prover);
+    let prove_authority_seeds: &[&[u8]] = &[
+        PROVE_AUTHORITY_SEED,
+        local_prover.as_ref(),
+        &[prove_authority_bump],
+    ];
+
     prover::prove(
         &ctx.accounts.local_prover_program.to_account_info(),
-        &ctx.accounts.flash_vault.to_account_info(),
-        flash_vault_seeds,
+        &ctx.accounts.prove_authority.to_account_info(),
+        prove_authority_seeds,
         &ctx.accounts.payer.to_account_info(),
         &ctx.accounts.system_program.to_account_info(),
         &ctx.accounts.local_prover_event_authority.to_account_info(),
@@ -177,7 +212,7 @@ pub fn flash_fulfill<'info>(
         route: route_transfers,
         claimant: claimant_transfers,
         calls,
-    } = extract_flash_fulfill_accounts(&ctx, reward.tokens.len(), route.tokens.len())?;
+    } = extract_flash_fulfill_accounts(&ctx, reward.token_amounts()?.len(), route.tokens.len())?;
 
     cpi::withdraw::withdraw_intent(
         &ctx.accounts.portal_program.to_account_info(),

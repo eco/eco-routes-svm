@@ -18,12 +18,20 @@ pub fn executor_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[EXECUTOR_SEED], &crate::ID)
 }
 
-pub fn dispatcher_pda() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[DISPATCHER_SEED], &crate::ID)
+/// Per-prover authority: `prove` signs this into the caller-chosen prover, and
+/// each prover accepts only `dispatcher_pda(&its_own_id)`. The prover binding is
+/// a security boundary — keep it seeded by the prover and do not collapse it to a
+/// single shared PDA.
+pub fn dispatcher_pda(prover: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[DISPATCHER_SEED, prover.as_ref()], &crate::ID)
 }
 
-pub fn proof_closer_pda() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[PROOF_CLOSER_SEED], &crate::ID)
+/// Per-prover authority: `withdraw` signs this into the caller-chosen prover's
+/// `close_proof` CPI, and each prover accepts only `proof_closer_pda(&its_own_id)`.
+/// The prover binding is a security boundary — keep it seeded by the prover and
+/// do not collapse it to a single shared PDA.
+pub fn proof_closer_pda(prover: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROOF_CLOSER_SEED, prover.as_ref()], &crate::ID)
 }
 
 #[account]
@@ -42,10 +50,26 @@ impl WithdrawnMarker {
     }
 }
 
+/// The whole field order is on-chain ABI: `prove` deserializes the full struct
+/// (`prove.rs`), so reordering breaks it, not just moving `claimant`.
+/// `fulfill_marker_layout_deterministic` pins the encoding.
+///
+/// Growing or reordering it is only safe because the portal is redeployed under
+/// a new program ID rather than upgraded in place: markers are PDAs of the
+/// program, so a redeploy starts on a disjoint namespace and no account written
+/// under an older layout is ever read back. Under an in-place upgrade the same
+/// change would strand every fulfilled-but-unproven intent — `prove`'s
+/// `try_deserialize` of a shorter account fails with `InvalidFulfillMarker`,
+/// and the claimant it holds has no other source.
+///
+/// `payer` is the sole authority allowed to close the marker and reclaim its
+/// rent; `deadline` is `route.deadline`, which gates that close.
 #[account]
 #[derive(InitSpace, Debug, PartialEq, new)]
 pub struct FulfillMarker {
     pub claimant: Bytes32,
+    pub payer: Pubkey,
+    pub deadline: u64,
     pub bump: u8,
 }
 
@@ -107,7 +131,7 @@ mod tests {
 
     #[test]
     fn dispatcher_pda_deterministic() {
-        goldie::assert_json!(dispatcher_pda());
+        goldie::assert_json!(dispatcher_pda(&Pubkey::new_from_array([9u8; 32])));
     }
 
     #[test]
@@ -123,8 +147,26 @@ mod tests {
         )));
     }
 
+    /// Pins the account size *and* the field order — `prove` deserializes the
+    /// whole struct, so a reorder is an ABI break that a size-only assertion
+    /// would not catch. Each field gets a distinct byte pattern.
+    #[test]
+    fn fulfill_marker_layout_deterministic() {
+        let marker = FulfillMarker::new(
+            [1u8; 32].into(),
+            Pubkey::new_from_array([2u8; 32]),
+            0x0304050607080910,
+            11,
+        );
+
+        goldie::assert_json!((
+            8 + FulfillMarker::INIT_SPACE,
+            borsh::to_vec(&marker).unwrap()
+        ));
+    }
+
     #[test]
     fn proof_closer_pda_deterministic() {
-        goldie::assert_json!(proof_closer_pda());
+        goldie::assert_json!(proof_closer_pda(&Pubkey::new_from_array([9u8; 32])));
     }
 }

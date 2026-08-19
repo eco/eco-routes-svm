@@ -114,15 +114,19 @@ source ~/.cargo/env
 
 #### 2. Install Solana CLI
 ```bash
-sh -c "$(curl -sSfL https://release.solana.com/v1.18.26/install)"
+sh -c "$(curl -sSfL https://release.anza.xyz/v4.1.1/install)"
 export PATH="~/.local/share/solana/install/active_release/bin:$PATH"
 ```
+
+Use this exact version. CI pins it (`SOLANA_VERSION` in `.github/workflows/`) because it
+decides which platform-tools rustc compiles the on-chain programs; installing a different
+one locally can produce different bytecode than a release build.
 
 #### 3. Install Anchor CLI
 ```bash
 cargo install --git https://github.com/coral-xyz/anchor avm --force
-avm install 0.31.1
-avm use 0.31.1
+avm install 1.1.2
+avm use 1.1.2
 ```
 
 #### 4. Install Additional Tools
@@ -134,8 +138,8 @@ cargo install cargo-sort
 cargo install goldie
 
 # Set Rust toolchain
-rustup toolchain install 1.89.0
-rustup default 1.89.0
+rustup toolchain install 1.97.1
+rustup default 1.97.1
 ```
 
 ### Project Setup
@@ -260,10 +264,11 @@ anchor test --skip-deploy
 - `prove` - Submit proof of fulfillment from destination chain
 - `refund` - Refund intent if not fulfilled within timeout
 - `withdraw` - Withdraw rewards after successful proof validation
+- `close_fulfill_marker` - Reclaim a `FulfillMarker`'s rent once `route.deadline` has passed. Signed by the marker's stored `payer`, which is also the refund target. **Only close after the intent's reward is settled on the source chain** — the marker holds the claimant that `prove` reads, so closing early makes the intent permanently unprovable and the fulfillment unrecoverable. The deadline alone is not sufficient, and no deadline is: it only retires the double-fulfill guard. `route.deadline` is conventionally the earlier of the two deadlines, so it passes while the reward is still provable — and gating on the later `reward.deadline` would not help either, since that only makes the reward *refundable*, not refunded. `withdraw` is not time-gated at all, and `refund` refuses while a `Proof` exists, so a proven intent stays claimable indefinitely. The sound signal is a terminal source-chain state (withdrawn, or refunded), which is off-chain knowledge; that is why the authority is the payer.
 
 #### Key Accounts:
 - `Vault` - Escrows reward tokens for intent funding
-- `FulfillMarker` - Tracks intent fulfillment status with claimant address
+- `FulfillMarker` - Tracks intent fulfillment status with claimant address, plus the payer allowed to close it and the route deadline gating that close
 - `WithdrawnMarker` - Prevents double withdrawals of rewards
 
 ### Hyper-Prover Program

@@ -12,7 +12,16 @@ Instead: stop, tell the human in plain language that this is a security fix and 
 
 ## Repository
 
-Anchor (0.31.1) workspace implementing a cross-chain intent protocol on Solana. Rust 1.89.0 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.
+Anchor (1.1.2) workspace implementing a cross-chain intent protocol on Solana. Rust 1.97.1 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.
+
+Two toolchains matter and they are not the same one. `rust-toolchain.toml` is the **host**
+compiler (clippy, tests, `avm`). The **on-chain** programs are compiled by the rustc inside
+Solana's platform-tools, which `anchor build` resolves itself — currently 1.79.0-dev, far
+older than the host. Anything in program code or in a dependency of `eco-svm-std` must
+compile under *that* rustc, so a new-ish stdlib method or a dependency raising its MSRV
+will break the on-chain build while the host build stays green. CI pins `SOLANA_VERSION`
+and asserts the SBF rustc after every build (`scripts/assert-sbf-rustc.sh`) so this cannot
+change silently.
 
 ## Build / test / lint
 
@@ -48,9 +57,11 @@ cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml -
 
 If proof-helper / pay_for_gas integration tests fail with a missing `.so`, run that command.
 
+The confused-deputy PoC programs `malicious-prover` and `malicious-proof-closer` **are** Anchor programs (in `programs/`, like `dummy-ism`), so a bare `anchor build` builds them. What keeps them out of devnet/mainnet artifacts is **not** the `[programs.localnet]` registration — `[programs.<cluster>]` only maps names to IDs. It is the explicit `--program-name` enumeration in the `build-devnet` / `build-mainnet` scripts (`Anchor.toml`) and the named IDL loops in `release.yml`. **Never replace those enumerations with a bare `anchor build`** — doing so would ship the PoC programs.
+
 ## Architecture
 
-Five on-chain programs plus one shared crate. `eco-svm-std` (`packages/eco-svm-std`) defines `Bytes32`, `Proof`/`ProofData`/`ProveArgs`, and the generic `prover::prove` CPI helper that any prover-shaped program plugs into.
+Five production on-chain programs (plus the localnet-only `dummy-ism`, `malicious-prover`, and `malicious-proof-closer` test programs) and one shared crate. `eco-svm-std` (`packages/eco-svm-std`) defines `Bytes32`, `Proof`/`ProofData`/`ProveArgs`, and the generic `prover::prove` CPI helper that any prover-shaped program plugs into.
 
 ```
         publish/fund                 fulfill              prove (CPI dispatch)         handle (Hyperlane inbound)
@@ -66,8 +77,8 @@ User ───────────────► Portal ◄──── Sol
 
 ### Programs (`programs/*`)
 
-- **portal** — `publish`, `fund`, `fulfill`, `prove`, `withdraw`, `refund`. Owns the `Vault`, `FulfillMarker`, and `WithdrawnMarker` PDAs (all keyed by intent hash) plus the singleton `executor_pda`, `dispatcher_pda`, `proof_closer_pda`. `withdraw` validates the prover's `Proof` PDA and CPIs the prover's `close_proof` to reclaim rent.
-- **local-prover** — same-chain prover. `prove` is gated to two callers only: portal's `dispatcher_pda` (for cross-chain bridging) and flash-fulfiller's `flash_vault_pda` (for atomic flash fulfillment). Both use the shared `prover::prove` CPI helper.
+- **portal** — `publish`, `fund`, `fulfill`, `prove`, `withdraw`, `refund`, `close_fulfill_marker`. Owns the `Vault`, `FulfillMarker`, and `WithdrawnMarker` PDAs (all keyed by intent hash) plus the singleton `executor_pda` and the per-prover `dispatcher_pda(prover)` and `proof_closer_pda(prover)`. `withdraw` validates the prover's `Proof` PDA and CPIs the prover's `close_proof` to reclaim rent, signing `proof_closer_pda(&reward.prover)` — **prover-scoped is a security boundary**: `withdraw` hands that signer to the caller-chosen prover program, and each prover's `close_proof` accepts only `proof_closer_pda(&its_own_id)`, so a malicious prover can't reuse the signer to close another prover's proofs. Keep it seeded by the prover. `close_fulfill_marker` reclaims the `FulfillMarker`'s rent to its stored `payer` once `route.deadline` has passed — **a marker closed before the intent is proven makes that intent permanently unprovable** (`prove` reads the claimant out of it and has no other source). The deadline gate retires the double-fulfill guard only; **no** deadline implies the reward is settled, because `withdraw` is not time-gated and `refund` refuses while a `Proof` exists, so a proven intent stays claimable forever and even the later `reward.deadline` would only make an unproven one *refundable*. Closing safely needs a terminal source-chain state, which is off-chain knowledge — see `programs/portal/src/instructions/close_fulfill_marker.rs`.
+- **local-prover** — same-chain prover. `prove` is gated to two callers only: portal's `dispatcher_pda(&local_prover::ID)` (for cross-chain bridging) and flash-fulfiller's `prove_authority_pda(&local_prover::ID)` (for atomic flash fulfillment). Both use the shared `prover::prove` CPI helper. **Both authorities are prover-scoped and this is a load-bearing security boundary** — the caller signs a PDA seeded by the program it is dispatching *to*, and each prover accepts only the PDA scoped to its *own* ID. `portal::prove` and `flash_fulfill` both sign these PDAs into a caller-chosen, ID-unvalidated prover program (portal has no dep edge to any prover; flash-fulfiller's `local_prover_program` can't be pinned without a dependency cycle), so the scoping is what keeps the signer meaningful. Keep it: do not collapse either authority to a single shared PDA. `flash_vault` is deliberately **not** a prover credential — it is the fund-holding/solver/withdraw-claimant identity signed into caller-chosen programs, so it must never be added as a prover caller.
 - **hyper-prover** — Hyperlane-backed prover. `prove` dispatches via `MAILBOX_ID` (mainnet vs non-mainnet pubkey gated on the `mainnet` feature). `handle` is the Hyperlane recipient entrypoint; uses **custom instruction discriminators** (`HANDLE_DISCRIMINATOR`, `HANDLE_ACCOUNT_METAS_DISCRIMINATOR`, etc.) defined in `hyperlane.rs` rather than Anchor-derived ones — Hyperlane requires fixed function selectors. The `ism` instruction returns `None`, so message verification uses the mailbox's default ISM (no custom ISM is configured).
 - **flash-fulfiller** — atomic same-chain orchestrator: `local_prover.prove → portal.withdraw → portal.fulfill → sweep`. Lives in its own program (rather than as a `local-prover` instruction) to dodge Solana's reentrancy rule — `local_prover` only appears once on the stack, inside portal's `close_proof` CPI. Also offers a buffered-intent flow: `set_flash_fulfill_intent` / `append_flash_fulfill_intent_chunk` write a `(route, reward)` payload to a per-(writer, intent_hash) PDA so callers can later invoke `flash_fulfill` by hash alone.
 - **proof-helper** — off-chain/test helper for Hyperlane gas payment (`pay_for_gas`).
@@ -81,6 +92,8 @@ User ───────────────► Portal ◄──── Sol
 - **Token transfers (`programs/portal/src/types.rs`)** — `VecTokenTransferAccounts` parses `remaining_accounts` in chunks of 3: `[from, to, mint]`. Used by `fulfill`, `withdraw`, and `flash_fulfill`. Both `spl-token` and `token-2022` are supported; mint owner is the discriminator.
 - **`prover::prove` CPI** (`packages/eco-svm-std/src/prover.rs`) is the canonical way to invoke any prover. The `caller` PDA is signed via `caller_seeds` — that's how flash-fulfiller's `flash_vault` and portal's `dispatcher` both authenticate to local-prover.
 - **Account creation** uses `eco_svm_std::account::create_account` (not Anchor's `init`) for griefing-resistant PDAs: it falls back to `transfer + allocate + assign` if the target was pre-funded.
+- **The programs ship as one atomic release.** Cross-program PDA derivations bind them together: `portal::state::dispatcher_pda(prover)` and `proof_closer_pda(prover)` are derived under portal's ID but consumed by the provers, and `flash_fulfiller::state::prove_authority_pda(prover)` is derived under flash-fulfiller's ID but consumed by local-prover. A mismatched pair is not merely degraded — `withdraw` fails at the prover's `address` constraint while `refund` refuses for as long as a `Proof` exists, so every proven-but-unwithdrawn intent becomes **permanently unrecoverable**. Portal, local-prover, hyper-prover and flash-fulfiller must be built from one tree and deployed together; never ship a subset.
+- **Programs are redeployed, never upgraded in place.** Each release gets a new program ID, and every account here is a PDA of the program, so a release starts on a disjoint namespace — no account written by a previous release is ever read back. Account layouts (`FulfillMarker`, `WithdrawnMarker`, `Proof`, …) may therefore grow or be reordered freely, and **no layout migration or old-layout fallback should ever be written**. The flip side: under an in-place upgrade any of those changes would strand live intents (a grown `FulfillMarker` makes `prove`'s `try_deserialize` fail on pre-upgrade markers), so the redeploy assumption is load-bearing, not incidental.
 
 ### flash-fulfiller heap requirement
 
@@ -90,7 +103,7 @@ In `flash_fulfill`, `strip_call_accounts` truncates each call's Borsh tail in-pl
 
 ## Integration tests (`integration-tests/`)
 
-Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
+Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_token_account`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
 
 Per-program contexts live next to `mod.rs`: `portal_context.rs`, `hyper_prover_context.rs`, `local_prover_context.rs`, `flash_fulfiller_context.rs`, `hyperlane_context.rs`, `proof_helper_context.rs`. They host the per-instruction `build_*_transaction` builders that integration tests call.
 

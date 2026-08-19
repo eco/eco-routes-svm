@@ -48,3 +48,15 @@ pub struct IntentProven {
     intent_hash: Bytes32,
     claimant: Bytes32,
 }
+
+/// Closing a marker destroys the `claimant` that `prove` reads, so it is
+/// recorded here: the event stream is the audit record for an action the
+/// on-chain rules cannot make safe on their own.
+#[event]
+#[derive(new)]
+pub struct FulfillMarkerClosed {
+    intent_hash: Bytes32,
+    payer: Pubkey,
+    claimant: Bytes32,
+    lamports: u64,
+}

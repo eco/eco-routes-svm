@@ -25,8 +25,8 @@ pub struct Prove<'info> {
     /// CHECK: address is validated
     #[account(executable, address = args.prover @ PortalError::InvalidProver)]
     pub prover: UncheckedAccount<'info>,
-    /// CHECK: address is validated
-    #[account(address = dispatcher_pda().0 @ PortalError::InvalidDispatcher)]
+    /// CHECK: address is validated, scoped to the caller-chosen prover
+    #[account(address = dispatcher_pda(&args.prover).0 @ PortalError::InvalidDispatcher)]
     pub dispatcher: UncheckedAccount<'info>,
 }
 
@@ -112,8 +112,9 @@ fn invoke_prover_prove<'info>(
         .chain(borsh::to_vec(&args)?)
         .collect();
 
-    let (_, bump) = dispatcher_pda();
-    let signer_seeds = [DISPATCHER_SEED, &[bump]];
+    let prover = ctx.accounts.prover.key();
+    let (_, bump) = dispatcher_pda(&prover);
+    let signer_seeds = [DISPATCHER_SEED, prover.as_ref(), &[bump]];
 
     let prove_account_metas = prove_accounts.iter().map(|account| AccountMeta {
         pubkey: account.key(),

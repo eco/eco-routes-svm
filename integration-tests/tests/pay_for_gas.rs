@@ -54,7 +54,7 @@ fn setup_dispatched_message(ctx: &mut common::Context) -> (Pubkey, u32) {
 
     let source_domain = random::<u32>();
     let source_prover: [u8; 32] = random();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
 
     // Use the portal prove path (Portal → HyperProver → Mailbox) which is
     // the same path production uses. We need to know the unique_message keypair
@@ -283,7 +283,7 @@ fn atomic_fulfill_prove_pay_for_gas() {
 
     let source_domain = random::<u32>();
     let source_prover: [u8; 32] = random();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&hyper_prover::ID).0;
 
     let unique_message = Keypair::new();
     let unique_gas_payment = Keypair::new();
