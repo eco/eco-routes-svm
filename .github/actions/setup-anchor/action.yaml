@@ -106,6 +106,7 @@ runs:
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.avm/bin:$PATH"
         solana --version
         anchor --version
-        # Records the platform-tools/rustc this Solana CLI defaults to. Note `anchor build`
-        # may still resolve a different one -- assert-sbf-rustc.sh checks what it actually used.
+        # Records the platform-tools/rustc this Solana CLI defaults to. `anchor build` does NOT
+        # use it -- anchor-cli 1.x hard-codes `--tools-version v1.52` -- so this is informational
+        # only; assert-sbf-rustc.sh checks what the build actually used.
         cargo build-sbf --version

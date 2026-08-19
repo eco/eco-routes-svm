@@ -118,9 +118,10 @@ sh -c "$(curl -sSfL https://release.anza.xyz/v4.1.1/install)"
 export PATH="~/.local/share/solana/install/active_release/bin:$PATH"
 ```
 
-Use this exact version. CI pins it (`SOLANA_VERSION` in `.github/workflows/`) because it
-decides which platform-tools rustc compiles the on-chain programs; installing a different
-one locally can produce different bytecode than a release build.
+Use this exact version. CI pins it (`SOLANA_VERSION` in `.github/workflows/`) so the CLI
+tooling matches a release build. Note it does **not** decide which rustc compiles the on-chain
+programs — anchor-cli 1.x hard-codes `--tools-version v1.52` (rustc 1.89.0-dev) when invoking
+`cargo build-sbf`, so the Anchor version is what moves the bytecode compiler.
 
 #### 3. Install Anchor CLI
 ```bash

@@ -10,12 +10,19 @@ concurrency:
 env:
   RUST_VERSION: "1.97.1"
   ANCHOR_VERSION: "1.1.2"
-  # Exact Solana CLI version. This decides the platform-tools that compile the on-chain
-  # programs, so it is pinned rather than tracking "stable".
+  # Exact Solana CLI version, pinned rather than tracking "stable". Note this no longer
+  # decides the on-chain compiler: anchor-cli 1.x hard-codes `--tools-version v1.52` when it
+  # shells out to `cargo build-sbf`, so it overrides whatever platform-tools this CLI defaults
+  # to. This pins the CLI tooling only.
   SOLANA_VERSION: "4.1.1"
   # The rustc `anchor build` actually uses for the programs, asserted after every build.
   # Changing this changes the compiler that produces deployed bytecode -- do it deliberately.
-  SBF_RUSTC_VERSION: "1.79.0-dev"
+  # Comes from anchor's hard-coded platform-tools version below; bump both only alongside
+  # ANCHOR_VERSION.
+  SBF_RUSTC_VERSION: "1.89.0-dev"
+  # The platform-tools version anchor-cli hard-codes in `cargo build-sbf --tools-version`
+  # (BUILD_SUBCOMMAND in its cli/src/lib.rs). Asserted together with SBF_RUSTC_VERSION.
+  SBF_TOOLS_VERSION: "v1.52"
 
 jobs:
   release:
@@ -71,7 +78,7 @@ jobs:
 
       - name: Assert on-chain compiler
         if: steps.dry.outputs.new_release_published == 'true'
-        run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }}
+        run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
 
       - name: Build devnet IDLs
         if: steps.dry.outputs.new_release_published == 'true'

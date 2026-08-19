@@ -16,12 +16,16 @@ Anchor (1.1.2) workspace implementing a cross-chain intent protocol on Solana. R
 
 Two toolchains matter and they are not the same one. `rust-toolchain.toml` is the **host**
 compiler (clippy, tests, `avm`). The **on-chain** programs are compiled by the rustc inside
-Solana's platform-tools, which `anchor build` resolves itself — currently 1.79.0-dev, far
-older than the host. Anything in program code or in a dependency of `eco-svm-std` must
-compile under *that* rustc, so a new-ish stdlib method or a dependency raising its MSRV
-will break the on-chain build while the host build stays green. CI pins `SOLANA_VERSION`
-and asserts the SBF rustc after every build (`scripts/assert-sbf-rustc.sh`) so this cannot
-change silently.
+Solana's platform-tools — currently 1.89.0-dev, older than the host. Anything in program code
+or in a dependency of `eco-svm-std` must compile under *that* rustc, so a new-ish stdlib method
+or a dependency raising its MSRV will break the on-chain build while the host build stays green.
+
+**`anchor build` picks that compiler, not the installed Solana CLI.** anchor-cli 1.x hard-codes
+`--tools-version v1.52` when it shells out to `cargo build-sbf`, so `SOLANA_VERSION` pins the CLI
+tooling but does *not* decide the bytecode compiler — bumping `ANCHOR_VERSION` can change it
+instead. (0.31.1 passed no `--tools-version` and got v1.43 / 1.79.0-dev from the CLI default, so
+the 0.31.1 → 1.1.2 upgrade moved the on-chain compiler from 1.79.0-dev to 1.89.0-dev.) CI asserts
+the SBF rustc after every build (`scripts/assert-sbf-rustc.sh`) so this cannot change silently.
 
 ## Build / test / lint
 
