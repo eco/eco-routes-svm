@@ -2,6 +2,13 @@
 #
 # Assert which rustc compiled the on-chain programs.
 #
+# Kept even though anchor now hard-codes its tools-version: that constant lives in a dependency's
+# source, so nothing in this repo -- not Anchor.toml, not the lockfile -- moves when it changes.
+# This is what makes "which compiler produced the deployed bytecode" an enforced fact rather than
+# folklore, and what turns an ANCHOR_VERSION bump's bytecode consequence into a visible one.
+# Limit: -dev builds report no commit hash, so a platform-tools respin keeping the same rustc base
+# would pass. It is a fingerprint, not a checksum.
+#
 # `anchor build` does not use the platform-tools the installed Solana CLI defaults to. anchor-cli
 # 1.x shells out to `cargo build-sbf --tools-version <v>` with <v> HARD-CODED in the CLI source
 # (`BUILD_SUBCOMMAND` in cli/src/lib.rs), downloading it to
