@@ -1,5 +1,5 @@
-use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{AnchorSerialize, Discriminator};
+use anchor_lang::prelude::{borsh, AccountMeta};
+use anchor_lang::Discriminator;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use eco_svm_std::prover::Proof;
@@ -12,6 +12,7 @@ use portal::types::{
     intent_hash, Call, Calldata, CalldataWithAccounts, Reward, Route, TokenAmount,
 };
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
@@ -175,7 +176,10 @@ fn flash_fulfill_native_fee_reports_documented_delta_not_swept_amount() {
         ctx.airdrop_token_ata(&token.token, &claimant, 0);
     });
 
-    let donation: u64 = 7777;
+    // solana 3.x rejects airdrops leaving a fresh account below rent-exemption,
+    // so donate the 0-byte rent-exempt minimum. The flash_vault is swept to 0, so
+    // the donation flows through to the claimant regardless of its size.
+    let donation: u64 = ctx.get_sysvar::<Rent>().minimum_balance(0);
     ctx.airdrop(&flash_vault_pda().0, donation).unwrap();
 
     let documented_delta = reward.native_amount.saturating_sub(route.native_amount);
@@ -222,7 +226,13 @@ fn flash_fulfill_default_claimant_fail() {
         vec![],
     );
 
-    assert!(result.is_err_and(common::is_error(FlashFulfillerError::InvalidClaimant)));
+    // A default (zero) pubkey passed as the writable claimant is now rejected by
+    // Anchor's `#[account(mut)]` constraint before the program's own InvalidClaimant
+    // check runs, so the tx fails with ConstraintMut. The default claimant is still
+    // rejected; only the rejecting layer changed.
+    assert!(result.is_err_and(common::is_error(
+        anchor_lang::error::ErrorCode::ConstraintMut
+    )));
 }
 
 #[test]
@@ -307,8 +317,8 @@ fn flash_fulfill_intent_hash_consumes_append_built_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     let split = payload.len() / 2;
     let first_chunk = payload[..split].to_vec();
@@ -453,10 +463,10 @@ fn flash_fulfill_with_calls_should_succeed() {
         .zip(call_account_metas.iter())
         .map(|(calldata, call_accounts)| Call {
             target: token_program.to_bytes().into(),
-            data: CalldataWithAccounts::new(calldata.clone(), call_accounts.clone())
-                .unwrap()
-                .try_to_vec()
-                .unwrap(),
+            data: borsh::to_vec(
+                &CalldataWithAccounts::new(calldata.clone(), call_accounts.clone()).unwrap(),
+            )
+            .unwrap(),
         })
         .collect();
 
@@ -845,8 +855,8 @@ fn flash_fulfill_intent_hash_rejects_buffer_content_hash_mismatch() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     let split = payload.len() / 2;
     let first_chunk = payload[..split].to_vec();
@@ -1012,10 +1022,10 @@ fn flash_fulfill_large_route_consumes_without_oom() {
         .map(|index| unique_dummies[index % unique_dummies.len()])
         .collect();
 
-    let target = spl_noop::ID.to_bytes().into();
+    let target = common::SPL_NOOP_ID.to_bytes().into();
     let build_call = |data: Vec<u8>, accounts: Vec<Pubkey>| Call {
         target,
-        data: CalldataWithAccounts {
+        data: borsh::to_vec(&CalldataWithAccounts {
             calldata: Calldata {
                 data,
                 account_count: accounts.len() as u8,
@@ -1028,8 +1038,7 @@ fn flash_fulfill_large_route_consumes_without_oom() {
                     is_writable: false,
                 })
                 .collect(),
-        }
-        .try_to_vec()
+        })
         .unwrap(),
     };
 
@@ -1039,7 +1048,7 @@ fn flash_fulfill_large_route_consumes_without_oom() {
         build_call(vec![0u8], vec![edge_account]),
     ];
 
-    let encoded_route_size = route.try_to_vec().unwrap().len();
+    let encoded_route_size = borsh::to_vec(&route).unwrap().len();
     assert!(
         encoded_route_size >= 1300,
         "expected jupiter-shape route to encode to >=1300 bytes, got {encoded_route_size}",
@@ -1099,8 +1108,8 @@ fn flash_fulfill_large_route_consumes_without_oom() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     payload.chunks(900).for_each(|chunk| {
         ctx.flash_fulfiller()
@@ -1117,7 +1126,7 @@ fn flash_fulfill_large_route_consumes_without_oom() {
     let call_accounts: Vec<AccountMeta> = std::iter::once(edge_account)
         .chain(middle_accounts.iter().copied())
         .chain(std::iter::once(edge_account))
-        .chain(std::iter::once(spl_noop::ID))
+        .chain(std::iter::once(common::SPL_NOOP_ID))
         .map(|pubkey| AccountMeta::new_readonly(pubkey, false))
         .collect();
 

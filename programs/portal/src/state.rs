@@ -113,6 +113,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)] // Rent fields are deprecated but still the way to build a fixed test fixture
     fn withdrawn_marker_min_balance_deterministic() {
         let rent = Rent {
             lamports_per_byte_year: 3480,
@@ -158,7 +159,10 @@ mod tests {
             11,
         );
 
-        goldie::assert_json!((8 + FulfillMarker::INIT_SPACE, marker.try_to_vec().unwrap()));
+        goldie::assert_json!((
+            8 + FulfillMarker::INIT_SPACE,
+            borsh::to_vec(&marker).unwrap()
+        ));
     }
 
     #[test]

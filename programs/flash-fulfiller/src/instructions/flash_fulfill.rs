@@ -13,7 +13,6 @@ use portal::types::{
     self, Reward, Route, TokenTransferAccounts, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
-use spl_pod::option::Nullable;
 
 use crate::cpi;
 use crate::events::FlashFulfilled;
@@ -162,13 +161,13 @@ pub struct FlashFulfill<'info> {
 /// support `Option<NestedAccounts>`, so the pairing is enforced at runtime
 /// (`WriterRequired` if buffer is supplied without writer).
 pub fn flash_fulfill<'info>(
-    ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: Context<'info, FlashFulfill<'info>>,
     args: FlashFulfillArgs,
 ) -> Result<()> {
     let FlashFulfillArgs { intent } = args;
 
     require!(
-        ctx.accounts.claimant.key().is_some(),
+        ctx.accounts.claimant.key() != Pubkey::default(),
         FlashFulfillerError::InvalidClaimant
     );
 
@@ -289,7 +288,7 @@ pub fn flash_fulfill<'info>(
 }
 
 fn extract_flash_fulfill_accounts<'a, 'info>(
-    ctx: &'a Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: &'a Context<'info, FlashFulfill<'info>>,
     reward_token_count: usize,
     route_token_count: usize,
 ) -> Result<FlashFulfillAccounts<'a, 'info>> {
@@ -328,7 +327,7 @@ fn extract_flash_fulfill_accounts<'a, 'info>(
 }
 
 fn init_flash_vault_reward_atas<'info>(
-    ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: &Context<'info, FlashFulfill<'info>>,
     reward_transfers: &[TokenTransferAccounts<'info>],
 ) -> Result<()> {
     reward_transfers
@@ -337,7 +336,7 @@ fn init_flash_vault_reward_atas<'info>(
 }
 
 fn init_flash_vault_reward_ata<'info>(
-    ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: &Context<'info, FlashFulfill<'info>>,
     transfer: &TokenTransferAccounts<'info>,
 ) -> Result<()> {
     // The `create` CPI below is non-idempotent — it errors on an already-initialized
@@ -353,7 +352,7 @@ fn init_flash_vault_reward_ata<'info>(
     )?;
 
     associated_token::create(CpiContext::new(
-        ctx.accounts.associated_token_program.to_account_info(),
+        ctx.accounts.associated_token_program.key(),
         associated_token::Create {
             payer: ctx.accounts.payer.to_account_info(),
             associated_token: transfer.to.to_account_info(),
@@ -399,7 +398,7 @@ fn strip_call_accounts(mut route: Route) -> Result<Route> {
 }
 
 fn sweep_leftover_tokens<'info>(
-    ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: &Context<'info, FlashFulfill<'info>>,
     claimant_transfers: &[TokenTransferAccounts<'info>],
     flash_vault_seeds: &[&[u8]],
 ) -> Result<()> {
@@ -432,7 +431,7 @@ fn sweep_leftover_tokens<'info>(
         )?;
 
         close_account(CpiContext::new_with_signer(
-            token_program,
+            token_program.key(),
             CloseAccount {
                 account: transfer.from.to_account_info(),
                 destination: ctx.accounts.payer.to_account_info(),
@@ -444,7 +443,7 @@ fn sweep_leftover_tokens<'info>(
 }
 
 fn sweep_leftover_native<'info>(
-    ctx: &Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+    ctx: &Context<'info, FlashFulfill<'info>>,
     flash_vault_seeds: &[&[u8]],
 ) -> Result<()> {
     let leftover = ctx.accounts.flash_vault.lamports();

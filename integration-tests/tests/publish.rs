@@ -1,4 +1,4 @@
-use anchor_lang::AnchorSerialize;
+use anchor_lang::prelude::borsh;
 use portal::events::IntentPublished;
 use portal::types::intent_hash;
 use solana_sdk::signer::Signer;
@@ -10,7 +10,7 @@ pub mod common;
 fn publish_intent_success() {
     let mut ctx = common::Context::default();
     let (destination, route, reward) = ctx.rand_intent();
-    let route: Vec<u8> = route.try_to_vec().unwrap();
+    let route: Vec<u8> = borsh::to_vec(&route).unwrap();
     let creator_balance = ctx.balance(&ctx.creator.pubkey());
     let payer_balance = ctx.balance(&ctx.payer.pubkey());
 

@@ -30,10 +30,7 @@ pub struct Prove<'info> {
     pub dispatcher: UncheckedAccount<'info>,
 }
 
-pub fn prove_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Prove<'info>>,
-    args: ProveArgs,
-) -> Result<()> {
+pub fn prove_intent<'info>(ctx: Context<'info, Prove<'info>>, args: ProveArgs) -> Result<()> {
     let ProveArgs {
         prover: _,
         source_chain_domain_id,
@@ -65,10 +62,10 @@ pub fn prove_intent<'info>(
 
 type IntentHashAndFulfillMarker = (Bytes32, FulfillMarker);
 
-fn fulfill_marker_and_prove_accounts<'c, 'info>(
-    ctx: &Context<'_, '_, 'c, 'info, Prove<'info>>,
+fn fulfill_marker_and_prove_accounts<'info>(
+    ctx: &Context<'info, Prove<'info>>,
     intent_hashes: Vec<Bytes32>,
-) -> Result<(Vec<IntentHashAndFulfillMarker>, &'c [AccountInfo<'info>])> {
+) -> Result<(Vec<IntentHashAndFulfillMarker>, &'info [AccountInfo<'info>])> {
     require!(
         intent_hashes.len() <= ctx.remaining_accounts.len(),
         PortalError::InvalidFulfillMarker
@@ -96,7 +93,7 @@ fn fulfill_marker_and_prove_accounts<'c, 'info>(
 }
 
 fn invoke_prover_prove<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Prove<'info>>,
+    ctx: &Context<'info, Prove<'info>>,
     source_chain_domain_id: u64,
     intent_hashes_fulfill_markers: Vec<(Bytes32, FulfillMarker)>,
     prove_accounts: &[AccountInfo<'info>],
@@ -112,7 +109,7 @@ fn invoke_prover_prove<'info>(
     let args = prover::ProveArgs::new(source_chain_domain_id, proof_data, data);
     let ix_data: Vec<_> = PROVE_DISCRIMINATOR
         .into_iter()
-        .chain(args.try_to_vec()?)
+        .chain(borsh::to_vec(&args)?)
         .collect();
 
     let prover = ctx.accounts.prover.key();

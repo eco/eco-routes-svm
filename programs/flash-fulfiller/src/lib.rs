@@ -41,11 +41,12 @@ declare_id!("EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ");
     not(feature = "no-entrypoint"),
 ))]
 #[global_allocator]
-static ALLOCATOR: anchor_lang::solana_program::entrypoint::BumpAllocator =
-    anchor_lang::solana_program::entrypoint::BumpAllocator {
-        start: anchor_lang::solana_program::entrypoint::HEAP_START_ADDRESS as usize,
-        len: 256 * 1024,
-    };
+static ALLOCATOR: anchor_lang::solana_program::entrypoint::BumpAllocator = unsafe {
+    anchor_lang::solana_program::entrypoint::BumpAllocator::with_fixed_address_range(
+        anchor_lang::solana_program::entrypoint::HEAP_START_ADDRESS as usize,
+        256 * 1024,
+    )
+};
 
 pub mod cpi;
 pub mod events;
@@ -92,7 +93,7 @@ pub mod flash_fulfiller {
     /// caller-supplied claimant. The program's `flash_vault` PDA acts as
     /// transient solver/claimant; it is drained by the end of the tx.
     pub fn flash_fulfill<'info>(
-        ctx: Context<'_, '_, '_, 'info, FlashFulfill<'info>>,
+        ctx: Context<'info, FlashFulfill<'info>>,
         args: FlashFulfillArgs,
     ) -> Result<()> {
         instructions::flash_fulfill(ctx, args)

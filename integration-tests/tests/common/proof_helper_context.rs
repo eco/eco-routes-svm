@@ -2,7 +2,7 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use litesvm::LiteSVM;
 use proof_helper::igp;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -16,8 +16,8 @@ const PROOF_HELPER_BIN: &[u8] = include_bytes!("../../../target/deploy/proof_hel
 const MOCK_IGP_BIN: &[u8] = include_bytes!("../../../target/deploy/mock_igp.so");
 
 pub fn add_proof_helper_programs(svm: &mut LiteSVM) {
-    svm.add_program(proof_helper::ID, PROOF_HELPER_BIN);
-    svm.add_program(igp::IGP_PROGRAM_ID, MOCK_IGP_BIN);
+    svm.add_program(proof_helper::ID, PROOF_HELPER_BIN).unwrap();
+    svm.add_program(igp::IGP_PROGRAM_ID, MOCK_IGP_BIN).unwrap();
 }
 
 /// Derive the IGP program data PDA (seeds from Hyperlane IGP).

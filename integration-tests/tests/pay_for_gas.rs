@@ -1,5 +1,5 @@
-use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{AnchorSerialize, InstructionData, ToAccountMetas};
+use anchor_lang::prelude::{borsh, AccountMeta};
+use anchor_lang::{InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use eco_svm_std::{Bytes32, CHAIN_ID};
@@ -8,7 +8,7 @@ use portal::types::{Call, Calldata, CalldataWithAccounts, TokenAmount};
 use portal::{state, types};
 use proof_helper::igp;
 use rand::random;
-use solana_sdk::compute_budget::ComputeBudgetInstruction;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -262,14 +262,14 @@ fn atomic_fulfill_prove_pay_for_gas() {
     let mut source_route = route.clone();
     source_route.calls = vec![Call {
         target: token_program.to_bytes().into(),
-        data: calldata_with_accounts.try_to_vec().unwrap(),
+        data: borsh::to_vec(&calldata_with_accounts).unwrap(),
     }];
 
     // Build the destination route (with Calldata for execution)
     let mut dest_route = route.clone();
     dest_route.calls = vec![Call {
         target: token_program.to_bytes().into(),
-        data: calldata.try_to_vec().unwrap(),
+        data: borsh::to_vec(&calldata).unwrap(),
     }];
 
     let reward_hash: Bytes32 = random::<[u8; 32]>().into();
@@ -351,7 +351,7 @@ fn atomic_fulfill_prove_pay_for_gas() {
             AccountMeta::new_readonly(hyper_prover::state::dispatcher_pda().0, false),
             AccountMeta::new(ctx.payer.pubkey(), true),
             AccountMeta::new(outbox_pda, false),
-            AccountMeta::new_readonly(spl_noop::ID, false),
+            AccountMeta::new_readonly(common::SPL_NOOP_ID, false),
             AccountMeta::new_readonly(unique_message.pubkey(), true),
             AccountMeta::new(dispatched_message_pda, false),
             AccountMeta::new_readonly(anchor_lang::system_program::ID, false),

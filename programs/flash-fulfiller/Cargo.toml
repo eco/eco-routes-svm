@@ -27,7 +27,11 @@ anchor-lang = { workspace = true, features = ["event-cpi"] }
 anchor-spl = { workspace = true }
 eco-svm-std = { workspace = true }
 portal = { workspace = true, features = ["no-entrypoint"] }
-spl-pod = "0.5.1"
+
+# The k256 → getrandom path (via anchor's solana-secp256k1-recover) needs a
+# getrandom backend for the SBF target; enable the custom backend there only.
+[target.'cfg(target_os = "solana")'.dependencies]
+getrandom = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }

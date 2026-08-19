@@ -23,9 +23,13 @@ runs:
           build-essential pkg-config libssl-dev libudev-dev \
           llvm libclang-dev protobuf-compiler libprotobuf-dev
 
-    # The cache key must contain the Solana version. Keyed on "stable" instead, an eviction
-    # silently swaps in whatever the installer serves that day -- including the platform-tools
-    # under ~/.cache/solana that compile the on-chain programs.
+    # Keyed on both versions because this path holds two different things. ~/.local/share/solana
+    # is the CLI, which the Solana version decides; ~/.cache/solana holds the platform-tools that
+    # compile the on-chain programs, which anchor-cli picks via its hard-coded --tools-version, so
+    # the Anchor version decides those. Omit the Anchor version and a bump keeps hitting the old
+    # key: actions/cache does not save on a hit, so the new platform-tools would be re-downloaded
+    # on every run, forever. Keyed on "stable" instead of exact versions, an eviction would
+    # silently swap in whatever the installer serves that day.
     - name: Cache Solana installation
       id: cache-solana
       uses: actions/cache@v4
@@ -33,7 +37,7 @@ runs:
         path: |
           ~/.cache/solana
           ~/.local/share/solana
-        key: solana-v${{ inputs.solana-version }}-${{ runner.os }}
+        key: solana-v${{ inputs.solana-version }}-anchor-${{ inputs.anchor-version }}-${{ runner.os }}
 
     # Pinned installer, not the "latest stable" convenience script: that one resolves to a
     # moving target and also side-installs Anchor, surfpool, and Node, none of which this
@@ -63,16 +67,20 @@ runs:
     - name: Install AVM (Anchor Version Manager)
       if: steps.cache-anchor.outputs.cache-hit != 'true'
       shell: bash
+      # Build the Anchor toolchain with stable Rust: avm/anchor-cli pull
+      # cargo_metadata -> cargo-platform, which now requires rustc >= 1.91,
+      # newer than the programs' pinned 1.89. The programs still build on 1.89.
       run: |
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-        cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+        rustup toolchain install stable --profile minimal --no-self-update
+        cargo +stable install --git https://github.com/coral-xyz/anchor avm --locked --force
 
     - name: Install Anchor CLI
       if: steps.cache-anchor.outputs.cache-hit != 'true'
       shell: bash
       run: |
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.cargo/bin:$PATH"
-        avm install ${{ inputs.anchor-version }}
+        RUSTUP_TOOLCHAIN=stable avm install ${{ inputs.anchor-version }}
         avm use ${{ inputs.anchor-version }}
 
     - name: Add Anchor to PATH
@@ -102,6 +110,7 @@ runs:
         export PATH="$HOME/.local/share/solana/install/active_release/bin:$HOME/.avm/bin:$PATH"
         solana --version
         anchor --version
-        # Records the platform-tools/rustc this Solana CLI defaults to. Note `anchor build`
-        # may still resolve a different one -- assert-sbf-rustc.sh checks what it actually used.
+        # Records the platform-tools/rustc this Solana CLI defaults to. `anchor build` does NOT
+        # use it -- anchor-cli 1.x hard-codes `--tools-version v1.52` -- so this is informational
+        # only; assert-sbf-rustc.sh checks what the build actually used.
         cargo build-sbf --version

@@ -2,7 +2,6 @@ use std::ops::Range;
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-use anchor_lang::solana_program::keccak::hashv;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::program_pack::Pack;
 use anchor_lang::system_program;
@@ -12,6 +11,7 @@ use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::{Bytes32, CHAIN_ID};
+use solana_keccak_hasher::hashv;
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
@@ -59,10 +59,7 @@ pub struct Fulfill<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn fulfill_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Fulfill<'info>>,
-    args: FulfillArgs,
-) -> Result<()> {
+pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillArgs) -> Result<()> {
     let FulfillArgs {
         intent_hash: expected_intent_hash,
         route,
@@ -96,10 +93,10 @@ pub fn fulfill_intent<'info>(
     Ok(())
 }
 
-fn token_transfer_and_call_accounts<'c, 'info>(
-    ctx: &Context<'_, '_, 'c, 'info, Fulfill<'info>>,
+fn token_transfer_and_call_accounts<'info>(
+    ctx: &Context<'info, Fulfill<'info>>,
     route: &Route,
-) -> Result<(VecTokenTransferAccounts<'info>, &'c [AccountInfo<'info>])> {
+) -> Result<(VecTokenTransferAccounts<'info>, &'info [AccountInfo<'info>])> {
     let split_index = route.tokens.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE;
     require!(
         split_index <= ctx.remaining_accounts.len(),
@@ -111,7 +108,7 @@ fn token_transfer_and_call_accounts<'c, 'info>(
 }
 
 fn fund_executor<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Fulfill<'info>>,
+    ctx: &Context<'info, Fulfill<'info>>,
     route: &Route,
     accounts: VecTokenTransferAccounts<'info>,
 ) -> Result<()> {
@@ -126,7 +123,7 @@ fn fund_executor<'info>(
     if route.native_amount > 0 {
         system_program::transfer(
             CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.system_program.key(),
                 system_program::Transfer {
                     from: ctx.accounts.solver.to_account_info(),
                     to: ctx.accounts.executor.to_account_info(),
@@ -164,7 +161,7 @@ fn execute_route_calls(
             &signer_seeds,
         )?;
 
-        call.data = CalldataWithAccounts::new(calldata, call_accounts)?.try_to_vec()?;
+        call.data = borsh::to_vec(&CalldataWithAccounts::new(calldata, call_accounts)?)?;
 
         Result::Ok(())
     })?;

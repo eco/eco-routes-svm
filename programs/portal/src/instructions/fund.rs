@@ -35,10 +35,7 @@ pub struct Fund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn fund_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Fund<'info>>,
-    args: FundArgs,
-) -> Result<()> {
+pub fn fund_intent<'info>(ctx: Context<'info, Fund<'info>>, args: FundArgs) -> Result<()> {
     let FundArgs {
         destination,
         route_hash,
@@ -79,10 +76,7 @@ pub fn fund_intent<'info>(
     }
 }
 
-fn fund_vault_native<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
-    reward: &Reward,
-) -> Result<bool> {
+fn fund_vault_native<'info>(ctx: &Context<'info, Fund<'info>>, reward: &Reward) -> Result<bool> {
     reward
         .native_amount
         .checked_sub(ctx.accounts.vault.lamports())
@@ -91,7 +85,7 @@ fn fund_vault_native<'info>(
         .map(|amount| {
             system_program::transfer(
                 CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
+                    ctx.accounts.system_program.key(),
                     system_program::Transfer {
                         from: ctx.accounts.funder.to_account_info(),
                         to: ctx.accounts.vault.to_account_info(),
@@ -105,7 +99,7 @@ fn fund_vault_native<'info>(
 }
 
 fn fund_vault_tokens<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Fund<'info>>,
+    ctx: &Context<'info, Fund<'info>>,
     accounts: VecTokenTransferAccounts<'info>,
     reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<usize> {

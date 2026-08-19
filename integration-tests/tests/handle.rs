@@ -2,7 +2,6 @@ use std::iter;
 
 use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::system_program;
 use eco_svm_std::prover::{self, IntentHashClaimant, Proof, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
@@ -13,7 +12,7 @@ use portal::types::intent_hash;
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
-use solana_sdk::system_instruction::SystemError;
+use solana_system_interface::error::SystemError;
 
 use crate::common::sol_amount;
 
@@ -215,10 +214,7 @@ fn handle_withdraw_success() {
             claimant,
         )))
     );
-    let proof = ctx.get_account(&proof).unwrap();
-    assert!(proof.data.is_empty());
-    assert_eq!(proof.owner, system_program::ID);
-    assert_eq!(proof.lamports, 0);
+    assert!(ctx.get_account(&proof).is_none());
     assert_eq!(pda_payer_balance, ctx.balance(&pda_payer_pda));
 }
 

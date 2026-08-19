@@ -6,6 +6,7 @@ use flash_fulfiller::state::FlashFulfillIntentAccount;
 use portal::types::intent_hash;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
@@ -52,7 +53,10 @@ fn set_flash_fulfill_intent_handles_pre_funded_pda() {
     let griefer = Keypair::new();
     ctx.airdrop(&griefer.pubkey(), common::sol_amount(1.0))
         .unwrap();
-    let pre_funding = 1_000u64;
+    // solana 3.x rejects transfers that leave a fresh account below rent-exemption,
+    // so pre-fund with the 0-byte rent-exempt minimum. This stays well under the
+    // buffer's own rent (route + reward), keeping the writer's top-up positive.
+    let pre_funding = ctx.get_sysvar::<Rent>().minimum_balance(0);
     let prefund_tx = Transaction::new(
         &[&griefer],
         Message::new(

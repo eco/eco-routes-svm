@@ -1,5 +1,6 @@
+use anchor_lang::prelude::borsh;
 use anchor_lang::solana_program::system_instruction;
-use anchor_lang::{AnchorSerialize, Discriminator};
+use anchor_lang::Discriminator;
 use eco_svm_std::CHAIN_ID;
 use flash_fulfiller::state::FlashFulfillIntentAccount;
 use portal::types::intent_hash;
@@ -24,8 +25,8 @@ fn append_flash_fulfill_intent_chunk_first_call_creates_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     let result = ctx.flash_fulfiller().append_flash_fulfill_intent_chunk(
         &writer,
@@ -56,8 +57,8 @@ fn append_flash_fulfill_intent_chunk_extends_buffer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     let split = payload.len() / 2;
     let first_chunk = payload[..split].to_vec();
@@ -92,8 +93,8 @@ fn append_flash_fulfill_intent_chunk_non_writer_isolated() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     ctx.flash_fulfiller()
         .append_flash_fulfill_intent_chunk(&writer, intent_hash_value, payload.clone())
@@ -130,8 +131,8 @@ fn append_flash_fulfill_intent_chunk_isolated_per_writer() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     ctx.flash_fulfiller()
         .append_flash_fulfill_intent_chunk(&alice, intent_hash_value, payload.clone())
@@ -179,7 +180,10 @@ fn append_flash_fulfill_intent_chunk_handles_pre_funded_pda() {
     let griefer = Keypair::new();
     ctx.airdrop(&griefer.pubkey(), common::sol_amount(1.0))
         .unwrap();
-    let pre_funding = 1_000u64;
+    // solana 3.x rejects transfers that leave a fresh account below rent-exemption,
+    // so pre-fund with the 0-byte rent-exempt minimum. This stays well under the
+    // buffer's own rent (route + reward), keeping the writer's top-up positive.
+    let pre_funding = ctx.get_sysvar::<Rent>().minimum_balance(0);
     let prefund_tx = Transaction::new(
         &[&griefer],
         Message::new(
@@ -197,8 +201,8 @@ fn append_flash_fulfill_intent_chunk_handles_pre_funded_pda() {
 
     let mut payload = Vec::new();
     payload.extend_from_slice(FlashFulfillIntentAccount::DISCRIMINATOR);
-    payload.extend_from_slice(&route.try_to_vec().unwrap());
-    payload.extend_from_slice(&reward.try_to_vec().unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&route).unwrap());
+    payload.extend_from_slice(&borsh::to_vec(&reward).unwrap());
 
     let writer_balance_before = ctx.balance(&writer.pubkey());
 

@@ -18,7 +18,7 @@ no-log-ix-name = []
 
 [dependencies]
 anchor-lang = { workspace = true }
-tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+tiny-keccak = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }

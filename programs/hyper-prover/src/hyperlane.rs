@@ -36,6 +36,7 @@ pub fn process_authority_pda() -> (Pubkey, u8) {
 // is critical to keep the rest because borsh serialization
 // is dependent on the enum variant order.
 #[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 #[allow(dead_code)]
 pub enum MailboxInstruction {
     Init(Init),
@@ -53,9 +54,11 @@ pub enum MailboxInstruction {
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 pub struct Init {}
 
 #[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 pub struct OutboxDispatch {
     pub sender: Pubkey,
     pub destination_domain: u32,
@@ -64,6 +67,7 @@ pub struct OutboxDispatch {
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 pub struct InboxProcess {}
 
 pub fn dispatch_msg(
@@ -90,7 +94,7 @@ pub fn dispatch_msg(
             AccountMeta::new_readonly(ctx.accounts.unique_message.key(), true),
             AccountMeta::new(ctx.accounts.dispatched_message_pda.key(), false),
         ],
-        data: outbox_dispatch.try_to_vec()?,
+        data: borsh::to_vec(&outbox_dispatch)?,
     };
 
     invoke_signed(

@@ -22,8 +22,15 @@ anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 derive-new = { workspace = true }
 eco-svm-std = { workspace = true }
-itertools = "0.14.0"
-tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+itertools = "0.15.0"
+# Anchor 1.x's `solana_program` facade no longer re-exports a `keccak` module (the
+# monolithic solana-program crate isn't its primary dep); take the granular crate
+# directly for the syscall-backed hashv the executor-ATA digest uses on-chain.
+solana-keccak-hasher = "3.1"
+tiny-keccak = { workspace = true }
+
+[target.'cfg(target_os = "solana")'.dependencies]
+getrandom = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }

@@ -20,7 +20,7 @@ pub struct Handle<'info> {
 }
 
 pub fn handle<'info>(
-    ctx: Context<'_, '_, '_, 'info, Handle<'info>>,
+    ctx: Context<'info, Handle<'info>>,
     _origin: u32,
     sender: [u8; 32],
     payload: Vec<u8>,
@@ -38,7 +38,7 @@ pub fn handle<'info>(
 }
 
 fn mark_intent_hashes_proven<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Handle<'info>>,
+    ctx: &Context<'info, Handle<'info>>,
     proof_data: ProofData,
 ) -> Result<()> {
     require!(
@@ -57,7 +57,7 @@ fn mark_intent_hashes_proven<'info>(
 }
 
 fn mark_intent_hash_proven<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Handle<'info>>,
+    ctx: &Context<'info, Handle<'info>>,
     proof: &AccountInfo<'info>,
     destination: u64,
     intent_hash_claimant: IntentHashClaimant,

@@ -19,9 +19,9 @@ const DUMMY_ISM_BIN: &[u8] = include_bytes!("../../../target/deploy/dummy_ism.so
 const SPL_NOOP_BIN: &[u8] = include_bytes!("../../../bins/noop.so");
 
 pub fn add_hyperlane_programs(svm: &mut LiteSVM) {
-    svm.add_program(MAILBOX_ID, MAILBOX_BIN);
-    svm.add_program(dummy_ism::ID, DUMMY_ISM_BIN);
-    svm.add_program(spl_noop::ID, SPL_NOOP_BIN);
+    svm.add_program(MAILBOX_ID, MAILBOX_BIN).unwrap();
+    svm.add_program(dummy_ism::ID, DUMMY_ISM_BIN).unwrap();
+    svm.add_program(super::SPL_NOOP_ID, SPL_NOOP_BIN).unwrap();
 }
 
 pub fn init_hyperlane(svm: &mut LiteSVM) {
@@ -30,6 +30,7 @@ pub fn init_hyperlane(svm: &mut LiteSVM) {
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 enum MailboxInstruction {
     Init(Init),
     InboxProcess(InboxProcess),
@@ -37,12 +38,14 @@ enum MailboxInstruction {
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct InboxProcess {
     pub metadata: Vec<u8>,
     pub message: Vec<u8>,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct OutboxDispatch {
     pub sender: Pubkey,
     pub destination_domain: u32,
@@ -51,6 +54,7 @@ struct OutboxDispatch {
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct Init {
     pub local_domain: u32,
     pub default_ism: Pubkey,
@@ -59,6 +63,7 @@ struct Init {
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
+#[borsh(crate = "anchor_lang::prelude::borsh")]
 struct ProtocolFee {
     pub fee: u64,
     pub beneficiary: Pubkey,
@@ -195,7 +200,7 @@ impl Hyperlane<'_> {
         );
         accounts.extend(vec![
             // 6: SPL-noop
-            AccountMeta::new_readonly(spl_noop::ID, false),
+            AccountMeta::new_readonly(super::SPL_NOOP_ID, false),
             // 7: ISM program id (dummy ISM)
             AccountMeta::new_readonly(dummy_ism::ID, false),
             // 8: ISM verify accounts (dummy ISM state)

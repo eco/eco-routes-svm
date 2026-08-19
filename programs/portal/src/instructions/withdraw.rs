@@ -57,7 +57,7 @@ pub struct Withdraw<'info> {
 }
 
 pub fn withdraw_intent<'info>(
-    ctx: Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    ctx: Context<'info, Withdraw<'info>>,
     args: WithdrawArgs,
 ) -> Result<()> {
     let WithdrawArgs {
@@ -122,7 +122,7 @@ fn validate_proof(
 }
 
 fn withdraw_native<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    ctx: &Context<'info, Withdraw<'info>>,
     reward: &Reward,
     signer_seeds: &[&[u8]],
 ) -> Result<()> {
@@ -156,10 +156,10 @@ fn withdraw_native<'info>(
     }
 }
 
-fn token_transfer_and_remaining_accounts<'c, 'info>(
-    ctx: &Context<'_, '_, 'c, 'info, Withdraw<'info>>,
+fn token_transfer_and_remaining_accounts<'info>(
+    ctx: &Context<'info, Withdraw<'info>>,
     reward_token_amounts: &BTreeMap<Pubkey, u64>,
-) -> Result<(VecTokenTransferAccounts<'info>, &'c [AccountInfo<'info>])> {
+) -> Result<(VecTokenTransferAccounts<'info>, &'info [AccountInfo<'info>])> {
     // reward tokens are addressed by unique mint wherever they are read
     let split_index = reward_token_amounts.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE;
     require!(
@@ -174,7 +174,7 @@ fn token_transfer_and_remaining_accounts<'c, 'info>(
 }
 
 fn withdraw_tokens<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    ctx: &Context<'info, Withdraw<'info>>,
     reward_token_amounts: &BTreeMap<Pubkey, u64>,
     signer_seeds: &[&[u8]],
     accounts: VecTokenTransferAccounts<'info>,
@@ -196,7 +196,7 @@ fn withdraw_tokens<'info>(
 }
 
 fn withdraw_token<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    ctx: &Context<'info, Withdraw<'info>>,
     reward_token_amounts: &BTreeMap<Pubkey, u64>,
     signer_seeds: &[&[u8]],
     accounts: TokenTransferAccounts<'info>,
@@ -243,7 +243,7 @@ fn withdraw_token<'info>(
 }
 
 fn mark_withdrawn<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    ctx: &Context<'info, Withdraw<'info>>,
     intent_hash: &Bytes32,
 ) -> Result<()> {
     let (withdrawn_marker_pda, bump) = WithdrawnMarker::pda(intent_hash);
@@ -264,7 +264,7 @@ fn mark_withdrawn<'info>(
 }
 
 fn close_proof<'info>(
-    ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
+    ctx: &Context<'info, Withdraw<'info>>,
     remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<()> {
     let prover = ctx.accounts.prover.key();

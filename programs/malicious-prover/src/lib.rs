@@ -19,10 +19,7 @@ declare_id!("HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE");
 pub mod malicious_prover {
     use super::*;
 
-    pub fn prove<'info>(
-        ctx: Context<'_, '_, '_, 'info, Prove<'info>>,
-        args: ProveArgs,
-    ) -> Result<()> {
+    pub fn prove<'info>(ctx: Context<'info, Prove<'info>>, args: ProveArgs) -> Result<()> {
         let caller = &ctx.accounts.caller;
         let payer = &ctx.accounts.payer;
         let system_program = &ctx.accounts.system_program;
