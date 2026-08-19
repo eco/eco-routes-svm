@@ -6,23 +6,23 @@ edition = "2021"
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
-base64 = "0.22.1"
-derive_more = { version = "2.0.1", features = ["deref", "deref_mut"] }
+base64 = "0.23.1"
+derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
 dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
-litesvm = "0.12.0"
+litesvm = "0.13.1"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
 malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }
 malicious-prover = { workspace = true, features = ["no-entrypoint"] }
 mock-igp = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }
-rand = "0.9.1"
+rand = "0.10.2"
 solana-compute-budget-interface = "3.0.0"
 solana-sdk = "3.0.0"
 # solana-sdk 3.x's `system_instruction` module no longer re-exports `SystemError`;
 # take the granular crate directly.
 solana-system-interface = "2.0"
-tiny-keccak = "2.0.2"
+tiny-keccak = { workspace = true }

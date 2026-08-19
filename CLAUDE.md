@@ -111,4 +111,4 @@ Event assertions: `contains_event` (top-level `Program data:` log), `contains_cp
 
 ## Goldie
 
-Many tests use `goldie::assert_json!` / `assert_debug!` / `assert_yaml!`. Snapshots live in sibling `testdata/` directories (e.g. `programs/portal/src/testdata/`). Update with `GOLDIE_UPDATE=1 cargo test` and review the diff before committing.
+Many tests use `goldie::assert_json!` / `assert_debug!` / `assert_yaml!`. Snapshots live in a `testdata/` directory next to the source file the test is declared in (e.g. a test in `programs/portal/src/state.rs` snapshots to `programs/portal/src/state/testdata/`) — goldie 0.7 nests per-module rather than sharing one flat `<crate>/src/testdata/`. Update with `GOLDIE_UPDATE=1 cargo test` and review the diff before committing.

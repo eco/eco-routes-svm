@@ -14,7 +14,11 @@ derive-new = "0.7.0"
 dummy-ism = { path = "programs/dummy-ism" }
 eco-svm-std = { path = "packages/eco-svm-std" }
 flash-fulfiller = { path = "programs/flash-fulfiller" }
-goldie = "0.5.0"
+# The k256 → getrandom path (via anchor's solana-secp256k1-recover) needs a
+# getrandom backend for the SBF target; every program that pulls in secp256k1
+# recovery enables the custom backend there only.
+getrandom = { version = "0.2", features = ["custom"] }
+goldie = "0.7.0"
 hyper-prover = { path = "programs/hyper-prover" }
 local-prover = { path = "programs/local-prover" }
 malicious-proof-closer = { path = "programs/malicious-proof-closer" }
@@ -22,6 +26,7 @@ malicious-prover = { path = "programs/malicious-prover" }
 mock-igp = { path = "integration-tests/programs/mock-igp" }
 portal = { path = "programs/portal" }
 proof-helper = { path = "programs/proof-helper" }
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [profile.release]
 overflow-checks = true
