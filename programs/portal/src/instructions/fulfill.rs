@@ -1,7 +1,14 @@
+use std::ops::Range;
+
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::keccak::hashv;
 use anchor_lang::solana_program::program::invoke_signed;
+use anchor_lang::solana_program::program_pack::Pack;
 use anchor_lang::system_program;
+use anchor_spl::token::spl_token;
+use anchor_spl::token_2022::spl_token_2022::extension::StateWithExtensions;
+use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::{Bytes32, CHAIN_ID};
@@ -14,6 +21,16 @@ use crate::types::{
     self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
+
+/// Byte offsets of `amount` in the SPL token account layout — the only field a
+/// route call may legitimately change. Shared verbatim by token-2022's base
+/// account, whose extensions live past byte 165.
+const TOKEN_AMOUNT_RANGE: Range<usize> = 64..72;
+
+/// End of the fixed SPL token account layout. Token-2022 extensions live past
+/// this offset; adding or growing one requires `Reallocate`, which changes the
+/// account's length. Token-2022's base account shares this layout verbatim.
+const TOKEN_BASE_LEN: usize = spl_token::state::Account::LEN;
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct FulfillArgs {
@@ -58,7 +75,14 @@ pub fn fulfill_intent<'info>(
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
+    let executor_atas_hash = executor_atas_digest(ctx.accounts.executor.key, call_accounts)?;
     let route = execute_route_calls(ctx.accounts.executor.key, route, call_accounts)?;
+
+    verify_executor_intact(&ctx.accounts.executor)?;
+    require!(
+        executor_atas_digest(ctx.accounts.executor.key, call_accounts)? == executor_atas_hash,
+        PortalError::ExecutorAtaCorrupted
+    );
 
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     require!(
@@ -171,6 +195,68 @@ fn execute_route_call(
     invoke_signed(&instruction, call_accounts, &[signer_seeds]).map_err(Into::into)
 }
 
+/// Lamports are deliberately not part of the invariant: a route that delivers
+/// native SOL legitimately drains the executor, and the account carries no
+/// rent-exempt state to lose — it is reconstituted by the next `fund_executor`.
+fn verify_executor_intact(executor: &UncheckedAccount) -> Result<()> {
+    require!(
+        executor.owner == &system_program::ID,
+        PortalError::ExecutorCorrupted
+    );
+    require!(executor.data_is_empty(), PortalError::ExecutorCorrupted);
+
+    Ok(())
+}
+
+/// State of an executor-owned token account, captured before the route runs.
+/// A digest of every token account the executor owns, over everything a route
+/// call must not change.
+///
+/// Folded into a single 32 bytes rather than snapshotted per account: two
+/// snapshots are live across the route calls on an allocator that never frees,
+/// and per-account vectors overrun the heap on a large route
+/// (`flash_fulfill_large_route_consumes_without_oom`).
+///
+/// Covered: `owner` (a reassigned authority is a permanent per-mint DoS),
+/// `delegate` and `close_authority` (which **persist** past the transaction,
+/// turning a right that needs an intent authored and fulfilled into a standing
+/// one exercisable by a bare transfer), and membership itself — an account that
+/// stops parsing, changes owner, or is closed drops out of the fold.
+///
+/// Executor ATAs must already exist when this runs. `fund_executor` creates one
+/// for every mint in `route.tokens`, and any other — an intermediate mint a
+/// multi-hop route stages through, say — must be created beforehand: either by a
+/// permissionless `create_idempotent` ahead of the `fulfill` instruction, or by
+/// declaring the mint in `route.tokens` with `amount: 0`. A route call that
+/// creates one itself is rejected, since it joins the fold only on the second
+/// pass.
+///
+/// The extension tail is covered by hashing `len` rather than its bytes: it
+/// cannot be hashed directly, because a `Reallocate` moves it outside the
+/// caller's input section and the hashing syscall access-violates rather than
+/// erroring. `len` is the term that covers an extension being added or grown —
+/// keep it.
+fn executor_atas_digest(executor: &Pubkey, call_accounts: &[AccountInfo]) -> Result<[u8; 32]> {
+    call_accounts.iter().try_fold([0u8; 32], |digest, account| {
+        let data = account.try_borrow_data()?;
+        let Ok(state) = StateWithExtensions::<Token2022Account>::unpack(&data) else {
+            return Ok(digest);
+        };
+        if state.base.owner != *executor {
+            return Ok(digest);
+        }
+
+        Ok(hashv(&[
+            &digest,
+            account.key.as_ref(),
+            &data.len().to_le_bytes(),
+            &data[..TOKEN_AMOUNT_RANGE.start],
+            &data[TOKEN_AMOUNT_RANGE.end..TOKEN_BASE_LEN],
+        ])
+        .to_bytes())
+    })
+}
+
 fn mark_fulfilled(
     ctx: &Context<Fulfill>,
     intent_hash: &Bytes32,
@@ -192,4 +278,26 @@ fn mark_fulfilled(
             &[&signer_seeds],
         )
         .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// `TOKEN_AMOUNT_RANGE` is hand-derived from the SPL token layout, and a
+    /// wrong range would hash the wrong bytes while every behavioural test still
+    /// passed. Pin it against the packed representation.
+    #[test]
+    fn token_amount_range_matches_the_layout() {
+        let mut packed = [0u8; spl_token::state::Account::LEN];
+        spl_token::state::Account {
+            amount: u64::from_le_bytes([1, 2, 3, 4, 5, 6, 7, 8]),
+            ..Default::default()
+        }
+        .pack_into_slice(&mut packed);
+
+        assert_eq!(packed[TOKEN_AMOUNT_RANGE], [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(packed[..TOKEN_AMOUNT_RANGE.start].iter().all(|b| *b == 0));
+        assert!(packed[TOKEN_AMOUNT_RANGE.end..].iter().all(|b| *b == 0));
+    }
 }

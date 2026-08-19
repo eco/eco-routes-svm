@@ -213,7 +213,7 @@ fn prove_after_close_fail() {
         vec![intent.intent_hash],
         CHAIN_ID,
         vec![fulfill_marker],
-        state::dispatcher_pda().0,
+        state::dispatcher_pda(&local_prover::ID).0,
         vec![prover::Proof::pda(&intent.intent_hash, &local_prover::ID).0],
     );
 

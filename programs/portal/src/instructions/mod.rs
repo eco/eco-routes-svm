@@ -59,4 +59,6 @@ pub enum PortalError {
     /// The payout destination is not the claimant's derived ATA and the claimant
     /// did not sign to redirect it.
     ClaimantSignatureRequired,
+    ExecutorCorrupted,
+    ExecutorAtaCorrupted,
 }

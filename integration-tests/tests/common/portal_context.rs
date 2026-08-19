@@ -538,6 +538,33 @@ impl Portal<'_> {
         )
     }
 
+    /// Drives `portal::prove` with a caller-chosen `prover` program and a
+    /// fully attacker-controlled remaining-account list — the degrees of
+    /// freedom a real caller has. Used to reproduce the confused-deputy
+    /// prover-delegation exploit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_intent_via_program(
+        &mut self,
+        prover: Pubkey,
+        intent_hashes: Vec<Bytes32>,
+        source_chain_domain_id: u64,
+        fulfill_markers: Vec<Pubkey>,
+        dispatcher: Pubkey,
+        data: Vec<u8>,
+        remaining_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        self.prove_intent(
+            intent_hashes,
+            prover,
+            source_chain_domain_id,
+            fulfill_markers,
+            dispatcher,
+            data,
+            vec![],
+            remaining_accounts,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn prove_intent(
         &mut self,

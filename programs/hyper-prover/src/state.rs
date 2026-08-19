@@ -92,6 +92,14 @@ mod tests {
         assert!(Config::new(whitelisted_senders).is_err());
     }
 
+    /// The portal authority `prove` accepts, scoped to this program's ID. A seed
+    /// change here silently locks out portal — pin the address, not just the
+    /// derivation.
+    #[test]
+    fn accepted_prove_caller_authority_deterministic() {
+        goldie::assert_json!(portal::state::dispatcher_pda(&crate::ID));
+    }
+
     #[test]
     fn config_is_whitelisted() {
         let sender1: Bytes32 = [1u8; 32].into();

@@ -1,0 +1,21 @@
+[package]
+name = "malicious-proof-closer"
+version = "0.1.0"
+description = "Confused-deputy PoC prover for eco-routes-svm testing (localnet only)"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "malicious_proof_closer"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+eco-svm-std = { workspace = true }

@@ -30,6 +30,11 @@ pub enum FlashFulfillerError {
     /// A call's `data` field is malformed — header would index past the slice
     /// or arithmetic on the prefix length overflows.
     InvalidCallData,
+    // Anchor assigns error codes positionally from 6000 — append only, never insert.
+    /// The `prove_authority` address does not match `prove_authority_pda(local_prover_program)`.
+    InvalidProveAuthority,
+    /// `portal_program` is not `portal::ID`.
+    InvalidPortalProgram,
 }
 
 pub fn close_buffer<'info>(

@@ -540,7 +540,7 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer_pda().0,
+            proof_closer_pda(&reward.prover).0,
             token_accounts,
             iter::once(AccountMeta::new(pda_payer_pda().0, false)),
         )

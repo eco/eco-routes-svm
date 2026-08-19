@@ -30,11 +30,14 @@ pub fn prove_intent<'info>(
 
     require!(domain_id == CHAIN_ID, LocalProverError::InvalidDomainId);
 
+    // Both accepted callers are authorities scoped to *this* program's ID. Keep
+    // the `&crate::ID` scoping: it is what makes each address unforgeable by a
+    // caller that only holds an authority scoped to some other program.
     let caller = ctx.accounts.caller.key();
-    let portal_dispatcher = portal::state::dispatcher_pda().0;
-    let flash_vault = flash_fulfiller::state::flash_vault_pda().0;
+    let portal_dispatcher = portal::state::dispatcher_pda(&crate::ID).0;
+    let flash_prove_authority = flash_fulfiller::state::prove_authority_pda(&crate::ID).0;
     require!(
-        caller == portal_dispatcher || caller == flash_vault,
+        caller == portal_dispatcher || caller == flash_prove_authority,
         LocalProverError::InvalidCaller
     );
 

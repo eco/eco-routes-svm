@@ -18,12 +18,20 @@ pub fn executor_pda() -> (Pubkey, u8) {
     Pubkey::find_program_address(&[EXECUTOR_SEED], &crate::ID)
 }
 
-pub fn dispatcher_pda() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[DISPATCHER_SEED], &crate::ID)
+/// Per-prover authority: `prove` signs this into the caller-chosen prover, and
+/// each prover accepts only `dispatcher_pda(&its_own_id)`. The prover binding is
+/// a security boundary — keep it seeded by the prover and do not collapse it to a
+/// single shared PDA.
+pub fn dispatcher_pda(prover: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[DISPATCHER_SEED, prover.as_ref()], &crate::ID)
 }
 
-pub fn proof_closer_pda() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[PROOF_CLOSER_SEED], &crate::ID)
+/// Per-prover authority: `withdraw` signs this into the caller-chosen prover's
+/// `close_proof` CPI, and each prover accepts only `proof_closer_pda(&its_own_id)`.
+/// The prover binding is a security boundary — keep it seeded by the prover and
+/// do not collapse it to a single shared PDA.
+pub fn proof_closer_pda(prover: &Pubkey) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROOF_CLOSER_SEED, prover.as_ref()], &crate::ID)
 }
 
 #[account]
@@ -122,7 +130,7 @@ mod tests {
 
     #[test]
     fn dispatcher_pda_deterministic() {
-        goldie::assert_json!(dispatcher_pda());
+        goldie::assert_json!(dispatcher_pda(&Pubkey::new_from_array([9u8; 32])));
     }
 
     #[test]
@@ -155,6 +163,6 @@ mod tests {
 
     #[test]
     fn proof_closer_pda_deterministic() {
-        goldie::assert_json!(proof_closer_pda());
+        goldie::assert_json!(proof_closer_pda(&Pubkey::new_from_array([9u8; 32])));
     }
 }

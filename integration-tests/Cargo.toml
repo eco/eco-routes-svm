@@ -14,6 +14,8 @@ flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
 litesvm = "0.6.1"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
+malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }
+malicious-prover = { workspace = true, features = ["no-entrypoint"] }
 mock-igp = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }

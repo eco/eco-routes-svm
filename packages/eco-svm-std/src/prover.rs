@@ -115,9 +115,20 @@ pub struct IntentProven {
 /// CPIs a prover program's `prove` instruction for a single intent.
 ///
 /// Generic over any prover that follows the standard `prove(ProveArgs)` shape
-/// (local-prover, hyper-prover, etc.). `caller` is signed via `caller_seeds`,
-/// so PDAs that the prover accepts as authorized callers (e.g. a dispatcher
-/// or flash-vault PDA) can invoke this helper.
+/// (local-prover, hyper-prover, etc.). `caller` is signed via `caller_seeds`, so
+/// it must be an authority the prover accepts — `portal::state::dispatcher_pda(prover)`
+/// or `flash_fulfiller::state::prove_authority_pda(prover)`, both scoped to the
+/// prover being dispatched to.
+///
+/// Never pass a fund-holding or claimant identity (e.g. `flash_vault`) as
+/// `caller`. `prover_program` is caller-chosen at every current call site, so
+/// whatever signs here is handed to a program the caller picked; scoping the
+/// authority to that program is what makes the signature useless to it. A
+/// credential that also controls funds would hand over both.
+///
+/// The instruction built here is a fixed six accounts and forwards no tail, so a
+/// caller-chosen `prover_program` receives no other program to replay `caller`
+/// into. That is load-bearing — see `flash_fulfill_confused_deputy.rs`.
 #[allow(clippy::too_many_arguments)]
 pub fn prove<'info>(
     prover_program: &AccountInfo<'info>,

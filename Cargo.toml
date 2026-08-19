@@ -17,6 +17,8 @@ flash-fulfiller = { path = "programs/flash-fulfiller" }
 goldie = "0.5.0"
 hyper-prover = { path = "programs/hyper-prover" }
 local-prover = { path = "programs/local-prover" }
+malicious-proof-closer = { path = "programs/malicious-proof-closer" }
+malicious-prover = { path = "programs/malicious-prover" }
 mock-igp = { path = "integration-tests/programs/mock-igp" }
 portal = { path = "programs/portal" }
 proof-helper = { path = "programs/proof-helper" }

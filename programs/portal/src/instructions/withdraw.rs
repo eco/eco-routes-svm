@@ -42,8 +42,8 @@ pub struct Withdraw<'info> {
     /// CHECK: address is validated
     #[account(mut)]
     pub proof: UncheckedAccount<'info>,
-    /// CHECK: address is validated
-    #[account(address = proof_closer_pda().0 @ PortalError::InvalidProofCloser)]
+    /// CHECK: address is validated, scoped to the caller-chosen prover
+    #[account(address = proof_closer_pda(&args.reward.prover).0 @ PortalError::InvalidProofCloser)]
     pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: address is validated
     #[account(executable, address = args.reward.prover @ PortalError::InvalidProver)]
@@ -76,9 +76,17 @@ pub fn withdraw_intent<'info>(
     validate_proof(&ctx, destination, &intent_hash, &reward.prover)?;
 
     withdraw_native(&ctx, &reward, &signer_seeds)?;
+    // built once: both the account split and the mint check address reward
+    // tokens by unique mint, and neither allocator here frees
+    let reward_token_amounts = reward.token_amounts()?;
     let (token_transfer_accounts, remaining_accounts) =
-        token_transfer_and_remaining_accounts(&ctx, &reward)?;
-    withdraw_tokens(&ctx, &reward, &signer_seeds, token_transfer_accounts)?;
+        token_transfer_and_remaining_accounts(&ctx, &reward_token_amounts)?;
+    withdraw_tokens(
+        &ctx,
+        &reward_token_amounts,
+        &signer_seeds,
+        token_transfer_accounts,
+    )?;
 
     // once initialized, withdraw is never allowed again
     mark_withdrawn(&ctx, &intent_hash)?;
@@ -150,9 +158,10 @@ fn withdraw_native<'info>(
 
 fn token_transfer_and_remaining_accounts<'c, 'info>(
     ctx: &Context<'_, '_, 'c, 'info, Withdraw<'info>>,
-    reward: &Reward,
+    reward_token_amounts: &BTreeMap<Pubkey, u64>,
 ) -> Result<(VecTokenTransferAccounts<'info>, &'c [AccountInfo<'info>])> {
-    let split_index = reward.tokens.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE;
+    // reward tokens are addressed by unique mint wherever they are read
+    let split_index = reward_token_amounts.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE;
     require!(
         split_index <= ctx.remaining_accounts.len(),
         PortalError::InvalidTokenTransferAccounts
@@ -166,7 +175,7 @@ fn token_transfer_and_remaining_accounts<'c, 'info>(
 
 fn withdraw_tokens<'info>(
     ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
-    reward: &Reward,
+    reward_token_amounts: &BTreeMap<Pubkey, u64>,
     signer_seeds: &[&[u8]],
     accounts: VecTokenTransferAccounts<'info>,
 ) -> Result<()> {
@@ -175,7 +184,6 @@ fn withdraw_tokens<'info>(
         .iter()
         .map(|accounts| accounts.mint.key())
         .collect::<BTreeSet<_>>();
-    let reward_token_amounts = reward.token_amounts()?;
 
     require!(
         mints.len() == accounts.len() && mints.iter().eq(reward_token_amounts.keys()),
@@ -184,7 +192,7 @@ fn withdraw_tokens<'info>(
 
     accounts
         .into_iter()
-        .try_for_each(|accounts| withdraw_token(ctx, &reward_token_amounts, signer_seeds, accounts))
+        .try_for_each(|accounts| withdraw_token(ctx, reward_token_amounts, signer_seeds, accounts))
 }
 
 fn withdraw_token<'info>(
@@ -259,8 +267,9 @@ fn close_proof<'info>(
     ctx: &Context<'_, '_, '_, 'info, Withdraw<'info>>,
     remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<()> {
-    let (_, bump) = proof_closer_pda();
-    let signer_seeds = [PROOF_CLOSER_SEED, &[bump]];
+    let prover = ctx.accounts.prover.key();
+    let (_, bump) = proof_closer_pda(&prover);
+    let signer_seeds = [PROOF_CLOSER_SEED, prover.as_ref(), &[bump]];
 
     let remaining_account_metas = remaining_accounts.iter().map(|account| AccountMeta {
         pubkey: account.key(),

@@ -5,7 +5,7 @@ use crate::state::{pda_payer_pda, ProofAccount};
 
 #[derive(Accounts)]
 pub struct CloseProof<'info> {
-    #[account(address = portal::state::proof_closer_pda().0 @ HyperProverError::InvalidPortalProofCloser)]
+    #[account(address = portal::state::proof_closer_pda(&crate::ID).0 @ HyperProverError::InvalidPortalProofCloser)]
     pub portal_proof_closer: Signer<'info>,
     #[account(mut)]
     pub proof: Account<'info, ProofAccount>,

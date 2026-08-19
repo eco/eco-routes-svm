@@ -57,7 +57,7 @@ fn close_proof_should_succeed() {
         )
         .unwrap();
 
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
 
     ctx.portal()
@@ -86,7 +86,7 @@ fn close_proof_should_succeed() {
             claimant_pubkey,
             proof,
             withdrawn_marker,
-            state::proof_closer_pda().0,
+            state::proof_closer_pda(&local_prover::ID).0,
             vec![],
             iter::once(AccountMeta::new(payer, true)),
         )

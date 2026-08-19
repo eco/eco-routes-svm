@@ -22,3 +22,6 @@ anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
+
+[dev-dependencies]
+goldie = { workspace = true }

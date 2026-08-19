@@ -38,6 +38,9 @@ const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
 const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_fulfiller.so");
+const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
+const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/malicious_proof_closer.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -71,6 +74,8 @@ impl Default for Context {
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN);
         svm.add_program(local_prover::ID, LOCAL_PROVER_BIN);
         svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN);
+        svm.add_program(malicious_prover::ID, MALICIOUS_PROVER_BIN);
+        svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN);
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);
@@ -497,6 +502,40 @@ where
                 .iter()
                 .any(|log| log.contains(msg.to_string().as_str()))
     }
+}
+
+/// Like [`is_error`], but also pins **which program** raised it.
+///
+/// Anchor numbers error codes positionally from 6000 per enum, so a bare
+/// `Custom(code)` is ambiguous across programs — `LocalProverError` variant 3 and
+/// `PortalError` variant 3 are both 6003. For a security assertion that
+/// ambiguity is the difference between "the gate rejected the exploit" and "some
+/// unrelated program failed first", so match the failing program's log line too.
+pub fn is_program_error<T, Err>(program_id: Pubkey, expected: Err) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+    Err: Into<u32>,
+{
+    let expected = expected.into();
+    let marker = format!("Program {program_id} failed: custom program error: {expected:#x}");
+
+    move |actual: T| match actual.err {
+        TransactionError::InstructionError(_, InstructionError::Custom(error_code)) => {
+            error_code == expected && actual.meta.logs.iter().any(|log| log == &marker)
+        }
+        _ => false,
+    }
+}
+
+/// Asserts the failed transaction actually reached `program_id` — i.e. the CPI
+/// chain executed to the gate under test rather than tripping earlier.
+pub fn reached_program<T>(program_id: Pubkey) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+{
+    let marker = format!("Program {program_id} invoke");
+
+    move |actual: T| actual.meta.logs.iter().any(|log| log.starts_with(&marker))
 }
 
 pub fn is_error<T, Err>(expected: Err) -> impl Fn(T) -> bool

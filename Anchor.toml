@@ -7,6 +7,8 @@ skip-lint = false
 
 [programs.localnet]
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
+malicious-proof-closer = "3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp"
+malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"
 flash-fulfiller = "EcoFXc9egMWmADWMHqDcJgMc13iytrdjfZmGtyn7Zxig"
 hyper-prover = "EcoHDiDaKXryeHsvRwoJNPEeS56uhmPDd9ksuPyF68ky"
 local-prover = "EcoLAP7GStetXHQa3R1UcKb2iBbodpwcSajQkiJKgF2U"

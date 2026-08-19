@@ -205,7 +205,7 @@ fn handle_withdraw_success() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda().0,
+        proof_closer_pda(&reward.prover).0,
         vec![],
         iter::once(AccountMeta::new(pda_payer_pda, false)),
     );

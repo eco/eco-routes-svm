@@ -24,7 +24,7 @@ fn prove_intent_success() {
         .iter()
         .map(|hash| state::FulfillMarker::pda(hash).0)
         .collect::<Vec<_>>();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let source = CHAIN_ID;
     let claimants = fulfill_markers
         .iter()
@@ -75,7 +75,7 @@ fn prove_intent_multiple_success() {
         .iter()
         .map(|hash| state::FulfillMarker::pda(hash).0)
         .collect::<Vec<_>>();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let source = CHAIN_ID;
     let claimants = fulfill_markers
         .iter()
@@ -124,7 +124,7 @@ fn prove_intent_invalid_source_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let invalid_source = CHAIN_ID + 1;
     let proof = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
 
@@ -164,7 +164,7 @@ fn prove_intent_already_proven_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let source = CHAIN_ID;
     let proof = prover::Proof::pda(&intent_hash, &local_prover::ID).0;
 
@@ -191,7 +191,7 @@ fn prove_intent_already_proven_fail() {
 #[test]
 fn prove_intent_empty_intent_hashes_fail() {
     let mut ctx = common::Context::default();
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let source = CHAIN_ID;
 
     let result =
@@ -210,7 +210,7 @@ fn prove_intent_insufficient_proofs_fail() {
     let intent_hash_2 = intent_hashes[1];
     let fulfill_marker_1 = state::FulfillMarker::pda(&intent_hash_1).0;
     let fulfill_marker_2 = state::FulfillMarker::pda(&intent_hash_2).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let source = CHAIN_ID;
     let proof_1 = prover::Proof::pda(&intent_hash_1, &local_prover::ID).0;
 
@@ -230,7 +230,7 @@ fn prove_intent_wrong_proof_pda_fail() {
     let (mut ctx, intent_hashes) = setup(1);
     let intent_hash = intent_hashes[0];
     let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
-    let dispatcher = state::dispatcher_pda().0;
+    let dispatcher = state::dispatcher_pda(&local_prover::ID).0;
     let source = CHAIN_ID;
     let wrong_intent_hash: eco_svm_std::Bytes32 = rand::random::<[u8; 32]>().into();
     let wrong_proof = prover::Proof::pda(&wrong_intent_hash, &local_prover::ID).0;
