@@ -11,7 +11,7 @@ use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::{Bytes32, CHAIN_ID};
-use solana_keccak_hasher::hashv;
+use solana_keccak_hasher::{hashv, Hash};
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
@@ -233,25 +233,26 @@ fn verify_executor_intact(executor: &UncheckedAccount) -> Result<()> {
 /// caller's input section and the hashing syscall access-violates rather than
 /// erroring. `len` is the term that covers an extension being added or grown —
 /// keep it.
-fn executor_atas_digest(executor: &Pubkey, call_accounts: &[AccountInfo]) -> Result<[u8; 32]> {
-    call_accounts.iter().try_fold([0u8; 32], |digest, account| {
-        let data = account.try_borrow_data()?;
-        let Ok(state) = StateWithExtensions::<Token2022Account>::unpack(&data) else {
-            return Ok(digest);
-        };
-        if state.base.owner != *executor {
-            return Ok(digest);
-        }
+fn executor_atas_digest(executor: &Pubkey, call_accounts: &[AccountInfo]) -> Result<Hash> {
+    call_accounts
+        .iter()
+        .try_fold(Hash::default(), |digest, account| {
+            let data = account.try_borrow_data()?;
+            let Ok(state) = StateWithExtensions::<Token2022Account>::unpack(&data) else {
+                return Ok(digest);
+            };
+            if state.base.owner != *executor {
+                return Ok(digest);
+            }
 
-        Ok(hashv(&[
-            &digest,
-            account.key.as_ref(),
-            &data.len().to_le_bytes(),
-            &data[..TOKEN_AMOUNT_RANGE.start],
-            &data[TOKEN_AMOUNT_RANGE.end..TOKEN_BASE_LEN],
-        ])
-        .to_bytes())
-    })
+            Ok(hashv(&[
+                digest.as_ref(),
+                account.key.as_ref(),
+                &data.len().to_le_bytes(),
+                &data[..TOKEN_AMOUNT_RANGE.start],
+                &data[TOKEN_AMOUNT_RANGE.end..TOKEN_BASE_LEN],
+            ]))
+        })
 }
 
 fn mark_fulfilled(
