@@ -400,7 +400,13 @@ impl Context {
         data.extend_from_slice(&[0u8; 8]);
 
         let account = solana_sdk::account::Account {
-            lamports: WithdrawnMarker::min_balance(self.get_sysvar()),
+            // Not `WithdrawnMarker::min_balance`: that takes the `Rent` anchor-lang
+            // re-exports (solana-rent 3.x) and `get_sysvar` now yields solana-sdk 4.x's,
+            // whose `exemption_threshold` is a different type. Same body, and the
+            // sibling `ProofAccount` setup above already sizes accounts this way.
+            lamports: self
+                .get_sysvar::<Rent>()
+                .minimum_balance(8 + WithdrawnMarker::INIT_SPACE),
             data,
             owner: portal::ID,
             executable: false,
