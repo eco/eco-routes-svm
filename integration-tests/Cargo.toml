@@ -12,7 +12,7 @@ dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
-litesvm = "0.13.1"
+litesvm = "0.16.0"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
 malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }
 malicious-prover = { workspace = true, features = ["no-entrypoint"] }
