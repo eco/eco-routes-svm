@@ -7,6 +7,11 @@ on:
 jobs:
   auto-request-review:
     name: Auto Request Review
+    # A Dependabot-triggered `pull_request` run gets a read-only GITHUB_TOKEN no
+    # matter what this workflow asks for, so requesting a reviewer always fails
+    # with "Resource not accessible by integration" and leaves a red check on
+    # every bump PR. Skip rather than fail; reviewers get pulled in by hand.
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Request review based on files changes and/or groups the author belongs to
