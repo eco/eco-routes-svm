@@ -17,7 +17,7 @@ use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use intent_chainer::events::IntentChained;
 use intent_chainer::instructions::ChainerError;
-use intent_chainer::types::WAD;
+use intent_chainer::types::{MAX_ROUTE_LEN, WAD};
 use portal::state::{
     dispatcher_pda, executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker,
 };
@@ -694,6 +694,7 @@ fn chain_rejects_a_zero_scale() {
         recipient_ata,
     );
     chained.order = order;
+    ctx.intent_chainer().rebind_escrow(&mut chained);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx
@@ -944,17 +945,25 @@ fn chain_publishes_through_portal_when_asked() {
         "publish must reach portal"
     );
 
-    // And with it off, portal is never invoked at all.
+    // And with it off, portal is never invoked at all. A different recipient, so
+    // intent2's route — and therefore its vault — genuinely differs: `min_amount_in`
+    // alone would not, since it is part of the order's commitment but not of the
+    // intent hash.
+    let other_recipient = get_associated_token_address_with_program_id(
+        &Pubkey::new_unique(),
+        &base_mint,
+        &ctx.token_program,
+    );
     let order2 = ctx.intent_chainer().svm_order(
         base_mint,
-        recipient_ata,
+        other_recipient,
         local_prover::ID,
         IDENTITY_SCALE,
-        2,
+        1,
     );
     let chained2 = ctx
         .intent_chainer()
-        .resolve(&order2, DELIVERED, recipient_ata);
+        .resolve(&order2, DELIVERED, other_recipient);
     ctx.intent_chainer().seed_escrow(&chained2, DELIVERED);
 
     let unpublished = ctx.intent_chainer().chain(&chained2, false).unwrap();
@@ -1158,12 +1167,16 @@ fn chain_works_with_token_2022() {
 // idempotence / repeat
 // ===========================================================================
 
-/// Chaining the same order twice with the same measurement targets the same
-/// intent hash, so the second push tops the vault up rather than creating a
-/// second intent. Portal pays the claimant the reward and leaves the surplus for
-/// `refund`, which is the same behaviour the EVM lifecycle test pins.
+/// A salt collision must fail loudly, not merge silently.
+///
+/// The same order resolving to the same measured amount produces the same intent
+/// hash, so a second push would top up the first intent's vault rather than
+/// create a second intent — funding a delivery that already has a claimant, with
+/// no signal. The EVM contract cannot reach this state: its `publish` rejects an
+/// already-settled hash. Portal's `publish` is stateless, so the check is made
+/// against the vault's own balance instead.
 #[test]
-fn chaining_twice_at_the_same_amount_tops_up_one_vault() {
+fn chaining_the_same_order_twice_is_refused() {
     let (mut ctx, base_mint, recipient_ata) = setup();
     let order = ctx.intent_chainer().svm_order(
         base_mint,
@@ -1180,15 +1193,47 @@ fn chaining_twice_at_the_same_amount_tops_up_one_vault() {
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
     assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
 
-    // Refill and chain again at the identical amount.
+    // Refill and chain again at the identical amount: same hash, same vault.
     ctx.airdrop_token_ata(&base_mint, &chained.escrow_authority, DELIVERED);
-    assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
 
+    assert!(ctx
+        .intent_chainer()
+        .chain(&chained, false)
+        .is_err_and(is_error(ChainerError::VaultAlreadyFunded)));
     assert_eq!(
         ctx.token_balance(&chained.vault_ata),
-        DELIVERED * 2,
-        "the same order and amount resolve to one vault"
+        DELIVERED,
+        "the vault must not be topped up behind an existing claimant"
     );
+    assert_eq!(
+        ctx.token_balance(&chained.escrow_ata),
+        DELIVERED,
+        "the refused push must leave the escrow recoverable"
+    );
+}
+
+/// A partially funded vault is not a collision, so it must not be refused — the
+/// guard keys on "already funded to at least this amount", not "non-empty".
+#[test]
+fn a_dust_donation_to_the_vault_does_not_block_the_chain() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let order = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, DELIVERED, recipient_ata);
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+
+    // Anyone can compute the vault once the amount is known and dust it.
+    ctx.airdrop_token_ata(&base_mint, &chained.vault, 1);
+
+    assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED + 1);
 }
 
 #[test]
@@ -1220,4 +1265,306 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
         "chaining must not touch portal's prover authorities"
     );
     assert_eq!(vault_pda(&chained.intent_hash).0, chained.vault);
+}
+
+// ===========================================================================
+// The log budget, made loud
+// ===========================================================================
+
+/// The scariest failure mode in the design, pinned so it cannot go silent.
+///
+/// `portal::publish` re-emits the whole route through `emit!`, base64-encoded
+/// into a single `Program data:` line, and the runtime's `LogCollector` **drops**
+/// any message that would cross the 10,000-byte per-transaction budget — without
+/// failing the transaction. A route that is too long therefore publishes
+/// "successfully" while its event vanishes, and every solver misses intent2.
+///
+/// A carefully chosen `MAX_ROUTE_LEN` is not enough on its own, because the
+/// constant will drift and an arithmetic assertion drifts with it. This asserts
+/// the *event itself* is present and byte-exact at the ceiling, so raising the cap
+/// past what the budget allows fails here rather than in production.
+#[test]
+fn published_event_survives_the_log_budget_at_max_route_len() {
+    let (mut ctx, base_mint, _) = setup();
+    let order = ctx
+        .intent_chainer()
+        .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, DELIVERED, Pubkey::new_unique());
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+
+    let route = chained.order.build_route(chained.amount_out).unwrap();
+    assert_eq!(
+        route.len(),
+        MAX_ROUTE_LEN,
+        "the test must exercise the ceiling"
+    );
+
+    let expected = portal::events::IntentPublished::new(
+        chained.intent_hash,
+        CHAIN_ID,
+        route,
+        chained.reward.clone(),
+    );
+
+    // Publishing at the cap costs ~750k CU, above the harness default, so the
+    // caller raises its own limit — which is exactly what a real caller must do.
+    let meta = ctx
+        .intent_chainer()
+        .chain_with_compute_limit(&chained, true, 900_000)
+        .expect("publish at the cap must succeed");
+
+    // `contains_event` compares the full base64-encoded payload, so this fails if
+    // the runtime truncated or dropped the message — not merely if the tx reverted.
+    assert!(
+        contains_event(expected)(meta.clone()),
+        "IntentPublished must be present and byte-exact at MAX_ROUTE_LEN"
+    );
+
+    // And pin the two ceilings that actually bind, so raising MAX_ROUTE_LEN
+    // without re-measuring fails here rather than in production.
+    let log_bytes: usize = meta.logs.iter().map(|line| line.len()).sum();
+    assert!(
+        log_bytes < 10_000,
+        "transaction log budget exceeded: {log_bytes} bytes"
+    );
+    assert!(
+        meta.compute_units_consumed < 1_400_000,
+        "publish at the cap must fit a transaction's maximum compute request: {} CU",
+        meta.compute_units_consumed
+    );
+}
+
+/// The other half of the pair: a route past the ceiling is refused outright,
+/// rather than published into an event nobody will ever see.
+#[test]
+fn a_route_past_the_ceiling_is_refused_not_silently_dropped() {
+    let (mut ctx, base_mint, _) = setup();
+    let order =
+        ctx.intent_chainer()
+            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN + 1);
+    let valid = ctx
+        .intent_chainer()
+        .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let mut chained = ctx
+        .intent_chainer()
+        .resolve(&valid, DELIVERED, Pubkey::new_unique());
+    chained.order = order;
+    ctx.intent_chainer().rebind_escrow(&mut chained);
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+
+    assert!(ctx
+        .intent_chainer()
+        .chain(&chained, true)
+        .is_err_and(is_error(ChainerError::RouteTooLong)));
+    assert_eq!(
+        ctx.token_balance(&chained.escrow_ata),
+        DELIVERED,
+        "a rejected route must leave the escrow untouched"
+    );
+}
+
+// ===========================================================================
+// The authorization anchor
+// ===========================================================================
+
+/// Intent1's hash **does** commit to the order, transitively — the property the
+/// EVM contract gets directly by carrying the order in `calls[k].data`.
+///
+/// Here the order is not inside intent1. What is inside intent1 is the address
+/// its swap output is delivered to, and that address is
+/// `ATA(escrow_authority_pda(keccak(borsh(order))), mint)`. Those account metas
+/// live in `CalldataWithAccounts`, which is inside `call.data`, which is inside
+/// `route.hash()`, which is inside the intent hash `fulfill` re-derives and
+/// checks before executing anything.
+///
+/// So changing any field of the order moves the escrow address, which moves
+/// intent1's route hash, which moves intent1's own intent hash — meaning intent1
+/// cannot be fulfilled against a substituted order. This test walks that chain
+/// end to end rather than asserting it in prose.
+#[test]
+fn intent1_hash_commits_to_the_order_through_the_escrow_address() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+
+    let build_intent1_hash = |ctx: &mut Context, order: &intent_chainer::types::Order| {
+        let chained = ctx
+            .intent_chainer()
+            .resolve(order, DELIVERED, recipient_ata);
+        let (_, source_call, _) =
+            ctx.intent_chainer()
+                .deliver_to_escrow_call(base_mint, chained.escrow_ata, DELIVERED);
+
+        let (_, mut route1, mut reward1) = ctx.rand_intent();
+        route1.native_amount = 0;
+        route1.tokens.clear();
+        route1.calls = vec![source_call];
+        route1.salt = [3u8; 32].into();
+        route1.deadline = 2_000_000_000;
+        reward1.prover = local_prover::ID;
+        reward1.native_amount = 0;
+        reward1.tokens.clear();
+        reward1.deadline = 2_000_000_000;
+
+        (
+            chained.escrow_ata,
+            intent_hash(CHAIN_ID, &route1.hash(), &reward1.hash()),
+        )
+    };
+
+    let base = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let (escrow_a, hash_a) = build_intent1_hash(&mut ctx, &base);
+
+    // Same order twice: identical escrow, identical intent1 hash.
+    let (escrow_repeat, hash_repeat) = build_intent1_hash(&mut ctx, &base);
+    assert_eq!(escrow_a, escrow_repeat);
+    assert_eq!(hash_a, hash_repeat, "the derivation must be deterministic");
+
+    // Every field an attacker might want to substitute moves intent1's own hash,
+    // so intent1 can no longer be fulfilled at all against the altered order.
+    let mut creator = base.clone();
+    creator.reward.creator = Pubkey::new_unique();
+    let mut scale = base.clone();
+    scale.scale = WAD / 2;
+    let mut floor = base.clone();
+    floor.min_amount_in = 999_999;
+    let mut destination = base.clone();
+    destination.destination = 8453;
+
+    [creator, scale, floor, destination]
+        .into_iter()
+        .for_each(|altered| {
+            let (escrow_b, hash_b) = build_intent1_hash(&mut ctx, &altered);
+
+            assert_ne!(
+                escrow_b, escrow_a,
+                "altering the order must move the escrow"
+            );
+            assert_ne!(
+                hash_b, hash_a,
+                "altering the order must move intent1's own intent hash"
+            );
+        });
+}
+
+/// How large a route can be while the order still fits in `chain`'s own
+/// transaction — the constraint that decides which lanes work today without a
+/// staging account.
+///
+/// Worth measuring rather than estimating: the intuitive figure comes from
+/// intent1's `fulfill` transaction, which carries far more accounts and leaves
+/// only ~500 bytes. `chain`'s transaction is much leaner, and the real ceiling is
+/// around 1.3 KB — comfortably above a realistic EVM destination swap.
+#[test]
+fn a_realistic_evm_swap_route_fits_one_transaction() {
+    /// `abi.encode(Route)` for a two-call Base swap: `approve` +
+    /// `swapExactTokensForTokens`, one token leg. Computed from the ABI layout —
+    /// 0x20 tuple offset, six-word struct head, a static `TokenAmount[1]`, and two
+    /// dynamic `Call` tails.
+    const REALISTIC_EVM_SWAP_ROUTE: usize = 960;
+
+    let mut ceiling = 0usize;
+    for len in (640..=1600).step_by(64) {
+        let (mut ctx, base_mint, _) = setup();
+        let order = ctx
+            .intent_chainer()
+            .large_route_order(base_mint, local_prover::ID, len);
+        let chained = ctx
+            .intent_chainer()
+            .resolve(&order, DELIVERED, Pubkey::new_unique());
+        ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+
+        match ctx
+            .intent_chainer()
+            .chain_with_compute_limit(&chained, false, 900_000)
+        {
+            Ok(_) => ceiling = len,
+            Err(_) => break,
+        }
+    }
+
+    assert!(
+        ceiling >= REALISTIC_EVM_SWAP_ROUTE,
+        "an SVM -> EVM lane with a destination swap needs {REALISTIC_EVM_SWAP_ROUTE} \
+         bytes of route in one transaction; only {ceiling} fit. Adding accounts or \
+         arguments to `chain` eats directly into this budget."
+    );
+}
+
+// ===========================================================================
+// announce_order
+// ===========================================================================
+
+/// The escrow authority is `keccak(borsh(order))`, so an order whose preimage is
+/// lost strands its balance: there is no path from the address back to the order,
+/// and no sweep that does not need the order to derive its signer. `announce_order`
+/// is the on-chain record that closes that gap — the EVM contract gets the
+/// equivalent for free, because its order rides inside intent1's calldata.
+#[test]
+fn announce_order_puts_the_preimage_on_the_record() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let order = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, DELIVERED, recipient_ata);
+
+    let expected = intent_chainer::events::OrderAnnounced::new(
+        chained.order_commitment,
+        chained.escrow_authority,
+        order.clone(),
+    );
+
+    assert!(ctx
+        .intent_chainer()
+        .announce_order(&order)
+        .is_ok_and(contains_event(expected)));
+}
+
+/// Announcing grants nothing, so it needs no signer beyond the fee payer — and it
+/// must be callable before the escrow is funded, which is the whole point: the
+/// record has to exist from the moment intent1 is published.
+#[test]
+fn announce_order_is_permissionless_and_works_before_funding() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let order = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+
+    assert!(ctx.intent_chainer().announce_order(&order).is_ok());
+}
+
+/// A malformed order can never be consumed by `chain`, so it must not get a
+/// record either.
+#[test]
+fn announce_order_rejects_an_order_chain_could_never_consume() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let mut order = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    order.segments.push(vec![1, 2, 3]);
+
+    assert!(ctx
+        .intent_chainer()
+        .announce_order(&order)
+        .is_err_and(is_error(ChainerError::SegmentCountMismatch)));
 }

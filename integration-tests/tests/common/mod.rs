@@ -73,6 +73,9 @@ pub struct Context {
     pub funder: Keypair,
     pub solver: Keypair,
     pub sender: Keypair,
+    /// Compute-unit limit prepended by builders that set one. Mutable so a test can
+    /// measure how an instruction's cost scales.
+    pub compute_limit: u32,
 }
 
 impl Default for Context {
@@ -116,6 +119,7 @@ impl Default for Context {
             funder,
             solver,
             sender,
+            compute_limit: COMPUTE_UNIT_LIMIT,
         }
     }
 }

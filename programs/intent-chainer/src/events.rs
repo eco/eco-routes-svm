@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use derive_new::new;
 use eco_svm_std::Bytes32;
 
 /// A follow-on intent was resolved from a measured balance and funded.
@@ -31,6 +32,22 @@ pub struct IntentChained {
     pub route_hash: Bytes32,
     /// Whether this call also emitted portal's canonical `IntentPublished`.
     pub published: bool,
+}
+
+/// An order's preimage, put on the record so its escrow can always be reached.
+///
+/// Carries the whole order, which is the point: the escrow authority is
+/// `keccak(borsh(order))`, so without the preimage a funded escrow has no
+/// derivation path and no sweep. See [`crate::instructions::announce_order`].
+#[event]
+#[derive(new)]
+pub struct OrderAnnounced {
+    /// `keccak(borsh(order))` — the escrow authority's seed.
+    pub order_commitment: Bytes32,
+    /// The escrow authority the order derives.
+    pub escrow_authority: Pubkey,
+    /// The order itself.
+    pub order: crate::types::Order,
 }
 
 impl IntentChained {
