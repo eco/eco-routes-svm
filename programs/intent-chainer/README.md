@@ -386,7 +386,7 @@ rather not carry that liability.
 
 ```bash
 anchor build                       # required first: integration tests embed the .so
-cargo test --package intent-chainer   # 30 unit tests: splice, slot encoding, scale, commitment, cross-VM
+cargo test --package intent-chainer   # 31 unit tests: splice, slot encoding, scale, commitment, cross-VM
 cargo test --test chain               # 36 integration tests
 ```
 
