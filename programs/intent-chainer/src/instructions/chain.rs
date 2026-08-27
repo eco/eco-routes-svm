@@ -25,17 +25,16 @@ pub struct ChainArgs {
     /// Whether to also CPI `portal::publish` so intent2 appears in portal's own
     /// `IntentPublished` stream.
     ///
+    /// Only ever *strengthens* [`Order::require_publish`]: the effective decision
+    /// is `publish || order.require_publish`, so a caller can add discoverability
+    /// but never remove it. See that field for why it is committed.
+    ///
     /// A real choice on Solana, unlike on EVM where publish is unconditional
     /// because it is the only way to learn the vault address and to reject an
     /// already-settled hash. Here the vault is a derivable PDA and the settled
     /// check reads `WithdrawnMarker` directly, so publish buys **only**
     /// discoverability — and it costs the route bytes twice over in log budget and
     /// an in-program keccak of the whole route inside portal.
-    ///
-    /// Pass `true` for anything an off-chain solver must find without bespoke
-    /// indexing. Pass `false` when the caller is itself the solver, or when the
-    /// indexer reconstructs intent2 from this instruction's data — the order is
-    /// right here in the transaction, and the splice is deterministic.
     pub publish: bool,
 }
 
@@ -95,6 +94,8 @@ pub struct Chain<'info> {
 /// corrected order. Preserving the escrow is the whole of the guarantee.
 pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -> Result<()> {
     let ChainArgs { order, publish } = args;
+    // The caller may strengthen the author's choice, never weaken it.
+    let publish = publish || order.require_publish;
 
     validate_order(&order)?;
     let order_commitment = order.hash();
@@ -136,7 +137,13 @@ pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -
 /// Rejects a malformed order before anything is measured or moved.
 fn validate_order(order: &Order) -> Result<()> {
     // Shape first, and specifically *before* `Order::hash` streams the whole order
-    // through keccak in-program. That hash costs compute proportional to the
+    // through keccak in-program.
+    //
+    // `Order::build_route` re-checks all three. That is deliberate rather than
+    // redundant: it is a public constructor the SDK and tests call directly, so it
+    // cannot assume a caller ran this first. The duplication is safe because both
+    // sites read the same constants — if they are ever made to differ, the one
+    // here is the gate and the one there is the invariant. That hash costs compute proportional to the
     // order's size, so an over-length order that is going to be rejected anyway
     // must be rejected while it is still cheap — otherwise the caller pays the
     // full hash to be told the route was too long, and at the default compute
@@ -269,9 +276,20 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
     // Portal decides a reward's fate from live vault balances and a one-shot
     // `WithdrawnMarker`, never from a funded flag — which is exactly why pushing
     // directly into the vault works at all. The flip side is that a push after
-    // withdrawal is unrecoverable by the claimant, so refuse it. This is the SVM
-    // stand-in for the EVM `publish`'s already-settled rejection, which portal's
-    // stateless `publish` cannot provide.
+    // withdrawal is unrecoverable by the claimant, so refuse it.
+    //
+    // This stands in for the EVM `publish`'s already-settled rejection, which
+    // portal's stateless `publish` cannot provide — but it is **narrower**, and
+    // the difference is worth being precise about. `portal::refund` never creates
+    // a marker; it only reads one, to permit the post-withdrawal sweep
+    // (`refund.rs:82`). So a *refunded* intent leaves no marker and passes this
+    // check, where on EVM `Status.Refunded` is terminal.
+    //
+    // Not believed exploitable: two orders resolving to the same intent hash carry
+    // an identical reward by construction, so a re-funded intent still pays its own
+    // claimant or refunds to the same creator. Closing it properly would mean
+    // portal recording refunds, which is a portal decision, not one this program
+    // can make.
     require!(
         ctx.accounts.withdrawn_marker.key() == WithdrawnMarker::pda(intent_hash).0,
         ChainerError::InvalidWithdrawnMarker

@@ -6,11 +6,17 @@ mod chain;
 pub use announce_order::*;
 pub use chain::*;
 
+/// Current unix timestamp.
+///
+/// Returns an error rather than panicking on a negative clock. Portal's
+/// equivalent `expect()`s, but a panic surfaces as an opaque
+/// `ProgramFailedToComplete` where a named error code does not, and there is no
+/// reason to inherit that.
 pub fn now() -> Result<u64> {
-    Ok(Clock::get()?
+    Clock::get()?
         .unix_timestamp
         .try_into()
-        .expect("timestamp must fit in u64"))
+        .map_err(|_| ChainerError::InvalidClock.into())
 }
 
 /// Errors emitted by the intent-chainer program.
@@ -76,4 +82,6 @@ pub enum ChainerError {
     VaultAlreadyFunded,
     /// `portal_program` is not `portal::ID`.
     InvalidPortalProgram,
+    /// The cluster clock is before the unix epoch.
+    InvalidClock,
 }

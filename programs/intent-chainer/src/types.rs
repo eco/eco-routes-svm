@@ -153,6 +153,24 @@ pub struct Order {
     /// under-delivered leaves the escrow intact for a later, larger measurement
     /// instead of publishing an intent nobody will fill.
     pub min_amount_in: u64,
+    /// Whether `chain` MUST emit portal's canonical `IntentPublished`.
+    ///
+    /// Committed rather than left to the caller, because every other field that
+    /// decides the outcome is committed and this one gates *discoverability*.
+    /// `announce_order` makes an order public, and `chain` is permissionless and
+    /// needs nothing else — so with the flag caller-chosen, a solver watching
+    /// `OrderAnnounced` could front-run the author with `publish = false`, fund
+    /// intent2, and keep it out of the stream every other solver keys on, then
+    /// fill it uncontested. Recoverable (anyone can call `portal::publish`
+    /// afterward with the route and reward) but an exclusivity window the author
+    /// never agreed to.
+    ///
+    /// The caller may still *strengthen* this — passing `publish = true` when the
+    /// order does not require it — so an author who wants the private path
+    /// (`false`) keeps it, and one who wants discoverability can no longer have it
+    /// taken away. The two features pull against each other exactly here:
+    /// durability wants the order public, permissionless `chain` wants it private.
+    pub require_publish: bool,
 }
 
 impl Order {
@@ -316,6 +334,7 @@ mod tests {
             },
             scale: WAD,
             min_amount_in: 1,
+            require_publish: false,
         }
     }
 
@@ -762,6 +781,7 @@ mod cross_vm_tests {
             },
             scale: vector_field(vector, "scale").parse().unwrap(),
             min_amount_in: 1,
+            require_publish: false,
         }
     }
 
