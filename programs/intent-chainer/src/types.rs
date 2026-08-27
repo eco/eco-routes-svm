@@ -4,6 +4,7 @@ use portal::types::Reward;
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::ChainerError;
+use crate::keccak_writer::KeccakWriter;
 
 /// Fixed-point denominator for [`Order::scale`].
 ///
@@ -21,20 +22,41 @@ pub const MAX_SLOTS: usize = 8;
 
 /// Upper bound on the spliced route length.
 ///
-/// The binding constraint is **not** the 10 KiB `MAX_CPI_INSTRUCTION_DATA_LEN`.
-/// `portal::publish` re-emits the whole route through `emit!`, which base64-
-/// encodes it into a single `Program data:` log line, and the runtime's
-/// `LogCollector` **silently drops** any message that would cross the
-/// 10,000-byte per-transaction log budget — so an oversized route would publish
-/// "successfully" while its event vanished. base64 costs 4 bytes per 3, so the
-/// cap is set well inside that budget with room for the event's other fields and
-/// for the log lines portal and this program emit alongside it.
+/// **Set by measurement, not by arithmetic.** Three ceilings were candidates and
+/// the intuitive ranking was wrong; `chain` at various route lengths, publishing
+/// through portal, measures:
 ///
-/// `portal::publish` also hashes the route with `tiny_keccak` **in-program**
-/// rather than through the keccak syscall, so compute scales with length too;
-/// `route_len_bounds_are_within_the_log_budget` pins the arithmetic and
-/// `chain_publishes_a_max_length_route` pins the runtime cost.
-pub const MAX_ROUTE_LEN: usize = 4 * 1024;
+/// | route bytes | compute units | transaction log bytes |
+/// |------------:|--------------:|----------------------:|
+/// |        1024 |       450_496 |                 3_819 |
+/// |        2048 |       749_781 |                 5_181 |
+/// |        2560 |       877_855 |                 5_861 |
+/// |        3072 |     1_049_099 |                 6_546 |
+/// |        3584 |    heap OOM   |                     — |
+///
+/// - The **heap** binds first. This program does not install a custom allocator,
+///   so it runs on the stock 32 KB heap, and the route exists there several times
+///   over — Anchor's argument deserialization, the splice, and the `publish` CPI's
+///   own serialization — on an allocator that never frees. Past ~3 KB that is an
+///   unrecoverable `ProgramFailedToComplete`.
+/// - **Compute** binds next, at roughly 300 CU per route byte, because
+///   `portal::publish` hashes the route with `tiny_keccak` in-program rather than
+///   through the keccak syscall. 3 KB already costs 1.05M of the 1.4M a
+///   transaction can request.
+/// - The **log budget** never binds in the reachable range, which is the
+///   correction worth recording: it looked like the dangerous ceiling because it
+///   fails *silently* — `LogCollector` drops an oversized `Program data:` line
+///   without failing the transaction — but the two hard ceilings arrive first and
+///   fail loudly. `published_event_survives_the_log_budget_at_max_route_len`
+///   asserts the event is still byte-exact at the cap so that stays true if the
+///   constant is ever raised.
+///
+/// 2 KB leaves ~1 KB of margin under the heap cliff and costs ~750k CU, so a
+/// caller publishing at the cap must raise its compute limit above the 400k
+/// default. Raising this constant requires re-running those measurements, and
+/// past ~3 KB requires the `flash-fulfiller` treatment: a custom `BumpAllocator`
+/// plus a mandatory `request_heap_frame` on every client transaction.
+pub const MAX_ROUTE_LEN: usize = 2 * 1024;
 
 /// Minimum time intent2's reward deadline must clear the current slot by.
 ///
@@ -141,7 +163,8 @@ impl Order {
         let mut hasher = Keccak::v256();
         let mut hash = [0u8; 32];
 
-        hasher.update(&borsh::to_vec(self).expect("Order borsh serialization is infallible"));
+        self.serialize(&mut KeccakWriter::new(&mut hasher))
+            .expect("Order borsh serialization is infallible");
         hasher.finalize(&mut hash);
 
         hash.into()
@@ -559,6 +582,31 @@ mod tests {
 
     // ---------- commitment ----------
 
+    /// The heap is the binding ceiling on route length (see [`MAX_ROUTE_LEN`]), and
+    /// the order — segments included — is streamed through it whole to derive the
+    /// commitment. `borsh::to_vec(&order)` would materialise a second full copy on
+    /// an allocator that never frees; [`KeccakWriter`] is what avoids it.
+    ///
+    /// Asserted on `hash()` itself, not on the serialization path underneath it.
+    /// An earlier version of this test measured `serialize` directly and passed
+    /// while `hash` still called `borsh::to_vec` — it was guarding a path
+    /// production did not take. Exactly zero is the right bar, and it is the bar
+    /// portal's equivalent holds: a reintroduced `to_vec` shows up as one.
+    #[test]
+    fn order_hash_does_not_allocate() {
+        let order = order(vec![vec![7u8; MAX_ROUTE_LEN]], vec![]);
+        let _ = order.hash(); // warm up any lazy init before counting
+
+        crate::test_alloc::start_counting();
+        let _ = order.hash();
+
+        assert_eq!(
+            crate::test_alloc::stop_counting(),
+            0,
+            "the order must stream into the hasher without being copied"
+        );
+    }
+
     #[test]
     fn order_hash_is_deterministic() {
         let a = order(vec![vec![1]], vec![]);
@@ -597,9 +645,10 @@ mod tests {
         assert_ne!(reward.hash(), baseline);
     }
 
-    /// The route cap must sit inside the runtime's per-transaction log budget
-    /// after base64 expansion, or `portal::publish` emits an event the runtime
-    /// silently discards. See [`MAX_ROUTE_LEN`].
+    /// The log budget is no longer the binding ceiling (see [`MAX_ROUTE_LEN`]),
+    /// but it is the one that fails *silently*, so keep asserting the cap sits
+    /// inside it. The integration suite additionally proves the event is present
+    /// and byte-exact at the cap.
     #[test]
     fn route_len_bounds_are_within_the_log_budget() {
         const LOG_MESSAGES_BYTES_LIMIT: usize = 10 * 1000;
@@ -616,5 +665,157 @@ mod tests {
             "MAX_ROUTE_LEN={MAX_ROUTE_LEN} expands to {base64} base64 bytes, \
              which does not fit the {LOG_MESSAGES_BYTES_LIMIT}-byte log budget"
         );
+    }
+}
+
+/// Cross-VM agreement with the EVM `IntentChainer`.
+///
+/// The two ports owe each other agreement on the **bytes they produce**, not on
+/// the shape of the input that produces them — and nothing else in either suite
+/// checks that. This is the one failure mode that would otherwise surface as a
+/// solver delivering the wrong amount on a live lane: a transform mismatch, an
+/// endianness flip, or ceil landing on the wrong side would all pass every
+/// same-side test and still disagree across the boundary.
+///
+/// The fixture is not hand-written. It was captured from
+/// `eco-routes@e354167 test/chain/IntentChainerBorsh.t.sol`, whose segments are
+/// cut from the route the **production** encoder
+/// (`DepositAddress_USDCTransfer_Solana`) emits, and whose expectation is the
+/// route the EVM `IntentChainer` published for `amount_in = 2_500_000` at
+/// `scale = 0.96e18`. Both sides therefore splice the same literal segments and
+/// must land on the same bytes.
+#[cfg(test)]
+mod cross_vm_tests {
+    use portal::types::TokenAmount;
+
+    use super::*;
+
+    /// The shared fixture, checked into **both** repos so each side asserts the
+    /// same bytes. See the `$comment` block in the file itself for the contract.
+    const VECTORS: &str = include_str!("../testdata/cross-vm-vectors.json");
+
+    /// Minimal field lift out of the fixture. A JSON dependency is not worth
+    /// adding to an on-chain crate for one test file, and the shape is fixed.
+    fn vector_field<'a>(vector: &'a str, key: &str) -> &'a str {
+        let at = vector
+            .find(&format!("\"{key}\""))
+            .unwrap_or_else(|| panic!("fixture is missing {key}"));
+        let rest = &vector[at + key.len() + 2..];
+        let open = rest.find('"').expect("value must be a JSON string");
+        let close = rest[open + 1..].find('"').expect("unterminated value");
+
+        &rest[open + 1..open + 1 + close]
+    }
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Every hex string inside the vector's `segments` array.
+    fn segments(vector: &str) -> Vec<Vec<u8>> {
+        let start = vector
+            .find("\"segments\"")
+            .expect("fixture is missing segments");
+        let body = &vector[start..vector[start..].find(']').unwrap() + start];
+
+        body.match_indices('"')
+            .map(|(at, _)| at)
+            .collect::<Vec<_>>()
+            .chunks(2)
+            .filter_map(|pair| match pair {
+                [open, close] => Some(&body[open + 1..*close]),
+                _ => None,
+            })
+            .filter(|candidate| {
+                candidate.len() > 16 && candidate.chars().all(|c| c.is_ascii_hexdigit())
+            })
+            .map(hex_to_bytes)
+            .collect()
+    }
+
+    fn fixture_order(vector: &str) -> Order {
+        let segments = segments(vector);
+        let slots = (0..segments.len() - 1)
+            .map(|_| Slot {
+                width: 8,
+                little_endian: true,
+            })
+            .collect();
+
+        Order {
+            base_mint: Pubkey::new_from_array([3u8; 32]),
+            destination: 1399811150,
+            segments,
+            slots,
+            reward: Reward {
+                deadline: 1_700_000_000,
+                creator: Pubkey::new_from_array([1u8; 32]),
+                prover: Pubkey::new_from_array([2u8; 32]),
+                native_amount: 0,
+                tokens: vec![TokenAmount {
+                    token: Pubkey::new_from_array([3u8; 32]),
+                    amount: 0,
+                }],
+            },
+            scale: vector_field(vector, "scale").parse().unwrap(),
+            min_amount_in: 1,
+        }
+    }
+
+    /// The transform must agree across the boundary before the bytes can.
+    #[test]
+    fn scale_agrees_with_the_evm_chainer() {
+        let amount_in: u64 = vector_field(VECTORS, "amount_in").parse().unwrap();
+        let scale: u128 = vector_field(VECTORS, "scale").parse().unwrap();
+        let expected: u128 = vector_field(VECTORS, "expected_amount_out")
+            .parse()
+            .unwrap();
+
+        assert_eq!(
+            scale_amount(amount_in, scale).unwrap(),
+            expected,
+            "ceil(amount_in * scale / WAD) must match the EVM contract"
+        );
+    }
+
+    /// The whole point: same segments, same scalar, same bytes.
+    #[test]
+    fn splice_reproduces_the_evm_chainers_route_byte_for_byte() {
+        let amount_in: u64 = vector_field(VECTORS, "amount_in").parse().unwrap();
+        let order = fixture_order(VECTORS);
+        let amount_out = scale_amount(amount_in, order.scale).unwrap();
+
+        assert_eq!(
+            order.build_route(amount_out).unwrap(),
+            hex_to_bytes(vector_field(VECTORS, "expected_route")),
+            "the SVM splice must reproduce the EVM chainer's route exactly"
+        );
+    }
+
+    /// A guard on the fixture itself: if the EVM shape ever moves, this fails with
+    /// a readable message rather than the byte comparison failing opaquely.
+    #[test]
+    fn fixture_carries_the_amount_at_both_declared_offsets() {
+        const TOKENS_AMOUNT_OFFSET: usize = 116;
+        const SPL_AMOUNT_OFFSET: usize = 169;
+
+        let expected: u64 = vector_field(VECTORS, "expected_amount_out")
+            .parse()
+            .unwrap();
+        let route = hex_to_bytes(vector_field(VECTORS, "expected_route"));
+        let read_u64_le = |at: usize| u64::from_le_bytes(route[at..at + 8].try_into().unwrap());
+
+        assert_eq!(read_u64_le(TOKENS_AMOUNT_OFFSET), expected);
+        assert_eq!(read_u64_le(SPL_AMOUNT_OFFSET), expected);
+    }
+
+    /// The WAD the fixture declares must be the one this crate uses, or every
+    /// vector in the file silently means something else.
+    #[test]
+    fn fixture_wad_matches_this_crate() {
+        assert_eq!(vector_field(VECTORS, "wad").parse::<u128>().unwrap(), WAD);
     }
 }

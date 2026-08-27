@@ -62,6 +62,12 @@ vault from it, and submits; the program re-measures on-chain and refuses to proc
 was handed match what the measurement implies. The measurement stays authoritative — a caller cannot declare
 an amount that is not there — but the caller carries the scheduling.
 
+One guarantee is genuinely weaker as a result, and it is worth stating rather than eliding. On EVM a failure
+inside `chain` reverts **intent1 whole**: the solver's input is untouched and the swap never happened. Here
+intent1 was fulfilled and settled in an earlier transaction and nothing can unwind it. What survives is that
+every check runs before any value moves, so a rejected order leaves the measured balance in the escrow,
+recoverable by re-running `chain` with a corrected one. Preserving the escrow is the whole of the guarantee.
+
 ## What that costs, and how it is paid for
 
 Splitting the transaction means the balance **is** at rest between intent1's fulfillment and the `chain`
@@ -241,25 +247,76 @@ settled check reads `WithdrawnMarker` directly, so `publish` buys **only** disco
   deterministic given `amount_out`, so the route is always recoverable. `IntentChained` carries `route_hash`
   so a reconstruction can be verified rather than trusted.
 
-### The log budget is the real cap on route length
+### The route-length ceiling, measured
 
-`MAX_ROUTE_LEN` is **not** bounded by the 10 KiB `MAX_CPI_INSTRUCTION_DATA_LEN`. `portal::publish` re-emits
-the whole route through `emit!`, which base64-encodes it into one `Program data:` line, and the runtime's
-`LogCollector` **silently drops** any message that would cross the 10,000-byte per-transaction log budget —
-so an oversized route would publish "successfully" while its event vanished. base64 costs 4 bytes per 3, so
-the cap is set well inside that budget. `route_len_bounds_are_within_the_log_budget` pins the arithmetic.
+`MAX_ROUTE_LEN` is **2 KB, set by measurement**. Three ceilings were candidates and the intuitive ranking
+turned out to be wrong. Driving `chain` with `publish` at increasing route lengths:
 
-`portal::publish` also hashes the route with `tiny_keccak` in-program rather than through the keccak syscall,
-so compute scales with route length too.
+| route bytes | compute units | transaction log bytes |
+| ----------: | ------------: | --------------------: |
+|        1024 |       450,496 |                 3,819 |
+|        2048 |       749,781 |                 5,181 |
+|        2560 |       877,855 |                 5,861 |
+|        3072 |     1,049,099 |                 6,546 |
+|        3584 |      heap OOM |                     — |
+
+- **The heap binds first.** This program installs no custom allocator, so it runs on the stock 32 KB heap,
+  and the route exists there several times over — Anchor's argument deserialization, the splice, and the
+  `publish` CPI's own serialization — on an allocator that never frees. Past ~3 KB that is an unrecoverable
+  `ProgramFailedToComplete`.
+- **Compute binds next**, at roughly 300 CU per route byte, because `portal::publish` hashes the route with
+  `tiny_keccak` in-program rather than through the keccak syscall. 3 KB already costs 1.05M of the 1.4M a
+  transaction can request, so publishing near the cap means raising the compute limit above the 400k default.
+- **The log budget never binds** in the reachable range. It looked like the dangerous ceiling because it fails
+  *silently* — `LogCollector` drops an oversized `Program data:` line without failing the transaction — but
+  the two hard ceilings arrive first and fail loudly.
+
+That last point is why `published_event_survives_the_log_budget_at_max_route_len` asserts the *event itself* is
+present and byte-exact at the cap, rather than trusting the arithmetic: the constant will drift and an
+assertion about the constant drifts with it. Raising `MAX_ROUTE_LEN` past ~3 KB requires the `flash-fulfiller`
+treatment — a custom `BumpAllocator` plus a mandatory `request_heap_frame` on every client transaction.
+
+Two consequences shaped the code. Shape checks (`TooManySlots`, `SegmentCountMismatch`, `RouteTooLong`) run in
+`validate_order` **before** `Order::hash` streams the order through keccak, so an over-length order is rejected
+while it is still cheap — otherwise the caller pays the full hash to be told the route was too long, and at
+the default compute limit runs out before hearing it. And `Order::hash` streams through `KeccakWriter` rather
+than `borsh::to_vec`, so deriving the commitment never materialises a second copy of the order on that heap.
+
+## Who lands the `chain` transaction
+
+Worth stating, because splitting the transaction moves this from "nobody has to care" to a real operational
+question. On EVM the chainer runs inside intent1's fulfillment, so intent1's solver pays for it as part of a
+job they already wanted to do; nobody else need be motivated.
+
+Here `chain` is a separate, permissionless transaction that nobody is *obliged* to send. Candidates, in the
+order they are likely to act:
+
+- **The party that authored the chain** — the user's relayer or frontend. It wants intent2 to exist and
+  already holds the order, so this is the intended path.
+- **Intent2's prospective solver.** It can call `chain` itself and immediately fulfill what it just created,
+  which is the closest analogue to the EVM flow and needs no coordination.
+- **Anyone**, for the price of a transaction, since the call is permissionless and its outcome is fixed by the
+  order.
+
+If none of them acts, the measured balance simply stays in the escrow — recoverable only by running `chain`,
+because custody is order-scoped. That is a liveness dependency the EVM design does not have, and it is the
+main operational cost of the split.
 
 ## What the SDK must get right
 
 Three invariants are not enforceable on-chain:
 
 - **Fresh salt per order.** Intent2's salt is fixed in the committed template, so two orders sharing a salt
-  *and* landing on the same measured amount produce the same intent hash — the second push tops up the first
-  vault rather than creating a second intent
-  (`chaining_twice_at_the_same_amount_tops_up_one_vault` documents the behaviour).
+  *and* landing on the same measured amount produce the same intent hash. That is now **refused**, not merged:
+  `chain` reads the vault before pushing and rejects `VaultAlreadyFunded` if it already holds at least the
+  amount being pushed. Nothing legitimate can pre-fund intent2's vault — the address is unknowable until the
+  amount is measured — so a balance already there means the hash is not fresh. This is the SVM stand-in for
+  the EVM `publish` rejecting an already-settled hash; loud beats a silent top-up that funds a delivery which
+  already has a claimant. A dust donation does not trip it
+  (`a_dust_donation_to_the_vault_does_not_block_the_chain`).
+
+  Note one aliasing worth knowing: `min_amount_in` is part of the order's commitment but **not** of the intent
+  hash, so two orders differing only in their floor derive different escrows and the *same* vault.
 - **Deadline headroom.** Intent2's deadlines are absolute and fixed when intent1 is authored, but intent1 may
   be fulfilled any time up to its own route deadline. The program rejects a reward deadline inside
   `MIN_DEADLINE_BUFFER` (5 minutes), but leaving real headroom is the builder's job.
@@ -269,6 +326,37 @@ Three invariants are not enforceable on-chain:
   intent. `executor_atas_digest` will not save you: it protects `owner`, `delegate` and `close_authority`,
   deliberately not `amount`. Emit both numbers from one value.
 
+## When a route does not fit
+
+The order travels in `chain`'s own instruction data, which is what keeps this program at zero stored state.
+**Measured capacity is ~1,376 bytes of route** — `a_realistic_evm_swap_route_fits_one_transaction` walks it.
+
+That is worth stating precisely, because the intuitive figure is wrong and pessimistic. ~500 bytes is what
+remains inside intent1's `fulfill` transaction, which carries far more accounts; it is the number that would
+matter if this program had the EVM's shape. `chain`'s own transaction is much leaner. A realistic two-call
+Base swap route (`approve` + `swapExactTokensForTokens`) is ~960 bytes of `abi.encode(Route)`, so **an
+SVM → EVM lane with a destination swap fits today**, with roughly 400 bytes of margin.
+
+Staging is therefore not a blocker for the canonical lanes — it is what a route beyond ~1.3 KB would need: a
+longer swap path, three or more calls, or a destination that inflates the encoding. Adding accounts or
+arguments to `chain` eats directly into that budget, which is what the test guards.
+
+**Stage it content-addressed, not writer-owned.** The obvious shape — a `(writer, id)`-seeded buffer with an
+open/append/seal lifecycle — makes the staging account a security boundary and drags in squatting rules,
+a seal ceremony, and a corrupt-buffer story (an RPC retry that duplicates a chunk silently poisons it). None
+of that is necessary. Derive the staging PDA from the order commitment the escrow already uses, and have
+`chain` verify the account's contents hash to it. Then:
+
+- The staging account is **untrusted data** that either hashes to the commitment or does not. Writer-binding,
+  squatting and the seal ceremony all stop being load-bearing.
+- A duplicated chunk becomes a failed hash check rather than a poisoned order, so a reset instruction is a
+  convenience rather than a correctness fix.
+- The commitment is already covered by intent1's hash through the escrow address, so the authorization story
+  does not change at all.
+
+This is the design to reach for when those lanes are needed; it is deliberately not built yet, since nothing
+in the current matrix requires it. Credit to the EVM side for the framing.
+
 ## Recovery
 
 | state                                      | who recovers                                                                 | how                                                  |
@@ -277,22 +365,51 @@ Three invariants are not enforceable on-chain:
 | amount will not fit a slot's width         | nobody needs to — `chain` fails and the escrow is untouched                   | —                                                    |
 | intent2 published and funded, never solved | `reward.creator`                                                             | `portal::refund` after `reward.deadline`             |
 | intent2 solved                             | claimant takes `amount_in`; any surplus in the vault goes to `reward.creator` | `portal::withdraw`, then `portal::refund`            |
-| tokens sent to an escrow whose order is never chained | whoever holds the order                                           | `chain` it; custody is order-scoped, so nobody else can |
+| tokens sent to an escrow whose order is never chained | anyone holding the order preimage                                | `chain` it; custody is order-scoped, so nobody else can |
 
-Note the last row is the one real difference from EVM's recovery table. There, a donated balance is swept by
-whoever chains next, because custody is a shared singleton. Here custody is per-order, so a stranded balance
-is reachable only by the order that derives it — safer against theft, but it means an order that is lost
-strands its escrow. Keep the order alongside intent1.
+The last row is the one place this port is structurally riskier than EVM, and it needs more than a habit.
+There, the whole order rides inside `intent1.route.calls[k].data`, so `IntentPublished` records it on-chain
+forever as a side effect of intent1 existing. Here the order travels only in `chain`'s own instruction data —
+so if `chain` is never called, the order was never on-chain at all. An indexer watching intent1 can see the
+escrow address but has no path from the address back to the order, and no sweep exists that does not need the
+order to derive its signer. **Losing the preimage strands the balance permanently.**
+
+`announce_order` closes that. It is permissionless, takes no accounts, and does nothing but emit the order
+alongside the commitment and escrow authority it derives. Call it in the same transaction that publishes
+intent1 and the preimage is durable public data, recoverable by anyone. It grants nothing — `chain` was
+already permissionless and its outcome is fixed by the order — so there is no reason not to.
+
+An SDK that durably keeps its own orders needs neither; this is the on-chain option for those that would
+rather not carry that liability.
 
 ## Tests
 
 ```bash
 anchor build                       # required first: integration tests embed the .so
-cargo test --package intent-chainer   # 26 unit tests: splice, slot encoding, scale, commitment
-cargo test --test chain               # 28 integration tests
+cargo test --package intent-chainer   # 30 unit tests: splice, slot encoding, scale, commitment, cross-VM
+cargo test --test chain               # 36 integration tests
 ```
 
-The integration suite is built around one end-to-end path that only uses real portal entry points —
+Three tests carry more weight than the rest.
+
+`splice_reproduces_the_evm_chainers_route_byte_for_byte` is the **cross-VM** check, and it reads
+`testdata/cross-vm-vectors.json` — a fixture meant to be checked into **both repos** and asserted by both
+suites. The two ports owe each other agreement on the bytes they produce, not on the shape of the input that
+produces them, and nothing else checks that. The vector is not hand-written: its segments are cut from the
+route the production Borsh encoder emits, and `expected_route` is what the **EVM** `IntentChainer` published
+for `amount_in = 2_500_000` at `scale = 0.96e18` (`eco-routes@e354167`). A transform mismatch, an endianness
+flip, or ceil landing on the wrong side would each pass every same-side test and still disagree across the
+boundary; this is the one failure mode that would otherwise surface as a solver delivering the wrong amount on
+a live lane. `fixture_wad_matches_this_crate` guards the fixture's own premise.
+
+`intent1_hash_commits_to_the_order_through_the_escrow_address` walks the authorization chain end to end —
+altering any order field moves the escrow address, which moves intent1's route hash, which moves intent1's own
+intent hash — rather than asserting it in prose.
+
+`chain_cannot_publish_from_inside_a_route_call` drives a real `portal::fulfill` and asserts the exact
+`InstructionError::ReentrancyNotAllowed`, so the rule the design rests on is verified, not assumed.
+
+The integration suite is otherwise built around one end-to-end path that only uses real portal entry points —
 `chained_svm_to_svm_intent_is_funded_and_withdrawable`: fulfill intent1 so its route call delivers into the
 escrow, `chain` to resolve and fund intent2 from the measured balance, then prove and withdraw intent2 so the
 pushed tokens actually reach a claimant. The delivered amount is deliberately not a round number and not

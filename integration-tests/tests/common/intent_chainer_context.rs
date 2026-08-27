@@ -245,6 +245,53 @@ impl IntentChainer<'_> {
         }
     }
 
+    /// Drives `intent_chainer::announce_order`.
+    pub fn announce_order(&mut self, order: &Order) -> TransactionResult {
+        let args = intent_chainer::instructions::AnnounceOrderArgs {
+            order: order.clone(),
+        };
+        let instruction = Instruction {
+            program_id: intent_chainer::ID,
+            accounts: intent_chainer::accounts::AnnounceOrder {}.to_account_metas(None),
+            data: intent_chainer::instruction::AnnounceOrder { args }.data(),
+        };
+
+        let payer = self.payer.insecure_clone();
+        let transaction = Transaction::new(
+            &[&payer],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(self.compute_limit),
+                    instruction,
+                ],
+                Some(&payer.pubkey()),
+            ),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    /// Re-derives the escrow addresses from `chained.order`.
+    ///
+    /// For tests that swap in an order [`Self::resolve`] cannot process — one
+    /// whose route is over-length, or whose scale overflows a slot — the
+    /// destination addresses are irrelevant (the call fails before reaching them)
+    /// but custody must still follow the order's own commitment, or the test would
+    /// fail on `InvalidEscrowAuthority` instead of the check it is pinning.
+    pub fn rebind_escrow(&mut self, chained: &mut ChainedIntent) {
+        let commitment = chained.order.hash();
+        let (authority, _) = escrow_authority_pda(&commitment);
+
+        chained.order_commitment = commitment;
+        chained.escrow_authority = authority;
+        chained.escrow_ata = get_associated_token_address_with_program_id(
+            &authority,
+            &chained.order.base_mint,
+            &self.token_program,
+        );
+    }
+
     /// Creates the escrow ATA and mints `amount` into it, standing in for
     /// intent1's swap output landing there.
     pub fn seed_escrow(&mut self, chained: &ChainedIntent, amount: u64) {
@@ -252,6 +299,21 @@ impl IntentChainer<'_> {
         let authority = chained.escrow_authority;
 
         self.airdrop_token_ata(&mint, &authority, amount);
+    }
+
+    /// Drives `chain` with an explicit compute-unit limit, for measuring how the
+    /// in-program keccak over the route scales with route length.
+    pub fn chain_with_compute_limit(
+        &mut self,
+        chained: &ChainedIntent,
+        publish: bool,
+        compute_limit: u32,
+    ) -> TransactionResult {
+        self.compute_limit = compute_limit;
+        let result = self.chain(chained, publish);
+        self.compute_limit = COMPUTE_UNIT_LIMIT;
+
+        result
     }
 
     /// Drives `intent_chainer::chain`.
@@ -311,7 +373,7 @@ impl IntentChainer<'_> {
             &[&payer],
             Message::new(
                 &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+                    ComputeBudgetInstruction::set_compute_unit_limit(self.compute_limit),
                     instruction,
                 ],
                 Some(&payer.pubkey()),
@@ -320,6 +382,66 @@ impl IntentChainer<'_> {
         );
 
         self.send_transaction(transaction)
+    }
+
+    /// An order whose spliced route is a valid Borsh `Route` of exactly
+    /// `target_len` bytes, with no slots.
+    ///
+    /// Used to drive `publish` at the route-length ceiling: the route's size is
+    /// what decides whether portal's `IntentPublished` survives the runtime's
+    /// per-transaction log budget, and an oversized event is **dropped silently**
+    /// rather than failing the transaction.
+    pub fn large_route_order(
+        &mut self,
+        base_mint: Pubkey,
+        prover: Pubkey,
+        target_len: usize,
+    ) -> Order {
+        let creator = self.creator.pubkey();
+        let deadline = self.now() + 3600;
+        let token_program = self.token_program;
+
+        let mut route = Route {
+            deadline: self.now() + 1800,
+            salt: [11u8; 32].into(),
+            portal: portal::ID.to_bytes().into(),
+            native_amount: 0,
+            tokens: vec![TokenAmount {
+                token: base_mint,
+                amount: 1,
+            }],
+            calls: vec![Call {
+                target: token_program.to_bytes().into(),
+                data: vec![],
+            }],
+        };
+        let base_len = borsh::to_vec(&route).unwrap().len();
+        assert!(
+            target_len >= base_len,
+            "target_len {target_len} is below the {base_len}-byte minimum Route"
+        );
+        route.calls[0].data = vec![0xAB; target_len - base_len];
+        let bytes = borsh::to_vec(&route).unwrap();
+        assert_eq!(bytes.len(), target_len, "route sizing must be exact");
+
+        Order {
+            base_mint,
+            destination: CHAIN_ID,
+            segments: vec![bytes],
+            slots: vec![],
+            reward: Reward {
+                deadline,
+                creator,
+                prover,
+                native_amount: 0,
+                tokens: vec![TokenAmount {
+                    token: base_mint,
+                    amount: 0,
+                }],
+            },
+            scale: WAD,
+            min_amount_in: 1,
+        }
     }
 
     /// A route call on intent1 that forwards the executor's balance of `mint`

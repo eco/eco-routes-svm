@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 
+mod announce_order;
 mod chain;
 
+pub use announce_order::*;
 pub use chain::*;
 
 pub fn now() -> Result<u64> {
@@ -63,6 +65,15 @@ pub enum ChainerError {
     IntentAlreadySettled,
     /// The vault holds less than was pushed, e.g. a token-2022 transfer fee.
     PushShortfall,
+    /// Intent2's vault is already funded to the amount being pushed.
+    ///
+    /// Nothing legitimate can pre-fund it — the address is unknowable until the
+    /// amount is measured — so this is a salt collision: the same order resolving
+    /// to a hash that already exists. The EVM contract gets this rejection free
+    /// from `publish`, which refuses an already-settled hash; portal's `publish`
+    /// is stateless, so it is checked here instead. Failing loudly beats a silent
+    /// top-up that merges two chains into one intent.
+    VaultAlreadyFunded,
     /// `portal_program` is not `portal::ID`.
     InvalidPortalProgram,
 }

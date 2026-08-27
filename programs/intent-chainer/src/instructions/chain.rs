@@ -3,6 +3,7 @@ use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::InstructionData;
 use anchor_spl::associated_token::{self, get_associated_token_address_with_program_id};
+use anchor_spl::token_interface::TokenAccount;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::Bytes32;
 use portal::state::{vault_pda, WithdrawnMarker};
@@ -12,7 +13,7 @@ use tiny_keccak::{Hasher, Keccak};
 use crate::events::IntentChained;
 use crate::instructions::{now, ChainerError};
 use crate::state::{escrow_authority_pda, ESCROW_SEED};
-use crate::types::{scale_amount, Order, MIN_DEADLINE_BUFFER};
+use crate::types::{scale_amount, Order, MAX_ROUTE_LEN, MAX_SLOTS, MIN_DEADLINE_BUFFER};
 
 /// Args for [`chain_intent`].
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -80,12 +81,18 @@ pub struct Chain<'info> {
 
 /// Measure the escrow's balance of one mint and fund a follow-on intent with it.
 ///
-/// Ordering is load-bearing, and it is the one thing this port keeps verbatim from
-/// the EVM contract: everything that can fail — the floor, the slot widths, the
-/// deadline buffer, the already-settled check, every address derivation — is
-/// checked **before** any value moves. A rejected order leaves the escrow exactly
-/// as it was, so the money stays recoverable and the call can simply be retried
-/// with a corrected order.
+/// Ordering is load-bearing: everything that can fail — the shape, the floor, the
+/// slot widths, the deadline buffer, the already-settled check, every address
+/// derivation — is checked **before** any value moves, so a rejected order leaves
+/// the escrow exactly as it was and the call can be retried with a corrected one.
+///
+/// That is weaker than the EVM contract's guarantee and the difference is worth
+/// stating rather than eliding. There, `chain` runs inside intent1's fulfillment,
+/// so a failure reverts **intent1 whole** — the solver's input is untouched and
+/// the swap never happened. Here intent1 has already been fulfilled and settled in
+/// an earlier transaction; nothing can unwind it. What survives is only that the
+/// measured balance stays in the escrow, recoverable by re-running `chain` with a
+/// corrected order. Preserving the escrow is the whole of the guarantee.
 pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -> Result<()> {
     let ChainArgs { order, publish } = args;
 
@@ -103,6 +110,7 @@ pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -
 
     let intent_hash = intent_hash(order.destination, &route_hash, &reward.hash());
     validate_destination(&ctx, &order, &intent_hash)?;
+    validate_vault_is_unfunded(&ctx, amount_in)?;
 
     push(&ctx, &order_commitment, escrow, amount_in)?;
 
@@ -127,6 +135,22 @@ pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -
 
 /// Rejects a malformed order before anything is measured or moved.
 fn validate_order(order: &Order) -> Result<()> {
+    // Shape first, and specifically *before* `Order::hash` streams the whole order
+    // through keccak in-program. That hash costs compute proportional to the
+    // order's size, so an over-length order that is going to be rejected anyway
+    // must be rejected while it is still cheap — otherwise the caller pays the
+    // full hash to be told the route was too long, and at the default compute
+    // limit runs out before ever hearing it.
+    require!(order.slots.len() <= MAX_SLOTS, ChainerError::TooManySlots);
+    require!(
+        order.segments.len() == order.slots.len() + 1,
+        ChainerError::SegmentCountMismatch
+    );
+    require!(
+        order.route_len()? <= MAX_ROUTE_LEN,
+        ChainerError::RouteTooLong
+    );
+
     require!(order.scale > 0, ChainerError::InvalidScale);
 
     // Exactly one leg, in the measured mint, authored at zero.
@@ -256,6 +280,34 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
         ctx.accounts.withdrawn_marker.data_is_empty(),
         ChainerError::IntentAlreadySettled
     );
+
+    Ok(())
+}
+
+/// Refuses a salt collision before it becomes a silent merge.
+///
+/// Two orders sharing a salt that resolve to the same measured amount produce the
+/// same intent hash, so the second push would top up the first intent's vault
+/// rather than create a second intent — funding a delivery that already has a
+/// claimant, with no signal that anything went wrong. The EVM contract cannot
+/// reach this state: its `publish` rejects an already-settled hash and unwinds
+/// intent1 whole. Portal's `publish` is stateless and offers no such check, so it
+/// is made here.
+///
+/// Nothing legitimate pre-funds intent2's vault: the address depends on the
+/// measured amount, so it is unknowable before this instruction runs. A balance
+/// already at or above what is being pushed therefore means the hash is not fresh.
+fn validate_vault_is_unfunded(ctx: &Context<Chain>, amount_in: u64) -> Result<()> {
+    let vault_ata = &ctx.accounts.vault_ata;
+    if vault_ata.data_is_empty() {
+        return Ok(());
+    }
+
+    let funded = TokenAccount::try_deserialize(&mut &vault_ata.try_borrow_data()?[..])
+        .map(|account| account.amount)
+        .unwrap_or_default();
+
+    require!(funded < amount_in, ChainerError::VaultAlreadyFunded);
 
     Ok(())
 }
