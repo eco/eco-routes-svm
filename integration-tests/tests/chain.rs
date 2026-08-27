@@ -1568,3 +1568,52 @@ fn announce_order_rejects_an_order_chain_could_never_consume() {
         .announce_order(&order)
         .is_err_and(is_error(ChainerError::SegmentCountMismatch)));
 }
+
+/// The announcement must survive the log budget at the route cap — and
+/// specifically in the configuration its own docs recommend, sharing a
+/// transaction with intent1's `portal::publish`.
+///
+/// This is the instruction whose entire purpose is durable recovery, and the
+/// budget is per-transaction and fails **silently**: `LogCollector` drops the
+/// overflow while the transaction succeeds, so the recovery record would vanish
+/// with nothing to show for it. `MAX_ROUTE_LEN` was measured for the *publish*
+/// path, which is not the same path, so it is asserted separately here.
+#[test]
+fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
+    let (mut ctx, base_mint, _) = setup();
+    let order = ctx
+        .intent_chainer()
+        .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let commitment = order.hash();
+    let escrow_authority = intent_chainer::state::escrow_authority_pda(&commitment).0;
+
+    // A realistic intent1: same-chain, one route call, published in the same
+    // transaction as the announcement.
+    let (_, route1, reward1) = ctx.rand_intent();
+    let route1_bytes = borsh::to_vec(&route1).unwrap();
+    let publish1 = ctx
+        .intent_chainer()
+        .portal_publish_instruction(CHAIN_ID, route1_bytes, reward1);
+
+    let announced =
+        intent_chainer::events::OrderAnnounced::new(commitment, escrow_authority, order.clone());
+
+    let meta = ctx
+        .intent_chainer()
+        .announce_order_bundled(&order, vec![publish1])
+        .expect("announce beside a publish must succeed");
+
+    assert!(
+        contains_event(announced)(meta.clone()),
+        "OrderAnnounced must be present and byte-exact — a dropped log here means \
+         the escrow has no recovery record while the transaction reports success"
+    );
+
+    let log_bytes: usize = meta.logs.iter().map(|line| line.len()).sum();
+    assert!(
+        log_bytes < 10_000,
+        "the two events must fit one transaction's log budget: {log_bytes} bytes"
+    );
+    // Measured at 4,530 of 10,000 when written — recorded so a future change that
+    // eats the headroom is visible as a number, not just a pass.
+}

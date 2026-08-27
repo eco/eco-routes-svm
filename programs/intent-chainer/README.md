@@ -231,6 +231,14 @@ stand-in is a direct read of `WithdrawnMarker::pda(intent_hash)` — a push into
 would be unrecoverable by the claimant, so it is refused
 (`chain_refuses_to_push_into_an_already_withdrawn_intent`).
 
+It is **narrower than the EVM check**, and the parity claim should be precise: `portal::refund` never creates
+a marker, it only reads one to permit the post-withdrawal sweep (`refund.rs:82`). So a *refunded* intent
+leaves no marker and passes this check, where on EVM `Status.Refunded` is terminal. The guarantee matches for
+withdrawal, not for refund. Not believed exploitable — two orders resolving to the same intent hash carry an
+identical reward by construction, so a re-funded intent still pays its own claimant or refunds to the same
+creator — but closing it properly would mean portal recording refunds, which is a portal decision rather than
+one this program can make.
+
 `PushShortfall` re-reads the vault ATA after the transfer, rejecting a mint that delivers less than it was
 sent. On Solana that is the token-2022 transfer-fee case.
 
@@ -239,6 +247,17 @@ sent. On Solana that is the token-2022 transfer-fee case.
 Unlike the EVM contract, where `publish` is unconditional because it is the only way to learn the vault
 address and to reject a settled hash, here it is a genuine choice: the vault is a derivable PDA and the
 settled check reads `WithdrawnMarker` directly, so `publish` buys **only** discoverability.
+
+The choice is **committed**, as `Order::require_publish`. Every other field deciding the outcome is inside the
+commitment, and this one gates discoverability — so with it caller-chosen, a solver watching `OrderAnnounced`
+could front-run the author with `publish = false`, fund intent2, and keep it out of the stream every other
+solver keys on, then fill it uncontested. Recoverable (anyone can call `portal::publish` afterward with the
+route and reward) but an exclusivity window the author never agreed to. The caller may still *strengthen* it —
+the effective decision is `publish || order.require_publish` — so the private path stays available to an author
+who wants it and cannot be taken from one who does not.
+
+The two features added here pull against each other exactly at this point: durability wants the order public,
+permissionless `chain` wants it private. Committing the flag is what lets both be safe.
 
 - `true` — portal emits its canonical `IntentPublished` carrying intent2's route as complete bytes. Use this
   for anything an off-chain solver must find without bespoke indexing.
@@ -379,6 +398,15 @@ alongside the commitment and escrow authority it derives. Call it in the same tr
 intent1 and the preimage is durable public data, recoverable by anyone. It grants nothing — `chain` was
 already permissionless and its outcome is fixed by the order — so there is no reason not to.
 
+That recommendation needs its own guard, and has one. The log budget is **per transaction**, so an
+announcement sharing a transaction with intent1's `portal::publish` competes with it, and the overflow is
+dropped *silently* — the recovery record would vanish while the transaction reported success, in the one
+instruction whose entire purpose is recovery. `MAX_ROUTE_LEN` was measured for the publish path, which is not
+this path, so
+`announced_event_survives_the_log_budget_beside_intent1s_publish` asserts the announcement is byte-exact in
+exactly the bundled configuration recommended above. Measured at **4,530 of 10,000 bytes** at the route cap,
+so the headroom is real rather than assumed.
+
 An SDK that durably keeps its own orders needs neither; this is the on-chain option for those that would
 rather not carry that liability.
 
@@ -387,7 +415,7 @@ rather not carry that liability.
 ```bash
 anchor build                       # required first: integration tests embed the .so
 cargo test --package intent-chainer   # 31 unit tests: splice, slot encoding, scale, commitment, cross-VM
-cargo test --test chain               # 36 integration tests
+cargo test --test chain               # 37 integration tests
 ```
 
 Three tests carry more weight than the rest.
