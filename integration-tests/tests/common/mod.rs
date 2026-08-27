@@ -1,3 +1,9 @@
+// Cargo compiles this module separately into every integration-test binary, so an
+// item used by only some of them reads as dead code in the others. The members
+// here are all live somewhere; suppressing per-binary rather than per-item keeps
+// the list from growing every time a test file is added.
+#![allow(dead_code)]
+
 use std::ops::Deref;
 
 use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
@@ -29,6 +35,7 @@ use solana_sdk::transaction::{Transaction, TransactionError};
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
+pub mod intent_chainer_context;
 mod local_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
@@ -39,6 +46,7 @@ const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
 const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_fulfiller.so");
+const INTENT_CHAINER_BIN: &[u8] = include_bytes!("../../../target/deploy/intent_chainer.so");
 const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
@@ -75,6 +83,8 @@ impl Default for Context {
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN).unwrap();
         svm.add_program(local_prover::ID, LOCAL_PROVER_BIN).unwrap();
         svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN)
+            .unwrap();
+        svm.add_program(intent_chainer::ID, INTENT_CHAINER_BIN)
             .unwrap();
         svm.add_program(malicious_prover::ID, MALICIOUS_PROVER_BIN)
             .unwrap();

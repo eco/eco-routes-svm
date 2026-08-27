@@ -7,11 +7,13 @@ edition = "2021"
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 base64 = "0.23.1"
+borsh = "1.8.0"
 derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
 dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
+intent-chainer = { workspace = true, features = ["no-entrypoint"] }
 litesvm = "0.16.0"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
 malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }

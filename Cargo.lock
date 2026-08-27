@@ -1620,11 +1620,13 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "base64 0.23.1",
+ "borsh",
  "derive_more",
  "dummy-ism",
  "eco-svm-std",
  "flash-fulfiller",
  "hyper-prover",
+ "intent-chainer",
  "litesvm",
  "local-prover",
  "malicious-proof-closer",
@@ -1636,6 +1638,20 @@ dependencies = [
  "solana-compute-budget-interface",
  "solana-sdk",
  "solana-system-interface 3.2.0",
+ "tiny-keccak",
+]
+
+[[package]]
+name = "intent-chainer"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "derive-new",
+ "eco-svm-std",
+ "getrandom 0.2.17",
+ "goldie",
+ "portal",
  "tiny-keccak",
 ]
 
