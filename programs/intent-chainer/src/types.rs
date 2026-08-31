@@ -109,6 +109,23 @@ pub struct Slot {
 /// authorization anchor.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Order {
+    /// The **source-chain** portal whose vault holds intent2's reward — the program
+    /// this chainer pushes into and, when asked, publishes through.
+    ///
+    /// A committed field rather than a caller-supplied account, and the distinction
+    /// is the whole security of it. `chain` derives intent2's vault as
+    /// `find_program_address([b"vault", intent_hash], portal)`. Leave that portal
+    /// free and a caller passes a program of their own authorship, the vault derives
+    /// under *it*, and the escrow sweeps into a PDA they can sign for — the order's
+    /// commitment would still pin the amount while saying nothing about where it
+    /// goes. Committing it means the portal is the order author's choice, covered by
+    /// intent1's hash transitively through the escrow address, exactly like every
+    /// other field here.
+    ///
+    /// Distinct from the `portal` inside intent2's *route*, which names the
+    /// **destination** portal and is checked by that chain's `fulfill`. For an
+    /// SVM → SVM chain the two coincide; for SVM → EVM they do not.
+    pub portal: Pubkey,
     /// The single mint measured in the escrow and escrowed as intent2's reward.
     pub base_mint: Pubkey,
     /// Intent2's destination chain id.
@@ -318,6 +335,7 @@ mod tests {
 
     fn order(segments: Vec<Vec<u8>>, slots: Vec<Slot>) -> Order {
         Order {
+            portal: portal::ID,
             base_mint: Pubkey::new_from_array([3u8; 32]),
             destination: 1399811150,
             segments,
@@ -765,6 +783,7 @@ mod cross_vm_tests {
             .collect();
 
         Order {
+            portal: portal::ID,
             base_mint: Pubkey::new_from_array([3u8; 32]),
             destination: 1399811150,
             segments,

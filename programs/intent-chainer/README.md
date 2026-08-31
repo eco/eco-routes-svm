@@ -93,6 +93,35 @@ The reward leg's `amount` must be authored as zero, which is what makes the comm
 otherwise two orders differing only in a field the program overwrites would be the same intent with two
 different escrows.
 
+## One chainer, many portals
+
+`Order.portal` names the **source-chain** portal whose vault holds intent2's reward. It is a committed field,
+not a linked-in constant and not a caller-supplied account, and both halves of that matter.
+
+Not linked-in, because a chainer that resolved `portal::ID` at compile time would be bound to exactly one
+portal deployment for its whole life. This repo redeploys programs under a new id rather than upgrading them,
+so every portal release would orphan its chainer. Deriving from the order instead means one deployed chainer
+serves any number of portals, including several at once.
+
+Not caller-supplied, because intent2's vault is `find_program_address([b"vault", intent_hash], portal)`. Leave
+the portal free and a caller passes a program of their own authorship: the vault derives under *it*, and the
+escrow sweeps into a PDA they can sign for — while the order's commitment still appears to authorise the
+transfer, since it pins the amount and says nothing about the destination. Committing it makes the portal the
+order author's choice, covered by intent1's hash transitively through the escrow address, exactly like every
+other field. `chain_rejects_a_portal_that_is_not_the_orders` and
+`changing_the_portal_moves_the_escrow_and_the_vault` pin both directions.
+
+Two consequences worth knowing:
+
+- The PDA derivations are re-implemented in [`state`] against portal's own public seed constants rather than
+  calling `portal::state::vault_pda`, which resolves under portal's `crate::ID`. Same seeds, supplied program.
+- `Order.portal` is **not** the `portal` inside intent2's *route*. That one names the **destination** portal
+  and is checked by that chain's own `fulfill`. For an SVM → SVM chain the two coincide; for SVM → EVM they do
+  not.
+
+The field order matches the EVM `Order` struct exactly — `portal, token, destination, segments, slots, reward,
+scale, minAmountIn` — with `require_publish` appended, since the EVM contract publishes unconditionally.
+
 ## Two amounts, one measurement
 
 | value                            | goes to                   | meaning                                                |
@@ -415,7 +444,7 @@ rather not carry that liability.
 ```bash
 anchor build                       # required first: integration tests embed the .so
 cargo test --package intent-chainer   # 31 unit tests: splice, slot encoding, scale, commitment, cross-VM
-cargo test --test chain               # 37 integration tests
+cargo test --test chain               # 39 integration tests
 ```
 
 Three tests carry more weight than the rest.

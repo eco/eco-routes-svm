@@ -3,9 +3,8 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{Bytes32, CHAIN_ID};
-use intent_chainer::state::escrow_authority_pda;
+use intent_chainer::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda};
 use intent_chainer::types::{Order, Slot, WAD};
-use portal::state::{vault_pda, WithdrawnMarker};
 use portal::types::{Call, Calldata, CalldataWithAccounts, Reward, Route, TokenAmount};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
@@ -76,6 +75,7 @@ impl IntentChainer<'_> {
         let (segments, slots) = self.cut_svm_route(base_mint, recipient_ata, token_program);
 
         Order {
+            portal: portal::ID,
             base_mint,
             destination: CHAIN_ID,
             segments,
@@ -219,7 +219,7 @@ impl IntentChainer<'_> {
         let route_hash = keccak(&route_bytes);
         let intent_hash =
             portal::types::intent_hash(order.destination, &route_hash, &reward.hash());
-        let (vault, _) = vault_pda(&intent_hash);
+        let (vault, _) = vault_pda(&order.portal, &intent_hash);
         let vault_ata =
             get_associated_token_address_with_program_id(&vault, &order.base_mint, &token_program);
 
@@ -364,6 +364,27 @@ impl IntentChainer<'_> {
         result
     }
 
+    /// Drives `chain` with a substituted `portal_program`, for the test that pins
+    /// the portal as a committed field rather than a caller-chosen account.
+    pub fn chain_with_portal(
+        &mut self,
+        chained: &ChainedIntent,
+        publish: bool,
+        portal_program: Pubkey,
+    ) -> TransactionResult {
+        self.chain_full(
+            chained,
+            publish,
+            chained.escrow_authority,
+            chained.escrow_ata,
+            chained.vault,
+            chained.vault_ata,
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
+            chained.order.base_mint,
+            portal_program,
+        )
+    }
+
     /// Drives `intent_chainer::chain`.
     pub fn chain(&mut self, chained: &ChainedIntent, publish: bool) -> TransactionResult {
         self.chain_with_accounts(
@@ -373,7 +394,7 @@ impl IntentChainer<'_> {
             chained.escrow_ata,
             chained.vault,
             chained.vault_ata,
-            WithdrawnMarker::pda(&chained.intent_hash).0,
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             chained.order.base_mint,
         )
     }
@@ -392,6 +413,33 @@ impl IntentChainer<'_> {
         withdrawn_marker: Pubkey,
         base_mint: Pubkey,
     ) -> TransactionResult {
+        self.chain_full(
+            chained,
+            publish,
+            escrow_authority,
+            escrow_ata,
+            vault,
+            vault_ata,
+            withdrawn_marker,
+            base_mint,
+            chained.order.portal,
+        )
+    }
+
+    /// The single builder every other `chain` helper funnels through.
+    #[allow(clippy::too_many_arguments)]
+    fn chain_full(
+        &mut self,
+        chained: &ChainedIntent,
+        publish: bool,
+        escrow_authority: Pubkey,
+        escrow_ata: Pubkey,
+        vault: Pubkey,
+        vault_ata: Pubkey,
+        withdrawn_marker: Pubkey,
+        base_mint: Pubkey,
+        portal_program: Pubkey,
+    ) -> TransactionResult {
         let args = intent_chainer::instructions::ChainArgs {
             order: chained.order.clone(),
             publish,
@@ -404,7 +452,7 @@ impl IntentChainer<'_> {
             vault,
             vault_ata,
             withdrawn_marker,
-            portal_program: portal::ID,
+            portal_program,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,
             associated_token_program: anchor_spl::associated_token::ID,
@@ -473,6 +521,7 @@ impl IntentChainer<'_> {
         assert_eq!(bytes.len(), target_len, "route sizing must be exact");
 
         Order {
+            portal: portal::ID,
             base_mint,
             destination: CHAIN_ID,
             segments: vec![bytes],
