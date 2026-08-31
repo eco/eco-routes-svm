@@ -6,13 +6,12 @@ use anchor_spl::associated_token::{self, get_associated_token_address_with_progr
 use anchor_spl::token_interface::TokenAccount;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::Bytes32;
-use portal::state::{vault_pda, WithdrawnMarker};
 use portal::types::{intent_hash, TokenTransferAccounts};
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::events::IntentChained;
 use crate::instructions::{now, ChainerError};
-use crate::state::{escrow_authority_pda, ESCROW_SEED};
+use crate::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda, ESCROW_SEED};
 use crate::types::{scale_amount, Order, MAX_ROUTE_LEN, MAX_SLOTS, MIN_DEADLINE_BUFFER};
 
 /// Args for [`chain_intent`].
@@ -69,8 +68,13 @@ pub struct Chain<'info> {
     pub vault_ata: UncheckedAccount<'info>,
     /// CHECK: address is validated as `WithdrawnMarker::pda(intent_hash)`
     pub withdrawn_marker: UncheckedAccount<'info>,
-    /// CHECK: address is validated to equal `portal::ID`
-    #[account(executable, address = portal::ID @ ChainerError::InvalidPortalProgram)]
+    /// CHECK: address is validated to equal the order's committed `portal`
+    ///
+    /// Deliberately not pinned to a linked-in `portal::ID`. One chainer serves any
+    /// number of portal deployments; which one an order uses is the order author's
+    /// choice, committed and therefore covered by intent1's hash. `executable` is
+    /// kept so a non-program address fails here rather than deep inside the CPI.
+    #[account(executable)]
     pub portal_program: UncheckedAccount<'info>,
     pub token_program: Program<'info, token::Token>,
     pub token_2022_program: Program<'info, token_2022::Token2022>,
@@ -213,6 +217,16 @@ fn validate_escrow(
     order: &Order,
     order_commitment: &Bytes32,
 ) -> Result<Escrow> {
+    // The portal is the order's, never the caller's. Everything downstream — the
+    // vault the escrow sweeps into, the marker consulted for an already-settled
+    // hash, the program `publish` dispatches to — derives from it, so a
+    // caller-chosen portal would let an attacker redirect the sweep into a PDA of
+    // a program they wrote while the commitment still appeared to authorise it.
+    require!(
+        ctx.accounts.portal_program.key() == order.portal,
+        ChainerError::InvalidPortalProgram
+    );
+
     let (expected_authority, bump) = escrow_authority_pda(order_commitment);
     require!(
         ctx.accounts.escrow_authority.key() == expected_authority,
@@ -259,7 +273,7 @@ fn measure<'info>(ctx: &Context<'info, Chain<'info>>, order: &Order) -> Result<u
 /// loudly, with the escrow untouched, rather than funding the wrong vault.
 fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes32) -> Result<()> {
     require!(
-        ctx.accounts.vault.key() == vault_pda(intent_hash).0,
+        ctx.accounts.vault.key() == vault_pda(&order.portal, intent_hash).0,
         ChainerError::InvalidVault
     );
 
@@ -291,7 +305,7 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
     // portal recording refunds, which is a portal decision, not one this program
     // can make.
     require!(
-        ctx.accounts.withdrawn_marker.key() == WithdrawnMarker::pda(intent_hash).0,
+        ctx.accounts.withdrawn_marker.key() == withdrawn_marker_pda(&order.portal, intent_hash).0,
         ChainerError::InvalidWithdrawnMarker
     );
     require!(

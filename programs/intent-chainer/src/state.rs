@@ -34,6 +34,26 @@ pub fn escrow_authority_pda(order_commitment: &Bytes32) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[ESCROW_SEED, order_commitment.as_ref()], &crate::ID)
 }
 
+/// Intent2's vault, derived under the **order's** portal rather than a linked-in
+/// constant.
+///
+/// Re-derived here rather than calling `portal::state::vault_pda`, which resolves
+/// against portal's own `crate::ID` and would hard-bind this program to one portal
+/// deployment for its whole immutable life. The seed is portal's own public
+/// constant, so the derivation cannot drift from the one portal itself uses.
+pub fn vault_pda(portal: &Pubkey, intent_hash: &Bytes32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[portal::state::VAULT_SEED, intent_hash.as_ref()], portal)
+}
+
+/// Intent2's withdrawn marker, derived under the order's portal. Same reasoning as
+/// [`vault_pda`].
+pub fn withdrawn_marker_pda(portal: &Pubkey, intent_hash: &Bytes32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[portal::state::CLAIMED_MARKER_SEED, intent_hash.as_ref()],
+        portal,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

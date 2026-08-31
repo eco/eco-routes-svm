@@ -17,10 +17,9 @@ use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use intent_chainer::events::IntentChained;
 use intent_chainer::instructions::ChainerError;
+use intent_chainer::state::{vault_pda, withdrawn_marker_pda};
 use intent_chainer::types::{MAX_ROUTE_LEN, WAD};
-use portal::state::{
-    dispatcher_pda, executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker,
-};
+use portal::state::{dispatcher_pda, executor_pda, proof_closer_pda, FulfillMarker};
 use portal::types::{intent_hash, TokenAmount};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
@@ -205,7 +204,7 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
             chained.route.hash(),
             claimant.pubkey(),
             proof.0,
-            WithdrawnMarker::pda(&chained.intent_hash).0,
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
@@ -446,7 +445,11 @@ fn a_foreign_order_cannot_reach_another_orders_escrow() {
         victim.escrow_ata,
         attacker_chained.vault,
         attacker_chained.vault_ata,
-        WithdrawnMarker::pda(&attacker_chained.intent_hash).0,
+        withdrawn_marker_pda(
+            &attacker_chained.order.portal,
+            &attacker_chained.intent_hash,
+        )
+        .0,
         base_mint,
     );
 
@@ -769,7 +772,7 @@ fn chain_refuses_to_push_into_an_already_withdrawn_intent() {
         .resolve(&order, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    ctx.set_withdrawn_marker(WithdrawnMarker::pda(&chained.intent_hash).0);
+    ctx.set_withdrawn_marker(withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0);
 
     assert!(ctx
         .intent_chainer()
@@ -808,7 +811,7 @@ fn chain_rejects_a_wrong_vault_ata() {
             chained.escrow_ata,
             chained.vault,
             hijacked,
-            WithdrawnMarker::pda(&chained.intent_hash).0,
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             base_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidVaultAta)));
@@ -845,7 +848,7 @@ fn chain_rejects_a_wrong_escrow_ata() {
             foreign,
             chained.vault,
             chained.vault_ata,
-            WithdrawnMarker::pda(&chained.intent_hash).0,
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             base_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidEscrowAta)));
@@ -875,7 +878,7 @@ fn chain_rejects_a_mismatched_withdrawn_marker() {
             chained.escrow_ata,
             chained.vault,
             chained.vault_ata,
-            WithdrawnMarker::pda(&Bytes32::from([9u8; 32])).0,
+            withdrawn_marker_pda(&portal::ID, &Bytes32::from([9u8; 32])).0,
             base_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidWithdrawnMarker)));
@@ -908,7 +911,7 @@ fn chain_rejects_a_mint_that_is_not_the_orders() {
             chained.escrow_ata,
             chained.vault,
             chained.vault_ata,
-            WithdrawnMarker::pda(&chained.intent_hash).0,
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             other_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidMint)));
@@ -1049,7 +1052,10 @@ fn chain_cannot_publish_from_inside_a_route_call() {
         AccountMeta::new_readonly(base_mint, false),
         AccountMeta::new(chained.vault, false),
         AccountMeta::new(chained.vault_ata, false),
-        AccountMeta::new_readonly(WithdrawnMarker::pda(&chained.intent_hash).0, false),
+        AccountMeta::new_readonly(
+            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
+            false,
+        ),
         AccountMeta::new_readonly(portal::ID, false),
         AccountMeta::new_readonly(anchor_spl::token::ID, false),
         AccountMeta::new_readonly(anchor_spl::token_2022::ID, false),
@@ -1264,7 +1270,10 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
         before,
         "chaining must not touch portal's prover authorities"
     );
-    assert_eq!(vault_pda(&chained.intent_hash).0, chained.vault);
+    assert_eq!(
+        vault_pda(&chained.order.portal, &chained.intent_hash).0,
+        chained.vault
+    );
 }
 
 // ===========================================================================
@@ -1436,8 +1445,10 @@ fn intent1_hash_commits_to_the_order_through_the_escrow_address() {
     floor.min_amount_in = 999_999;
     let mut destination = base.clone();
     destination.destination = 8453;
+    let mut portal_field = base.clone();
+    portal_field.portal = Pubkey::new_unique();
 
-    [creator, scale, floor, destination]
+    [creator, scale, floor, destination, portal_field]
         .into_iter()
         .for_each(|altered| {
             let (escrow_b, hash_b) = build_intent1_hash(&mut ctx, &altered);
@@ -1616,4 +1627,77 @@ fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
     );
     // Measured at 4,530 of 10,000 when written — recorded so a future change that
     // eats the headroom is visible as a number, not just a pass.
+}
+
+// ===========================================================================
+// The portal is a committed parameter, not a caller-chosen account
+// ===========================================================================
+
+/// One chainer serves many portals, but *which* portal an order uses is the
+/// order author's choice — committed, and therefore covered by intent1's hash
+/// through the escrow address.
+///
+/// This is the check that makes the parameterisation safe. Intent2's vault is
+/// `find_program_address([b"vault", intent_hash], portal)`. If the portal were
+/// merely an account the caller supplies, an attacker could pass a program of
+/// their own authorship: the vault would derive under *it*, and the escrow would
+/// sweep into a PDA they can sign for — while the order's commitment still
+/// appeared to authorise the transfer, because it pins the amount and says
+/// nothing about the destination.
+#[test]
+fn chain_rejects_a_portal_that_is_not_the_orders() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let order = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, DELIVERED, recipient_ata);
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+
+    // Any other executable program stands in for the attacker's own "portal".
+    let result = ctx
+        .intent_chainer()
+        .chain_with_portal(&chained, false, local_prover::ID);
+
+    assert!(result.is_err_and(is_error(ChainerError::InvalidPortalProgram)));
+    assert_eq!(
+        ctx.token_balance(&chained.escrow_ata),
+        DELIVERED,
+        "a substituted portal must leave the escrow untouched"
+    );
+}
+
+/// The same order pointed at a different portal is a different order: it derives
+/// a different escrow, so intent1 — which names that escrow in its hash-committed
+/// route — cannot be redirected to another portal after the fact.
+#[test]
+fn changing_the_portal_moves_the_escrow_and_the_vault() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let base = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let a = ctx
+        .intent_chainer()
+        .resolve(&base, DELIVERED, recipient_ata);
+
+    let mut other = base.clone();
+    other.portal = local_prover::ID;
+    let b = ctx
+        .intent_chainer()
+        .resolve(&other, DELIVERED, recipient_ata);
+
+    assert_ne!(a.escrow_authority, b.escrow_authority, "custody must move");
+    assert_ne!(
+        a.vault, b.vault,
+        "the vault must derive under the order's portal"
+    );
 }
