@@ -119,8 +119,12 @@ Two consequences worth knowing:
   and is checked by that chain's own `fulfill`. For an SVM → SVM chain the two coincide; for SVM → EVM they do
   not.
 
-The field order matches the EVM `Order` struct exactly — `portal, token, destination, segments, slots, reward,
-scale, minAmountIn` — with `require_publish` appended, since the EVM contract publishes unconditionally.
+The field set matches the EVM `Order`, but the **order of fields does not**, and that is worth knowing if you
+diff the two. eco-routes#438 now leads with `bool publish`; this struct carries the equivalent as
+`require_publish` in last position. The two also differ in semantics: theirs is absolute, while
+`require_publish` is a floor a caller may strengthen (`publish || order.require_publish`) but never weaken —
+so adding discoverability is always allowed and removing it never is. Neither struct is an ABI the other
+consumes; only the route bytes they produce have to agree.
 
 ## Two amounts, one measurement
 
