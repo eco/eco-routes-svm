@@ -1,3 +1,5 @@
+use std::io::{self, Read, Write};
+
 use anchor_lang::prelude::*;
 use eco_svm_std::Bytes32;
 use portal::types::Reward;
@@ -5,326 +7,159 @@ use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::ChainerError;
 use crate::keccak_writer::KeccakWriter;
+pub use crate::template::*;
 
-/// Fixed-point denominator for [`Order::scale`].
-///
-/// Decimal, not binary, so every power-of-ten unit conversion is exact in both
-/// directions: 6-to-18 decimals is `1e30`, 18-to-6 is `1e6`, and a same-unit
-/// lane is `WAD`, all integers. A binary denominator (Q64, Q128) cannot do
-/// that — `2^128 / 1e12` is not an integer, so a downscaling lane would lean on
-/// rounding to recover a value it should compute exactly. Matches the EVM
-/// `IntentChainer.WAD` and the WAD convention v3 adopts for `RewardToken.rate`.
+/// Decimal fixed-point denominator shared with the EVM template implementation.
 pub const WAD: u128 = 1_000_000_000_000_000_000;
 
-/// Upper bound on slots per order, bounding the splice loop's compute.
-/// Matches the EVM `IntentChainer.MAX_SLOTS`.
-pub const MAX_SLOTS: usize = 8;
-
-/// Upper bound on the spliced route length.
+/// Canonical Borsh commitment preimage. Every nested field is serialized here.
+/// The ABI change intentionally changes order hashes and escrow addresses.
 ///
-/// **Set by measurement, not by arithmetic.** Three ceilings were candidates and
-/// the intuitive ranking was wrong; `chain` at various route lengths, publishing
-/// through portal, measures:
-///
-/// | route bytes | compute units | transaction log bytes |
-/// |------------:|--------------:|----------------------:|
-/// |        1024 |       450_496 |                 3_819 |
-/// |        2048 |       749_781 |                 5_181 |
-/// |        2560 |       877_855 |                 5_861 |
-/// |        3072 |     1_049_099 |                 6_546 |
-/// |        3584 |    heap OOM   |                     — |
-///
-/// - The **heap** binds first. This program does not install a custom allocator,
-///   so it runs on the stock 32 KB heap, and the route exists there several times
-///   over — Anchor's argument deserialization, the splice, and the `publish` CPI's
-///   own serialization — on an allocator that never frees. Past ~3 KB that is an
-///   unrecoverable `ProgramFailedToComplete`.
-/// - **Compute** binds next, at roughly 300 CU per route byte, because
-///   `portal::publish` hashes the route with `tiny_keccak` in-program rather than
-///   through the keccak syscall. 3 KB already costs 1.05M of the 1.4M a
-///   transaction can request.
-/// - The **log budget** never binds in the reachable range, which is the
-///   correction worth recording: it looked like the dangerous ceiling because it
-///   fails *silently* — `LogCollector` drops an oversized `Program data:` line
-///   without failing the transaction — but the two hard ceilings arrive first and
-///   fail loudly. `published_event_survives_the_log_budget_at_max_route_len`
-///   asserts the event is still byte-exact at the cap so that stays true if the
-///   constant is ever raised.
-///
-/// 2 KB leaves ~1 KB of margin under the heap cliff and costs ~750k CU, so a
-/// caller publishing at the cap must raise its compute limit above the 400k
-/// default. Raising this constant requires re-running those measurements, and
-/// past ~3 KB requires the `flash-fulfiller` treatment: a custom `BumpAllocator`
-/// plus a mandatory `request_heap_frame` on every client transaction.
-pub const MAX_ROUTE_LEN: usize = 2 * 1024;
-
-/// Minimum time intent2's reward deadline must clear the current slot by.
-///
-/// Intent2's deadlines are fixed when intent1 is authored, but intent1 may be
-/// fulfilled at any point up to its own route deadline. Publishing an intent2
-/// that is already expired is recoverable — the escrow refunds to
-/// `reward.creator` after the deadline — but it burns intent1 for nothing, so it
-/// fails loudly here instead. Matches the EVM `MIN_DEADLINE_BUFFER`.
-pub const MIN_DEADLINE_BUFFER: u64 = 5 * 60;
-
-/// A position in intent2's route bytes that receives the destination amount.
-///
-/// Every slot receives the **same** scalar, `ceil(amount_in * scale / WAD)` —
-/// what intent2's solver must supply on the destination. It appears once as the
-/// route's token-leg amount and again inside any call that moves it. Because
-/// both want the identical number, no per-slot discriminator is needed.
-///
-/// Width and byte order are the **destination VM's**, not Solana's: a Solana
-/// route carries Borsh 8-byte little-endian `u64`s, while an EVM route carries
-/// `abi.encode`d 32-byte big-endian words.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
-pub struct Slot {
-    /// Bytes written, 1..=32. A value that does not fit reverts rather than truncating.
-    pub width: u8,
-    /// True for Borsh/Solana byte order, false for EVM big-endian words.
-    pub little_endian: bool,
-}
-
-/// A fully committed intent2, minus the one amount that does not exist yet.
-///
-/// The route is carried as literal **segments** surrounding the [`Slot`]
-/// positions rather than as whole bytes plus numeric write offsets. The route is
-/// rebuilt by concatenation — `segments[0] ‖ enc(slots[0]) ‖ segments[1] ‖ …` —
-/// so a mis-stated write position is **not expressible**, and the same encoding
-/// serves an EVM destination and a Borsh one without this program knowing which
-/// it is holding.
-///
-/// Offsets would be actively wrong here, for two independent reasons:
-///
-/// - Canonical `abi.encode(Route)` puts every argument inside `calls[k].data` at
-///   an absolute offset `≡ 4 (mod 32)`, because the 4-byte selector shifts the
-///   payload — so the 32-byte alignment invariant one would naturally assert
-///   rejects every real EVM swap route.
-/// - In a Solana route the amount appears twice, and the second position moves
-///   with the call's account list while the first does not.
-///
-/// The whole struct is hashed into [`crate::state::order_commitment`], which
-/// seeds the escrow authority — so every field here is bound to the address
-/// intent1 delivers into. See the module docs on `lib.rs` for why that is the
-/// authorization anchor.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
+/// Remote vault recipients belong only to `template` data. Local custody remains
+/// the order-specific escrow followed by the vault under the committed `portal`.
+#[derive(AnchorSerialize, Clone, Debug)]
 pub struct Order {
-    /// The **source-chain** portal whose vault holds intent2's reward — the program
-    /// this chainer pushes into and, when asked, publishes through.
-    ///
-    /// A committed field rather than a caller-supplied account, and the distinction
-    /// is the whole security of it. `chain` derives intent2's vault as
-    /// `find_program_address([b"vault", intent_hash], portal)`. Leave that portal
-    /// free and a caller passes a program of their own authorship, the vault derives
-    /// under *it*, and the escrow sweeps into a PDA they can sign for — the order's
-    /// commitment would still pin the amount while saying nothing about where it
-    /// goes. Committing it means the portal is the order author's choice, covered by
-    /// intent1's hash transitively through the escrow address, exactly like every
-    /// other field here.
-    ///
-    /// Distinct from the `portal` inside intent2's *route*, which names the
-    /// **destination** portal and is checked by that chain's `fulfill`. For an
-    /// SVM → SVM chain the two coincide; for SVM → EVM they do not.
+    /// Local reward Portal, committed rather than caller-selected.
     pub portal: Pubkey,
-    /// The single mint measured in the escrow and escrowed as intent2's reward.
     pub base_mint: Pubkey,
-    /// Intent2's destination chain id.
+    /// Root route's execution chain.
     pub destination: u64,
-    /// Literal route bytes between slots. MUST be `slots.len() + 1` entries; the
-    /// first and last may be empty.
-    pub segments: Vec<Vec<u8>>,
-    /// Positions receiving the measured amount, in route order.
-    pub slots: Vec<Slot>,
-    /// Intent2's reward. MUST carry exactly one leg, in `base_mint`, with a zero
-    /// `amount` and no native amount. The leg's amount is overwritten with the
-    /// measured amount at chain time; requiring it to be authored as zero is what
-    /// makes the commitment preimage canonical, so the caller cannot present a
-    /// materially different order that hashes the same way.
+    pub template: TemplateProgram,
+    /// Local reward: exactly one base-mint token, authored amount zero, native zero.
     pub reward: Reward,
-    /// The **entire** source-to-destination transform, [`WAD`]-denominated:
-    /// `amount_out = ceil(amount_in * scale / WAD)`.
-    ///
-    /// It carries both the unit conversion and intent2's solver spread, because
-    /// those compose into one ratio and there is no reason to commit two numbers
-    /// where one will do.
-    ///
-    /// THE UNIT PART exists because "the same token" is not the same unit across
-    /// chains: USDC is 6 decimals on Solana and Base, but Binance-Peg USDC on BNB
-    /// Chain is 18.
-    ///
-    /// THE SPREAD PART is proportional, not flat. The reward leg escrows the whole
-    /// measured `amount_in` while the route obliges only `amount_in * scale`, so
-    /// the difference is the solver's entire margin and it grows with the amount.
-    /// That is a deliberate trade, and the same one the EVM contract makes: a flat
-    /// fee would price destination gas independently of size, but it cannot be
-    /// folded into a ratio, and the only thing that moves `amount_in` here is swap
-    /// slippage — a percent or so around a known expectation — over which the two
-    /// are indistinguishable. Use `min_amount_in` to express "too small to be
-    /// worth filling"; it says that directly.
-    ///
-    /// Rounding is toward the **user** (up), because this value is the solver's
-    /// delivery floor — rounding down would quietly shave the last unit off what
-    /// the user receives on every downscaling lane.
+    /// Initial Output = ceil(Input * scale / WAD), in the u128 domain.
     pub scale: u128,
-    /// Floor on the measured amount. Below it `chain` fails, so a swap that
-    /// under-delivered leaves the escrow intact for a later, larger measurement
-    /// instead of publishing an intent nobody will fill.
     pub min_amount_in: u64,
-    /// Whether `chain` MUST emit portal's canonical `IntentPublished`.
-    ///
-    /// Committed rather than left to the caller, because every other field that
-    /// decides the outcome is committed and this one gates *discoverability*.
-    /// `announce_order` makes an order public, and `chain` is permissionless and
-    /// needs nothing else — so with the flag caller-chosen, a solver watching
-    /// `OrderAnnounced` could front-run the author with `publish = false`, fund
-    /// intent2, and keep it out of the stream every other solver keys on, then
-    /// fill it uncontested. Recoverable (anyone can call `portal::publish`
-    /// afterward with the route and reward) but an exclusivity window the author
-    /// never agreed to.
-    ///
-    /// The caller may still *strengthen* this — passing `publish = true` when the
-    /// order does not require it — so an author who wants the private path
-    /// (`false`) keeps it, and one who wants discoverability can no longer have it
-    /// taken away. The two features pull against each other exactly here:
-    /// durability wants the order public, permissionless `chain` wants it private.
+    /// Callers can strengthen this with publish=true, never weaken it.
     pub require_publish: bool,
 }
 
 impl Order {
-    /// Keccak over the Borsh encoding of the whole order. Seeds the escrow
-    /// authority, so this is the value that binds intent1's delivery address to
-    /// exactly one order.
     pub fn hash(&self) -> Bytes32 {
         let mut hasher = Keccak::v256();
-        let mut hash = [0u8; 32];
-
+        let mut hash = [0; 32];
         self.serialize(&mut KeccakWriter::new(&mut hasher))
             .expect("Order borsh serialization is infallible");
         hasher.finalize(&mut hash);
-
         hash.into()
     }
 
-    /// Total length of the route this order splices, without building it.
-    pub fn route_len(&self) -> Result<usize> {
-        let segments: usize = self
-            .segments
-            .iter()
-            .try_fold(0usize, |acc, segment| acc.checked_add(segment.len()))
-            .ok_or(ChainerError::RouteTooLong)?;
-
-        self.slots
-            .iter()
-            .try_fold(segments, |acc, slot| acc.checked_add(slot.width as usize))
-            .ok_or(ChainerError::RouteTooLong.into())
-    }
-
-    /// Rebuild intent2's route bytes, splicing `amount_out` into every slot.
-    ///
-    /// Concatenation, not overwriting: the author commits the bytes AROUND each
-    /// amount rather than an offset INTO a blob, so there is no arithmetic that
-    /// can land a write on a Borsh vector length, an SPL account pubkey, or an ABI
-    /// tail offset.
-    pub fn build_route(&self, amount_out: u128) -> Result<Vec<u8>> {
-        require!(self.slots.len() <= MAX_SLOTS, ChainerError::TooManySlots);
+    /// No allocation or hashing, shared by announce and chain.
+    pub fn validate_template(&self) -> Result<()> {
+        self.template.validate()?;
         require!(
-            self.segments.len() == self.slots.len() + 1,
-            ChainerError::SegmentCountMismatch
+            self.encoded_len()? <= MAX_ORDER_BYTES,
+            ChainerError::OrderTooLarge
         );
+        Ok(())
+    }
 
-        let route_len = self.route_len()?;
-        require!(route_len <= MAX_ROUTE_LEN, ChainerError::RouteTooLong);
+    /// Exact Borsh size without materializing another copy of the preimage.
+    pub fn encoded_len(&self) -> Result<usize> {
+        let mut counter = SizeCounter(0);
+        self.serialize(&mut counter)?;
+        Ok(counter.0)
+    }
 
-        // Pre-sized so the splice never reallocates. Solana's allocator does not
-        // free, so a doubling `Vec` would retain every intermediate buffer.
-        let mut route = Vec::with_capacity(route_len);
-        route.extend_from_slice(&self.segments[0]);
-
-        self.slots
-            .iter()
-            .zip(self.segments.iter().skip(1))
-            .try_for_each(|(slot, segment)| {
-                encode_amount_into(&mut route, amount_out, slot)?;
-                route.extend_from_slice(segment);
-
-                Result::Ok(())
-            })?;
-
-        Ok(route)
+    /// Client helper. The handler independently measures and creates this same
+    /// context on-chain before validating the caller's LOCAL accounts.
+    pub fn build_route(&self, amount_in: u64) -> Result<Vec<u8>> {
+        self.validate_template()?;
+        self.template.render(AmountContext {
+            input: amount_in,
+            output: scale_amount(amount_in as u128, self.scale)?,
+        })
     }
 }
 
-/// Append `amount` to `out` in one slot's width and byte order.
-///
-/// Reverts rather than truncating when the value does not fit. Silent truncation
-/// is the dangerous case: an amount wrapped into a Solana `u64` would publish an
-/// intent2 that is well-formed, fillable, and pays out a fraction of what was
-/// escrowed.
-pub fn encode_amount_into(out: &mut Vec<u8>, amount: u128, slot: &Slot) -> Result<()> {
-    let width = slot.width as usize;
-    require!((1..=32).contains(&width), ChainerError::InvalidSlotWidth);
-    // A `u128` is 16 bytes, so anything 16 bytes wide or wider always fits and the
-    // shift below would itself overflow.
-    require!(
-        width >= 16 || amount >> (width * 8) == 0,
-        ChainerError::AmountExceedsSlotWidth
-    );
-
-    // Zero-fill the slot, then write positionally into it. A big-endian slot fills
-    // back to front, so it needs the space to exist first; `bytes` past index 15 is
-    // absent for a `u128`, which is the zero high-order padding a wide slot wants.
-    let start = out.len();
-    out.resize(start + width, 0);
-
-    let bytes = amount.to_le_bytes();
-    (0..width).for_each(|i| {
-        let byte = bytes.get(i).copied().unwrap_or(0);
-        let offset = if slot.little_endian { i } else { width - 1 - i };
-        out[start + offset] = byte;
-    });
-
-    Ok(())
+struct SizeCounter(usize);
+impl Write for SizeCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self
+            .0
+            .checked_add(bytes.len())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "order too large"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
-/// `ceil(amount_in * scale / WAD)`, the destination obligation.
-///
-/// The fraction is reduced by `gcd(scale, WAD)` before multiplying, which is what
-/// keeps every realistic lane inside `u128`. Solana has no 256-bit integer and
-/// SBF's 128-bit division is a compiler intrinsic, so the naive
-/// `amount_in * scale` would overflow exactly on the lanes the unit conversion
-/// exists for: a 6→18 lane is `scale = 1e30`, and 1M USDC (`amount_in = 1e12`)
-/// gives `1e42` against a `u128` ceiling of `~3.4e38`. Reduction turns that same
-/// lane into `amount_in * 1e12 / 1`, which fits comfortably.
-///
-/// Because unit conversions are powers of ten and `WAD` is `1e18`, the reduced
-/// numerator is small for every lane in the table; a `scale` pathological enough
-/// to overflow anyway fails loudly as [`ChainerError::ScaleOverflow`] rather than
-/// wrapping.
-///
-/// With `amount_in >= 1` and a reduced numerator `>= 1`, the ceiling is always at
-/// least 1, so a zero obligation is unreachable and needs no explicit check —
-/// the same property the EVM contract relies on.
-pub fn scale_amount(amount_in: u64, scale: u128) -> Result<u128> {
+/// Cap encoded input while parsing, not just after allocating/hashing the order.
+/// Template vector lengths are separately bounded before allocation.
+impl AnchorDeserialize for Order {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let reader = &mut reader.take(MAX_ORDER_BYTES as u64);
+        Ok(Self {
+            portal: Pubkey::deserialize_reader(reader)?,
+            base_mint: Pubkey::deserialize_reader(reader)?,
+            destination: u64::deserialize_reader(reader)?,
+            template: TemplateProgram::deserialize_reader(reader)?,
+            reward: deserialize_reward(reader)?,
+            scale: u128::deserialize_reader(reader)?,
+            min_amount_in: u64::deserialize_reader(reader)?,
+            require_publish: bool::deserialize_reader(reader)?,
+        })
+    }
+}
+
+fn deserialize_reward(reader: &mut impl Read) -> io::Result<Reward> {
+    let deadline = u64::deserialize_reader(reader)?;
+    let creator = Pubkey::deserialize_reader(reader)?;
+    let prover = Pubkey::deserialize_reader(reader)?;
+    let native_amount = u64::deserialize_reader(reader)?;
+    let len = u32::deserialize_reader(reader)?;
+    // Keep malformed zero/two-leg orders diagnosable by the handler, while
+    // rejecting attacker-controlled huge allocations before reading token data.
+    if len > 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "too many reward tokens",
+        ));
+    }
+    let mut tokens = Vec::with_capacity(len as usize);
+    for _ in 0..len {
+        tokens.push(portal::types::TokenAmount::deserialize_reader(reader)?);
+    }
+    Ok(Reward {
+        deadline,
+        creator,
+        prover,
+        native_amount,
+        tokens,
+    })
+}
+
+/// Exact ceil(amount * scale / WAD) with a 256-bit product and a u128 result.
+/// Unlike EVM uint256, both scale and the quotient are limited to u128; a result
+/// outside that domain fails, even when a 32-byte item could physically encode it.
+/// No heap, no intermediate narrowing, and no false overflow of a fitting result.
+pub fn scale_amount(amount: u128, scale: u128) -> Result<u128> {
     require!(scale > 0, ChainerError::InvalidScale);
-
-    let divisor = gcd(scale, WAD);
-    let numerator = scale / divisor;
-    let denominator = WAD / divisor;
-
-    (amount_in as u128)
-        .checked_mul(numerator)
-        .map(|product| product.div_ceil(denominator))
-        .ok_or(ChainerError::ScaleOverflow.into())
-}
-
-fn gcd(mut a: u128, mut b: u128) -> u128 {
-    while b != 0 {
-        let remainder = a % b;
-        a = b;
-        b = remainder;
+    let a = [amount as u64 as u128, amount >> 64];
+    let b = [scale as u64 as u128, scale >> 64];
+    let lo = a[0] * b[0];
+    let cross0 = a[0] * b[1];
+    let cross1 = a[1] * b[0];
+    let mid = (lo >> 64) + (cross0 as u64 as u128) + (cross1 as u64 as u128);
+    let hi = a[1] * b[1] + (cross0 >> 64) + (cross1 >> 64) + (mid >> 64);
+    let limbs = [lo as u64, mid as u64, hi as u64, (hi >> 64) as u64];
+    let mut quotient = [0u64; 4];
+    let mut remainder = 0u128;
+    for i in (0..4).rev() {
+        let dividend = (remainder << 64) | limbs[i] as u128;
+        quotient[i] = (dividend / WAD) as u64;
+        remainder = dividend % WAD;
     }
-
-    a
+    require!(
+        quotient[2] == 0 && quotient[3] == 0,
+        ChainerError::ScaleOverflow
+    );
+    let value = ((quotient[1] as u128) << 64) | quotient[0] as u128;
+    value
+        .checked_add(u128::from(remainder != 0))
+        .ok_or_else(|| ChainerError::ScaleOverflow.into())
 }
 
 #[cfg(test)]
@@ -333,13 +168,27 @@ mod tests {
 
     use super::*;
 
-    fn order(segments: Vec<Vec<u8>>, slots: Vec<Slot>) -> Order {
+    #[test]
+    fn successful_scaling_does_not_allocate_an_unused_anchor_error() {
+        crate::test_alloc::start_counting();
+        let result = scale_amount(u128::MAX, WAD);
+        let allocations = crate::test_alloc::stop_counting();
+        assert_eq!(result.unwrap(), u128::MAX);
+        assert_eq!(allocations, 0);
+    }
+
+    fn order(segments: Vec<Vec<u8>>, amounts: Vec<Amount>) -> Order {
         Order {
             portal: portal::ID,
             base_mint: Pubkey::new_from_array([3u8; 32]),
             destination: 1399811150,
-            segments,
-            slots,
+            template: TemplateProgram {
+                vaults: vec![],
+                route: Template {
+                    segments,
+                    items: amounts.into_iter().map(Item::Amount).collect(),
+                },
+            },
             reward: Reward {
                 deadline: 1_700_000_000,
                 creator: Pubkey::new_from_array([1u8; 32]),
@@ -356,13 +205,20 @@ mod tests {
         }
     }
 
+    fn encode_amount_into(out: &mut Vec<u8>, value: u128, amount: &Amount) -> Result<()> {
+        out.extend_from_slice(&encode_amount(value, amount)?[..amount.width as usize]);
+        Ok(())
+    }
+
     // ---------- splice ----------
 
     #[test]
     fn build_route_splices_a_little_endian_u64() {
         let built = order(
             vec![vec![0xAA, 0xBB], vec![0xCC]],
-            vec![Slot {
+            vec![Amount {
+                source: AmountSource::Output,
+                scale: WAD,
                 width: 8,
                 little_endian: true,
             }],
@@ -380,7 +236,9 @@ mod tests {
     fn build_route_splices_a_big_endian_word() {
         let built = order(
             vec![vec![], vec![]],
-            vec![Slot {
+            vec![Amount {
+                source: AmountSource::Output,
+                scale: WAD,
                 width: 32,
                 little_endian: false,
             }],
@@ -400,11 +258,15 @@ mod tests {
         let built = order(
             vec![vec![0x11; 4], vec![0x22; 3], vec![0x33; 2]],
             vec![
-                Slot {
+                Amount {
+                    source: AmountSource::Output,
+                    scale: WAD,
                     width: 8,
                     little_endian: true,
                 },
-                Slot {
+                Amount {
+                    source: AmountSource::Output,
+                    scale: WAD,
                     width: 8,
                     little_endian: true,
                 },
@@ -425,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn build_route_with_no_slots_is_the_single_segment() {
+    fn build_route_with_no_items_is_the_single_segment() {
         let built = order(vec![vec![1, 2, 3]], vec![]).build_route(999).unwrap();
 
         assert_eq!(built, vec![1, 2, 3]);
@@ -435,7 +297,9 @@ mod tests {
     fn build_route_rejects_a_segment_count_mismatch() {
         let result = order(
             vec![vec![0xAA]],
-            vec![Slot {
+            vec![Amount {
+                source: AmountSource::Output,
+                scale: WAD,
                 width: 8,
                 little_endian: true,
             }],
@@ -446,16 +310,18 @@ mod tests {
     }
 
     #[test]
-    fn build_route_rejects_too_many_slots() {
-        let slots: Vec<_> = (0..MAX_SLOTS + 1)
-            .map(|_| Slot {
+    fn build_route_rejects_too_many_items() {
+        let amounts: Vec<_> = (0..MAX_ITEMS + 1)
+            .map(|_| Amount {
+                source: AmountSource::Output,
+                scale: WAD,
                 width: 8,
                 little_endian: true,
             })
             .collect();
-        let segments = vec![vec![]; MAX_SLOTS + 2];
+        let segments = vec![vec![]; MAX_ITEMS + 2];
 
-        assert!(order(segments, slots).build_route(1).is_err());
+        assert!(order(segments, amounts).build_route(1).is_err());
     }
 
     #[test]
@@ -480,7 +346,9 @@ mod tests {
     #[test]
     fn encode_amount_rejects_a_value_wider_than_its_slot() {
         let mut out = vec![];
-        let slot = Slot {
+        let slot = Amount {
+            source: AmountSource::Output,
+            scale: WAD,
             width: 8,
             little_endian: true,
         };
@@ -498,7 +366,9 @@ mod tests {
         assert!(encode_amount_into(
             &mut out,
             1,
-            &Slot {
+            &Amount {
+                source: AmountSource::Output,
+                scale: WAD,
                 width: 0,
                 little_endian: true
             }
@@ -507,7 +377,9 @@ mod tests {
         assert!(encode_amount_into(
             &mut out,
             1,
-            &Slot {
+            &Amount {
+                source: AmountSource::Output,
+                scale: WAD,
                 width: 33,
                 little_endian: true
             }
@@ -524,7 +396,9 @@ mod tests {
             assert!(encode_amount_into(
                 &mut out,
                 u128::MAX,
-                &Slot {
+                &Amount {
+                    source: AmountSource::Output,
+                    scale: WAD,
                     width,
                     little_endian: false
                 }
@@ -549,7 +423,7 @@ mod tests {
 
     /// The lane the unit conversion exists for, and the one a naive
     /// `amount_in * scale` overflows: `1e12 * 1e30 = 1e42` against a `u128`
-    /// ceiling of `~3.4e38`. gcd reduction makes it exact and cheap.
+    /// ceiling of `~3.4e38`. A full-width product keeps the fitting quotient exact.
     #[test]
     fn scale_amount_upscales_six_to_eighteen_decimals_without_overflow() {
         let scale = 10u128.pow(30);
@@ -599,7 +473,11 @@ mod tests {
                 [1u128, 2, WAD / 1_000_000, WAD, 10u128.pow(30)]
                     .into_iter()
                     .for_each(|scale| {
-                        assert!(scale_amount(amount_in, scale).unwrap_or(1) >= 1);
+                        assert!(
+                            scale_amount(amount_in as u128, scale).expect(
+                                "all selected input/scale pairs have a fitting u128 quotient"
+                            ) >= 1
+                        );
                     });
             });
     }
@@ -611,10 +489,10 @@ mod tests {
 
     #[test]
     fn scale_amount_reports_overflow_rather_than_wrapping() {
-        // A scale coprime with WAD and large enough that reduction cannot help.
+        // The quotient itself exceeds u128, even with full-width intermediates.
         let scale = u128::MAX / 2;
 
-        assert!(scale_amount(u64::MAX, scale).is_err());
+        assert!(scale_amount(u64::MAX as u128, scale).is_err());
     }
 
     // ---------- commitment ----------
@@ -707,12 +585,8 @@ mod tests {
 
 /// Cross-VM agreement with the EVM `IntentChainer`.
 ///
-/// The two ports owe each other agreement on the **bytes they produce**, not on
-/// the shape of the input that produces them — and nothing else in either suite
-/// checks that. This is the one failure mode that would otherwise surface as a
-/// solver delivering the wrong amount on a live lane: a transform mismatch, an
-/// endianness flip, or ceil landing on the wrong side would all pass every
-/// same-side test and still disagree across the boundary.
+/// Preserves the original amount-only rendered-output golden alongside the new
+/// nested-template corpus. The Order ABI/commitment intentionally differs.
 ///
 /// The fixture is not hand-written. It was captured from
 /// `eco-routes@e354167 test/chain/IntentChainerBorsh.t.sol`, whose segments are
@@ -724,24 +598,18 @@ mod tests {
 #[cfg(test)]
 mod cross_vm_tests {
     use portal::types::TokenAmount;
+    use serde_json::Value;
 
     use super::*;
 
     /// The shared fixture, checked into **both** repos so each side asserts the
     /// same bytes. See the `$comment` block in the file itself for the contract.
-    const VECTORS: &str = include_str!("../testdata/cross-vm-vectors.json");
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!("../testdata/cross-vm-vectors.json")).unwrap()
+    }
 
-    /// Minimal field lift out of the fixture. A JSON dependency is not worth
-    /// adding to an on-chain crate for one test file, and the shape is fixed.
-    fn vector_field<'a>(vector: &'a str, key: &str) -> &'a str {
-        let at = vector
-            .find(&format!("\"{key}\""))
-            .unwrap_or_else(|| panic!("fixture is missing {key}"));
-        let rest = &vector[at + key.len() + 2..];
-        let open = rest.find('"').expect("value must be a JSON string");
-        let close = rest[open + 1..].find('"').expect("unterminated value");
-
-        &rest[open + 1..open + 1 + close]
+    fn vector_field<'a>(vector: &'a Value, key: &str) -> &'a str {
+        vector[key].as_str().unwrap()
     }
 
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
@@ -751,34 +619,24 @@ mod cross_vm_tests {
             .collect()
     }
 
-    /// Every hex string inside the vector's `segments` array.
-    fn segments(vector: &str) -> Vec<Vec<u8>> {
-        let start = vector
-            .find("\"segments\"")
-            .expect("fixture is missing segments");
-        let body = &vector[start..vector[start..].find(']').unwrap() + start];
-
-        body.match_indices('"')
-            .map(|(at, _)| at)
-            .collect::<Vec<_>>()
-            .chunks(2)
-            .filter_map(|pair| match pair {
-                [open, close] => Some(&body[open + 1..*close]),
-                _ => None,
-            })
-            .filter(|candidate| {
-                candidate.len() > 16 && candidate.chars().all(|c| c.is_ascii_hexdigit())
-            })
-            .map(hex_to_bytes)
-            .collect()
-    }
-
-    fn fixture_order(vector: &str) -> Order {
-        let segments = segments(vector);
-        let slots = (0..segments.len() - 1)
-            .map(|_| Slot {
-                width: 8,
-                little_endian: true,
+    fn fixture_order(vector: &Value) -> Order {
+        let segments = vector["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| hex_to_bytes(s.as_str().unwrap()))
+            .collect();
+        // The historical fixture calls these "slots". Preserve its bytes while
+        // adapting each entry to an Output item with an explicit identity scale.
+        let items = vector["slots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                Item::Amount(Amount::output(
+                    a["width"].as_u64().unwrap().try_into().unwrap(),
+                    a["little_endian"].as_bool().unwrap(),
+                ))
             })
             .collect();
 
@@ -786,8 +644,10 @@ mod cross_vm_tests {
             portal: portal::ID,
             base_mint: Pubkey::new_from_array([3u8; 32]),
             destination: 1399811150,
-            segments,
-            slots,
+            template: TemplateProgram {
+                vaults: vec![],
+                route: Template { segments, items },
+            },
             reward: Reward {
                 deadline: 1_700_000_000,
                 creator: Pubkey::new_from_array([1u8; 32]),
@@ -807,54 +667,61 @@ mod cross_vm_tests {
     /// The transform must agree across the boundary before the bytes can.
     #[test]
     fn scale_agrees_with_the_evm_chainer() {
-        let amount_in: u64 = vector_field(VECTORS, "amount_in").parse().unwrap();
-        let scale: u128 = vector_field(VECTORS, "scale").parse().unwrap();
-        let expected: u128 = vector_field(VECTORS, "expected_amount_out")
-            .parse()
-            .unwrap();
+        for vector in fixture()["vectors"].as_array().unwrap() {
+            let amount_in: u64 = vector_field(vector, "amount_in").parse().unwrap();
+            let scale: u128 = vector_field(vector, "scale").parse().unwrap();
+            let expected: u128 = vector_field(vector, "expected_amount_out").parse().unwrap();
 
-        assert_eq!(
-            scale_amount(amount_in, scale).unwrap(),
-            expected,
-            "ceil(amount_in * scale / WAD) must match the EVM contract"
-        );
+            assert_eq!(
+                scale_amount(amount_in as u128, scale).unwrap(),
+                expected,
+                "ceil(amount_in * scale / WAD) must match the EVM contract"
+            );
+        }
     }
 
     /// The whole point: same segments, same scalar, same bytes.
     #[test]
     fn splice_reproduces_the_evm_chainers_route_byte_for_byte() {
-        let amount_in: u64 = vector_field(VECTORS, "amount_in").parse().unwrap();
-        let order = fixture_order(VECTORS);
-        let amount_out = scale_amount(amount_in, order.scale).unwrap();
+        for vector in fixture()["vectors"].as_array().unwrap() {
+            let amount_in: u64 = vector_field(vector, "amount_in").parse().unwrap();
+            let order = fixture_order(vector);
 
-        assert_eq!(
-            order.build_route(amount_out).unwrap(),
-            hex_to_bytes(vector_field(VECTORS, "expected_route")),
-            "the SVM splice must reproduce the EVM chainer's route exactly"
-        );
+            assert_eq!(
+                order.build_route(amount_in).unwrap(),
+                hex_to_bytes(vector_field(vector, "expected_route")),
+                "the SVM splice must reproduce the EVM chainer's route exactly"
+            );
+        }
     }
 
     /// A guard on the fixture itself: if the EVM shape ever moves, this fails with
     /// a readable message rather than the byte comparison failing opaquely.
     #[test]
     fn fixture_carries_the_amount_at_both_declared_offsets() {
-        const TOKENS_AMOUNT_OFFSET: usize = 116;
-        const SPL_AMOUNT_OFFSET: usize = 169;
+        for vector in fixture()["vectors"].as_array().unwrap() {
+            let expected: u64 = vector_field(vector, "expected_amount_out").parse().unwrap();
+            let route = hex_to_bytes(vector_field(vector, "expected_route"));
+            let read_u64_le = |at: usize| u64::from_le_bytes(route[at..at + 8].try_into().unwrap());
 
-        let expected: u64 = vector_field(VECTORS, "expected_amount_out")
-            .parse()
-            .unwrap();
-        let route = hex_to_bytes(vector_field(VECTORS, "expected_route"));
-        let read_u64_le = |at: usize| u64::from_le_bytes(route[at..at + 8].try_into().unwrap());
-
-        assert_eq!(read_u64_le(TOKENS_AMOUNT_OFFSET), expected);
-        assert_eq!(read_u64_le(SPL_AMOUNT_OFFSET), expected);
+            let offsets = vector["slot_offsets_in_expected_route"].as_array().unwrap();
+            assert_eq!(offsets.len(), 2);
+            for offset in offsets {
+                assert_eq!(
+                    read_u64_le(offset.as_u64().unwrap().try_into().unwrap()),
+                    expected
+                );
+            }
+        }
     }
 
     /// The WAD the fixture declares must be the one this crate uses, or every
     /// vector in the file silently means something else.
     #[test]
     fn fixture_wad_matches_this_crate() {
-        assert_eq!(vector_field(VECTORS, "wad").parse::<u128>().unwrap(), WAD);
+        assert_eq!(
+            vector_field(&fixture(), "wad").parse::<u128>().unwrap(),
+            WAD
+        );
     }
 }

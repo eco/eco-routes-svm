@@ -4,7 +4,7 @@ use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use intent_chainer::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda};
-use intent_chainer::types::{Order, Slot, WAD};
+use intent_chainer::types::{Amount, Item, Order, Template, TemplateProgram, WAD};
 use portal::types::{Call, Calldata, CalldataWithAccounts, Reward, Route, TokenAmount};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
@@ -13,7 +13,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{Context, TransactionResult, COMPUTE_UNIT_LIMIT};
+use crate::common::{Context, TransactionResult};
 
 /// The SPL `transfer_checked` instruction discriminator.
 const TRANSFER_CHECKED_DISCRIMINATOR: u8 = 12;
@@ -72,14 +72,16 @@ impl IntentChainer<'_> {
         let creator = self.creator.pubkey();
         let deadline = self.now() + 3600;
         let token_program = self.token_program;
-        let (segments, slots) = self.cut_svm_route(base_mint, recipient_ata, token_program);
+        let (segments, items) = self.cut_svm_route(base_mint, recipient_ata, token_program);
 
         Order {
             portal: portal::ID,
             base_mint,
             destination: CHAIN_ID,
-            segments,
-            slots,
+            template: TemplateProgram {
+                vaults: vec![],
+                route: Template { segments, items },
+            },
             reward: Reward {
                 deadline,
                 creator,
@@ -109,7 +111,7 @@ impl IntentChainer<'_> {
         base_mint: Pubkey,
         recipient_ata: Pubkey,
         token_program: Pubkey,
-    ) -> (Vec<Vec<u8>>, Vec<Slot>) {
+    ) -> (Vec<Vec<u8>>, Vec<Item>) {
         let route = self.svm_route(base_mint, recipient_ata, token_program, SENTINEL);
         let blob = borsh::to_vec(&route).unwrap();
         let needle = SENTINEL.to_le_bytes();
@@ -130,14 +132,11 @@ impl IntentChainer<'_> {
             segments.len() > 1,
             "the sentinel must appear in the encoded route"
         );
-        let slots = (0..segments.len() - 1)
-            .map(|_| Slot {
-                width: 8,
-                little_endian: true,
-            })
+        let items = (0..segments.len() - 1)
+            .map(|_| Item::Amount(Amount::output(8, true)))
             .collect();
 
-        (segments, slots)
+        (segments, items)
     }
 
     /// Intent2's route for a concrete amount — the reference the segments must
@@ -208,8 +207,9 @@ impl IntentChainer<'_> {
             &token_program,
         );
 
-        let amount_out = intent_chainer::types::scale_amount(amount_in, order.scale).unwrap();
-        let route_bytes = order.build_route(amount_out).unwrap();
+        let amount_out =
+            intent_chainer::types::scale_amount(amount_in as u128, order.scale).unwrap();
+        let route_bytes = order.build_route(amount_in).unwrap();
         let route: Route = borsh::from_slice(&route_bytes).expect("SVM route must deserialize");
         let _ = recipient_ata;
 
@@ -251,11 +251,20 @@ impl IntentChainer<'_> {
         };
         let announce = Instruction {
             program_id: intent_chainer::ID,
-            accounts: intent_chainer::accounts::AnnounceOrder {}.to_account_metas(None),
+            accounts: intent_chainer::accounts::AnnounceOrder {
+                event_authority: Pubkey::find_program_address(
+                    &[b"__event_authority"],
+                    &intent_chainer::ID,
+                )
+                .0,
+                program: intent_chainer::ID,
+            }
+            .to_account_metas(None),
             data: intent_chainer::instruction::AnnounceOrder { args }.data(),
         };
 
         let payer = self.payer.insecure_clone();
+        let (announce, _) = self.stage_template_instruction(announce);
         let instructions: Vec<_> = std::iter::once(
             ComputeBudgetInstruction::set_compute_unit_limit(self.compute_limit),
         )
@@ -268,6 +277,10 @@ impl IntentChainer<'_> {
             self.latest_blockhash(),
         );
 
+        assert!(
+            super::template_transport::transaction_size(&transaction)
+                <= super::template_transport::PACKET_BYTES
+        );
         self.send_transaction(transaction)
     }
 
@@ -300,24 +313,19 @@ impl IntentChainer<'_> {
         };
         let instruction = Instruction {
             program_id: intent_chainer::ID,
-            accounts: intent_chainer::accounts::AnnounceOrder {}.to_account_metas(None),
+            accounts: intent_chainer::accounts::AnnounceOrder {
+                event_authority: Pubkey::find_program_address(
+                    &[b"__event_authority"],
+                    &intent_chainer::ID,
+                )
+                .0,
+                program: intent_chainer::ID,
+            }
+            .to_account_metas(None),
             data: intent_chainer::instruction::AnnounceOrder { args }.data(),
         };
 
-        let payer = self.payer.insecure_clone();
-        let transaction = Transaction::new(
-            &[&payer],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(self.compute_limit),
-                    instruction,
-                ],
-                Some(&payer.pubkey()),
-            ),
-            self.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+        self.send_template_instruction(instruction)
     }
 
     /// Re-derives the escrow addresses from `chained.order`.
@@ -357,9 +365,9 @@ impl IntentChainer<'_> {
         publish: bool,
         compute_limit: u32,
     ) -> TransactionResult {
-        self.compute_limit = compute_limit;
+        let previous_limit = std::mem::replace(&mut self.compute_limit, compute_limit);
         let result = self.chain(chained, publish);
-        self.compute_limit = COMPUTE_UNIT_LIMIT;
+        self.compute_limit = previous_limit;
 
         result
     }
@@ -464,24 +472,11 @@ impl IntentChainer<'_> {
             data: intent_chainer::instruction::Chain { args }.data(),
         };
 
-        let payer = self.payer.insecure_clone();
-        let transaction = Transaction::new(
-            &[&payer],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(self.compute_limit),
-                    instruction,
-                ],
-                Some(&payer.pubkey()),
-            ),
-            self.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+        self.send_template_instruction(instruction)
     }
 
     /// An order whose spliced route is a valid Borsh `Route` of exactly
-    /// `target_len` bytes, with no slots.
+    /// `target_len` bytes, with no template items.
     ///
     /// Used to drive `publish` at the route-length ceiling: the route's size is
     /// what decides whether portal's `IntentPublished` survives the runtime's
@@ -524,8 +519,10 @@ impl IntentChainer<'_> {
             portal: portal::ID,
             base_mint,
             destination: CHAIN_ID,
-            segments: vec![bytes],
-            slots: vec![],
+            template: TemplateProgram {
+                vaults: vec![],
+                route: Template::literal(bytes),
+            },
             reward: Reward {
                 deadline,
                 creator,

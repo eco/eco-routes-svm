@@ -1,0 +1,15 @@
+[package]
+name = "template-buffer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "template_buffer"
+
+[features]
+default = []
+no-entrypoint = []
+
+[dependencies]
+anchor-lang = { workspace = true }
