@@ -4,14 +4,10 @@ use eco_svm_std::Bytes32;
 
 /// A follow-on intent was resolved from a measured balance and funded.
 ///
-/// The route bytes are deliberately **not** carried here. They are recoverable
-/// off-chain without them: the whole `Order` is in this instruction's own data,
-/// and the splice is deterministic given `amount_out`, so any indexer that reads
-/// the transaction can reconstruct the exact route. Re-emitting it would double
-/// the log cost of the `publish` path for no information, and the runtime's
-/// per-transaction log budget is the binding constraint on route length
-/// (see [`crate::types::MAX_ROUTE_LEN`]). `route_hash` is included so a
-/// reconstruction can be checked rather than trusted.
+/// Route bytes are reconstructed from the complete Order and BOTH initial amounts.
+/// Nested recipients are deterministic data, not local transfer accounts. The
+/// route hash checks reconstruction; Portal's optional publication carries the
+/// full route. The Order preimage is durably announced through a self-CPI event.
 #[event]
 pub struct IntentChained {
     /// Intent2's hash, computed from the spliced route and the resolved reward.
@@ -24,7 +20,7 @@ pub struct IntentChained {
     pub base_mint: Pubkey,
     /// The measured amount, escrowed as intent2's reward.
     pub amount_in: u64,
-    /// `ceil(amount_in * scale / WAD)`, written into every route slot.
+    /// Initial Output context: `ceil(amount_in * scale / WAD)` (not narrowed to u64).
     pub amount_out: u128,
     /// Intent2's destination chain id.
     pub destination: u64,
@@ -34,7 +30,7 @@ pub struct IntentChained {
     pub published: bool,
 }
 
-/// An order's preimage, put on the record so its escrow can always be reached.
+/// The complete order preimage, recorded as an Anchor self-CPI event.
 ///
 /// Carries the whole order, which is the point: the escrow authority is
 /// `keccak(borsh(order))`, so without the preimage a funded escrow has no
@@ -46,7 +42,7 @@ pub struct OrderAnnounced {
     pub order_commitment: Bytes32,
     /// The escrow authority the order derives.
     pub escrow_authority: Pubkey,
-    /// The order itself.
+    /// The complete nested preimage, including every remote configuration.
     pub order: crate::types::Order,
 }
 

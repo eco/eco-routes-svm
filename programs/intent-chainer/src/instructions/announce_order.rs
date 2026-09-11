@@ -1,9 +1,12 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::solana_program::program::invoke_signed;
+use eco_svm_std::Bytes32;
 
 use crate::events::OrderAnnounced;
-use crate::instructions::ChainerError;
+use crate::instructions::chain::validate_order;
 use crate::state::escrow_authority_pda;
-use crate::types::{Order, MAX_ROUTE_LEN, MAX_SLOTS};
+use crate::types::Order;
 
 /// Args for [`announce_order`].
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -12,60 +15,62 @@ pub struct AnnounceOrderArgs {
     pub order: Order,
 }
 
-/// Accounts for [`announce_order`]. None: this only emits.
+/// Self-CPI event accounts. No custody or new escrow account is introduced.
+#[event_cpi]
 #[derive(Accounts)]
 pub struct AnnounceOrder {}
 
-/// Puts an order's preimage on-chain, so the escrow it derives can always be
-/// reached again.
+/// Records the complete, statically validated preimage as a durable self-CPI
+/// event. Publish it before funding intent1 or retain the preimage elsewhere:
+/// the escrow address cannot be inverted to recover a lost Order.
 ///
-/// # Why this exists
-///
-/// This closes the one place the port is structurally riskier than the EVM
-/// contract. There the whole order rides inside `intent1.route.calls[k].data`, so
-/// `IntentPublished` records it on-chain forever as a side effect of intent1
-/// existing. Here the order travels only in `chain`'s own instruction data — and
-/// if `chain` is never called, the order was never on-chain at all.
-///
-/// That matters because custody is `escrow_authority_pda(keccak(borsh(order)))`.
-/// An indexer watching intent1 can see the escrow address, but there is no path
-/// from the address back to the order, and no sweep that does not need the order
-/// to derive its signer. Losing the preimage strands the balance permanently.
-///
-/// Calling this in the same transaction that publishes intent1 restores the EVM
-/// property: the order is durable public data, recoverable by anyone, and the
-/// escrow can always be resolved by re-running `chain`. It is permissionless and
-/// takes no accounts, because an announcement grants nothing — `chain` was
-/// already permissionless and its outcome is fixed by the order.
-///
-/// Announcing is not a precondition of `chain`; an SDK that durably keeps its own
-/// orders needs neither. It is the on-chain option for those that would rather not
-/// carry that liability.
-pub fn announce_order(_: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> Result<()> {
+/// Permissionless and custody-free. An announcement does not prove that all
+/// future measurements fit the template, attest opaque remote route semantics,
+/// or bypass local settlement/collision checks. See the README for retry limits.
+/// Indexers must consume inner instructions, not just ordinary logs.
+pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> Result<()> {
     let AnnounceOrderArgs { order } = args;
 
-    // Cheap shape checks only, and before the commitment hash for the same reason
-    // `chain` orders them that way: hashing is proportional to the order's size.
-    // An announcement is a claim about an escrow, so a malformed order — one no
-    // `chain` call could ever consume — should not get a record.
-    require!(order.slots.len() <= MAX_SLOTS, ChainerError::TooManySlots);
-    require!(
-        order.segments.len() == order.slots.len() + 1,
-        ChainerError::SegmentCountMismatch
-    );
-    require!(
-        order.route_len()? <= MAX_ROUTE_LEN,
-        ChainerError::RouteTooLong
-    );
+    // Validate the complete nested preimage before hashing or emitting it.
+    validate_order(&order)?;
 
     let order_commitment = order.hash();
+    emit_order_announcement(
+        ctx.accounts.event_authority.to_account_info(),
+        order,
+        order_commitment,
+    )
+}
+
+pub(crate) fn emit_order_announcement(
+    authority: AccountInfo,
+    order: Order,
+    order_commitment: Bytes32,
+) -> Result<()> {
     let (escrow_authority, _) = escrow_authority_pda(&order_commitment);
 
-    emit!(OrderAnnounced::new(
-        order_commitment,
-        escrow_authority,
-        order,
-    ));
+    // Wire-identical to emit_cpi!, but ONE pre-sized buffer. The macro grows
+    // Event::data(), prepends the CPI tag into another Vec, then copies it again
+    // through Instruction::new_with_bytes. Those unreclaimed buffers exhaust the
+    // stock heap on dense nested orders. Never fall back to a droppable log.
+    let mut data =
+        Vec::with_capacity(8 + OrderAnnounced::DISCRIMINATOR.len() + 64 + order.encoded_len()?);
+    data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
+    data.extend_from_slice(OrderAnnounced::DISCRIMINATOR);
+    OrderAnnounced::new(order_commitment, escrow_authority, order).serialize(&mut data)?;
+    let instruction = Instruction {
+        program_id: crate::ID,
+        accounts: vec![AccountMeta::new_readonly(authority.key(), true)],
+        data,
+    };
+    invoke_signed(
+        &instruction,
+        &[authority],
+        &[&[b"__event_authority", &[crate::EVENT_AUTHORITY_AND_BUMP.1]]],
+    )?;
+
+    #[cfg(all(feature = "resource-metrics", target_os = "solana"))]
+    crate::log_heap_usage("announced");
 
     Ok(())
 }

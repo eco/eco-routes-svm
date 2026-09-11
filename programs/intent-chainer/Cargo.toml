@@ -11,6 +11,8 @@ name = "intent_chainer"
 [features]
 mainnet = ["eco-svm-std/mainnet", "portal/mainnet"]
 default = []
+# Local SBF profiling only; leave disabled in release builds.
+resource-metrics = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
@@ -18,12 +20,17 @@ no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = { workspace = true }
+anchor-lang = { workspace = true, features = ["event-cpi"] }
 anchor-spl = { workspace = true }
 derive-new = { workspace = true }
 eco-svm-std = { workspace = true }
 portal = { workspace = true, features = ["no-entrypoint"] }
+solana-keccak-hasher = "3.1"
 tiny-keccak = { workspace = true }
+
+# Client-side rendering needs the host hash implementation; SBF uses the syscall.
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+solana-keccak-hasher = { version = "3.1", features = ["sha3"] }
 
 # The k256 → getrandom path (via anchor's solana-secp256k1-recover) needs a
 # getrandom backend for the SBF target; enable the custom backend there only.
@@ -32,3 +39,4 @@ getrandom = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }
+serde_json = "1"

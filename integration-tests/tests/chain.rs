@@ -12,7 +12,7 @@ mod common;
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use common::intent_chainer_context::IDENTITY_SCALE;
-use common::{contains_event, is_error, Context};
+use common::{contains_cpi_event, contains_event, is_error, Context};
 use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use intent_chainer::events::IntentChained;
@@ -303,9 +303,8 @@ fn chain_emits_the_resolved_intent() {
         .resolve(&order, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    let route_hash = common::intent_chainer_context::keccak(
-        &chained.order.build_route(chained.amount_out).unwrap(),
-    );
+    let route_hash =
+        common::intent_chainer_context::keccak(&chained.order.build_route(DELIVERED).unwrap());
     let expected = IntentChained::new(
         chained.intent_hash,
         chained.order_commitment,
@@ -380,7 +379,7 @@ fn chain_splices_both_solana_amount_positions() {
     let reference =
         ctx.intent_chainer()
             .svm_route(base_mint, recipient_ata, token_program, DELIVERED);
-    let spliced = chained.order.build_route(DELIVERED as u128).unwrap();
+    let spliced = chained.order.build_route(DELIVERED).unwrap();
 
     assert_eq!(
         spliced,
@@ -645,12 +644,93 @@ fn chain_rejects_a_native_reward() {
         .is_err_and(is_error(ChainerError::NativeRewardNotSupported)));
 }
 
-/// Intent2's deadlines are fixed when intent1 is authored, but intent1 may be
-/// fulfilled at any point up to its own route deadline — so a chain that would
-/// publish an already-expiring intent2 fails loudly instead of burning intent1.
+/// Intent1 has already delivered before `chain` runs. Neither the old five-minute
+/// buffer nor expiry may prevent that balance from reaching Portal's refund rules.
 #[test]
-fn chain_rejects_a_reward_deadline_inside_the_buffer() {
-    let (mut ctx, base_mint, recipient_ata) = setup();
+fn chain_late_transfer_preserves_portal_refund_deadline() {
+    for offset in [-301, -300, -299, -60, -1, 0, 1, 3600] {
+        let (mut ctx, base_mint, recipient_ata) = setup();
+        let mut order = ctx.intent_chainer().svm_order(
+            base_mint,
+            recipient_ata,
+            local_prover::ID,
+            IDENTITY_SCALE,
+            1,
+        );
+        // Required publication must remain possible even after expiry.
+        order.require_publish = true;
+        let chained = ctx
+            .intent_chainer()
+            .resolve(&order, DELIVERED, recipient_ata);
+        ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+        let creator = order.reward.creator;
+        ctx.airdrop_token_ata(&base_mint, &creator, 0);
+        let creator_ata =
+            get_associated_token_address_with_program_id(&creator, &base_mint, &ctx.token_program);
+
+        ctx.warp_to_timestamp(chained.reward.deadline as i64 + offset);
+        let result = ctx
+            .intent_chainer()
+            .chain(&chained, false)
+            .unwrap_or_else(|err| panic!("chain at deadline{offset:+} failed: {err:?}"));
+        assert!(
+            contains_event(portal::events::IntentPublished::new(
+                chained.intent_hash,
+                order.destination,
+                borsh::to_vec(&chained.route).unwrap(),
+                chained.reward.clone(),
+            ))(result),
+            "publication must preserve the committed intent at deadline{offset:+}"
+        );
+        assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
+        assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+
+        let refund = ctx.portal().refund_intent(
+            order.destination,
+            chained.reward.clone(),
+            chained.vault,
+            chained.route.hash(),
+            Proof::pda(&chained.intent_hash, &order.reward.prover).0,
+            withdrawn_marker_pda(&order.portal, &chained.intent_hash).0,
+            creator,
+            vec![
+                AccountMeta::new(chained.vault_ata, false),
+                AccountMeta::new(creator_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+        );
+        if offset < 0 {
+            assert!(
+                refund.is_err_and(is_error(
+                    portal::instructions::PortalError::RewardNotExpired
+                )),
+                "refund must remain blocked at deadline{offset:+}"
+            );
+            assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+            assert_eq!(ctx.token_balance(&creator_ata), 0);
+        } else {
+            refund.expect("expired, unproven reward must refund to its committed creator");
+            assert_eq!(ctx.token_balance(&creator_ata), DELIVERED);
+            assert!(ctx.get_account(&chained.vault_ata).is_none());
+        }
+
+        // Retrying after a completed transfer must not move or pay anything twice.
+        assert!(ctx
+            .intent_chainer()
+            .chain(&chained, false)
+            .is_err_and(is_error(ChainerError::ZeroAmount)));
+    }
+}
+
+/// A proof created through real fulfillment/proving keeps its claim even if the
+/// independent transfer into the reward vault only lands after expiry.
+#[test]
+fn chain_late_transfer_preserves_proven_claim() {
+    let (mut ctx, base_mint, _) = setup();
+    let beneficiary = Pubkey::new_unique();
+    ctx.airdrop_token_ata(&base_mint, &beneficiary, 0);
+    let recipient_ata =
+        get_associated_token_address_with_program_id(&beneficiary, &base_mint, &ctx.token_program);
     let order = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
@@ -663,14 +743,109 @@ fn chain_rejects_a_reward_deadline_inside_the_buffer() {
         .resolve(&order, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    // Warp to within the buffer of the reward deadline.
-    let deadline = chained.reward.deadline as i64;
-    ctx.warp_to_timestamp(deadline - 60);
+    let solver = ctx.solver.pubkey();
+    let claimant = ctx.payer.pubkey();
+    ctx.airdrop_token_ata(&base_mint, &solver, DELIVERED);
+    ctx.airdrop_token_ata(&base_mint, &claimant, 0);
+    let (minimal_call, _, call_accounts) =
+        ctx.intent_chainer()
+            .deliver_to_escrow_call(base_mint, recipient_ata, DELIVERED);
+    let mut route = chained.route.clone();
+    route.calls = vec![minimal_call];
+    let marker = FulfillMarker::pda(&chained.intent_hash).0;
+    let solver_ata =
+        get_associated_token_address_with_program_id(&solver, &base_mint, &ctx.token_program);
+    let executor_ata = get_associated_token_address_with_program_id(
+        &executor_pda().0,
+        &base_mint,
+        &ctx.token_program,
+    );
+    ctx.portal()
+        .fulfill_intent(
+            chained.intent_hash,
+            &route,
+            chained.reward.hash(),
+            claimant.to_bytes().into(),
+            executor_pda().0,
+            marker,
+            vec![
+                AccountMeta::new(solver_ata, false),
+                AccountMeta::new(executor_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+            call_accounts,
+        )
+        .expect("intent2 must fulfill before its route deadline");
+    assert_eq!(ctx.token_balance(&recipient_ata), DELIVERED);
+    let proof = Proof::pda(&chained.intent_hash, &local_prover::ID).0;
+    ctx.portal()
+        .prove_intent_via_local_prover(
+            vec![chained.intent_hash],
+            CHAIN_ID,
+            vec![marker],
+            dispatcher_pda(&local_prover::ID).0,
+            vec![proof],
+        )
+        .expect("real fulfillment must establish a proof before chaining");
 
+    ctx.warp_to_timestamp(chained.reward.deadline as i64 + 1);
+    ctx.intent_chainer()
+        .chain(&chained, true)
+        .expect("expiry must not prevent funding a proven reward");
+    assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+
+    let creator = order.reward.creator;
+    ctx.airdrop_token_ata(&base_mint, &creator, 0);
+    let creator_ata =
+        get_associated_token_address_with_program_id(&creator, &base_mint, &ctx.token_program);
+    let withdrawn_marker = withdrawn_marker_pda(&order.portal, &chained.intent_hash).0;
     assert!(ctx
-        .intent_chainer()
-        .chain(&chained, false)
-        .is_err_and(is_error(ChainerError::DeadlineTooSoon)));
+        .portal()
+        .refund_intent(
+            order.destination,
+            chained.reward.clone(),
+            chained.vault,
+            chained.route.hash(),
+            proof,
+            withdrawn_marker,
+            creator,
+            vec![
+                AccountMeta::new(chained.vault_ata, false),
+                AccountMeta::new(creator_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+        )
+        .is_err_and(is_error(
+            portal::instructions::PortalError::IntentFulfilledAndNotWithdrawn
+        )));
+    assert_eq!(ctx.token_balance(&creator_ata), 0);
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+
+    let claimant_ata =
+        get_associated_token_address_with_program_id(&claimant, &base_mint, &ctx.token_program);
+    ctx.portal()
+        .withdraw_intent(
+            order.destination,
+            chained.reward.clone(),
+            chained.vault,
+            chained.route.hash(),
+            claimant,
+            proof,
+            withdrawn_marker,
+            proof_closer_pda(&local_prover::ID).0,
+            vec![
+                AccountMeta::new(chained.vault_ata, false),
+                AccountMeta::new(claimant_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+            vec![AccountMeta::new(claimant, true)],
+        )
+        .expect("proven claimant must still receive the late-funded reward");
+    assert_eq!(ctx.token_balance(&claimant_ata), DELIVERED);
+    assert_eq!(ctx.token_balance(&chained.vault_ata), 0);
+    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&withdrawn_marker).is_some());
 }
 
 #[test]
@@ -746,7 +921,7 @@ fn chain_rejects_an_amount_that_overflows_a_solana_slot() {
     assert!(ctx
         .intent_chainer()
         .chain(&chained, false)
-        .is_err_and(is_error(ChainerError::AmountExceedsSlotWidth)));
+        .is_err_and(is_error(ChainerError::AmountExceedsWidth)));
     assert_eq!(
         ctx.token_balance(&chained.escrow_ata),
         1_000_000_000_000,
@@ -998,7 +1173,7 @@ fn published_route_matches_the_resolved_intent() {
 
     assert!(ctx.intent_chainer().chain(&chained, true).is_ok());
 
-    let route = chained.order.build_route(chained.amount_out).unwrap();
+    let route = chained.order.build_route(DELIVERED).unwrap();
     let expected = portal::events::IntentPublished::new(
         chained.intent_hash,
         CHAIN_ID,
@@ -1303,7 +1478,7 @@ fn published_event_survives_the_log_budget_at_max_route_len() {
         .resolve(&order, DELIVERED, Pubkey::new_unique());
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    let route = chained.order.build_route(chained.amount_out).unwrap();
+    let route = chained.order.build_route(DELIVERED).unwrap();
     assert_eq!(
         route.len(),
         MAX_ROUTE_LEN,
@@ -1366,7 +1541,9 @@ fn a_route_past_the_ceiling_is_refused_not_silently_dropped() {
     assert!(ctx
         .intent_chainer()
         .chain(&chained, true)
-        .is_err_and(is_error(ChainerError::RouteTooLong)));
+        .is_err_and(is_error(
+            anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
+        )));
     assert_eq!(
         ctx.token_balance(&chained.escrow_ata),
         DELIVERED,
@@ -1464,24 +1641,17 @@ fn intent1_hash_commits_to_the_order_through_the_escrow_address() {
         });
 }
 
-/// How large a route can be while the order still fits in `chain`'s own
-/// transaction — the constraint that decides which lanes work today without a
-/// staging account.
-///
-/// Worth measuring rather than estimating: the intuitive figure comes from
-/// intent1's `fulfill` transaction, which carries far more accounts and leaves
-/// only ~500 bytes. `chain`'s transaction is much leaner, and the real ceiling is
-/// around 1.3 KB — comfortably above a realistic EVM destination swap.
+/// Runtime acceptance is not proof of packet transport: the builder now checks
+/// wire bytes and uses packet-sized buffer writes for oversized instructions.
 #[test]
-fn a_realistic_evm_swap_route_fits_one_transaction() {
+fn realistic_evm_routes_execute_through_packet_checked_staging() {
     /// `abi.encode(Route)` for a two-call Base swap: `approve` +
     /// `swapExactTokensForTokens`, one token leg. Computed from the ABI layout —
     /// 0x20 tuple offset, six-word struct head, a static `TokenAmount[1]`, and two
     /// dynamic `Call` tails.
     const REALISTIC_EVM_SWAP_ROUTE: usize = 960;
 
-    let mut ceiling = 0usize;
-    for len in (640..=1600).step_by(64) {
+    for len in [640, REALISTIC_EVM_SWAP_ROUTE, 1600] {
         let (mut ctx, base_mint, _) = setup();
         let order = ctx
             .intent_chainer()
@@ -1491,21 +1661,15 @@ fn a_realistic_evm_swap_route_fits_one_transaction() {
             .resolve(&order, DELIVERED, Pubkey::new_unique());
         ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-        match ctx
-            .intent_chainer()
+        ctx.intent_chainer()
             .chain_with_compute_limit(&chained, false, 900_000)
-        {
-            Ok(_) => ceiling = len,
-            Err(_) => break,
-        }
+            .unwrap_or_else(|e| {
+                panic!(
+                    "staged route of {len} bytes failed: {} {:?}",
+                    e.err, e.meta.logs
+                )
+            });
     }
-
-    assert!(
-        ceiling >= REALISTIC_EVM_SWAP_ROUTE,
-        "an SVM -> EVM lane with a destination swap needs {REALISTIC_EVM_SWAP_ROUTE} \
-         bytes of route in one transaction; only {ceiling} fit. Adding accounts or \
-         arguments to `chain` eats directly into this budget."
-    );
 }
 
 // ===========================================================================
@@ -1540,7 +1704,7 @@ fn announce_order_puts_the_preimage_on_the_record() {
     assert!(ctx
         .intent_chainer()
         .announce_order(&order)
-        .is_ok_and(contains_event(expected)));
+        .is_ok_and(contains_cpi_event(expected)));
 }
 
 /// Announcing grants nothing, so it needs no signer beyond the fee payer — and it
@@ -1572,7 +1736,7 @@ fn announce_order_rejects_an_order_chain_could_never_consume() {
         IDENTITY_SCALE,
         1,
     );
-    order.segments.push(vec![1, 2, 3]);
+    order.template.route.segments.push(vec![1, 2, 3]);
 
     assert!(ctx
         .intent_chainer()
@@ -1592,6 +1756,7 @@ fn announce_order_rejects_an_order_chain_could_never_consume() {
 #[test]
 fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
     let (mut ctx, base_mint, _) = setup();
+    ctx.compute_limit = 900_000;
     let order = ctx
         .intent_chainer()
         .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
@@ -1615,7 +1780,7 @@ fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
         .expect("announce beside a publish must succeed");
 
     assert!(
-        contains_event(announced)(meta.clone()),
+        contains_cpi_event(announced)(meta.clone()),
         "OrderAnnounced must be present and byte-exact — a dropped log here means \
          the escrow has no recovery record while the transaction reports success"
     );

@@ -85,6 +85,9 @@ jobs:
       - name: Assert on-chain compiler
         run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
 
+      - name: Build template-buffer (non-Anchor transport test program)
+        run: cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
+
       - name: Build mock-igp (non-Anchor test program)
         run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
 
@@ -114,6 +117,9 @@ jobs:
 
       - name: Assert on-chain compiler
         run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
+
+      - name: Build template-buffer (non-Anchor transport test program)
+        run: cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Build mock-igp (non-Anchor test program)
         run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy

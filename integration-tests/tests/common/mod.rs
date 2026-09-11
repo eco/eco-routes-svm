@@ -37,8 +37,10 @@ mod hyper_prover_context;
 pub mod hyperlane_context;
 pub mod intent_chainer_context;
 mod local_prover_context;
+pub mod order_buffer_context;
 mod portal_context;
 pub mod proof_helper_context;
+pub mod template_transport;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");

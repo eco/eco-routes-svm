@@ -2,30 +2,19 @@ use anchor_lang::prelude::*;
 
 mod announce_order;
 mod chain;
+mod order_buffer;
 
 pub use announce_order::*;
 pub use chain::*;
-
-/// Current unix timestamp.
-///
-/// Returns an error rather than panicking on a negative clock. Portal's
-/// equivalent `expect()`s, but a panic surfaces as an opaque
-/// `ProgramFailedToComplete` where a named error code does not, and there is no
-/// reason to inherit that.
-pub fn now() -> Result<u64> {
-    Clock::get()?
-        .unix_timestamp
-        .try_into()
-        .map_err(|_| ChainerError::InvalidClock.into())
-}
+pub use order_buffer::*;
 
 /// Errors emitted by the intent-chainer program.
 #[error_code]
 pub enum ChainerError {
-    /// `segments.len()` is not `slots.len() + 1`.
+    /// `segments.len()` is not `items.len() + 1`.
     SegmentCountMismatch,
-    /// `slots.len()` exceeds [`crate::types::MAX_SLOTS`].
-    TooManySlots,
+    /// `items.len()` exceeds [`crate::types::MAX_ITEMS`].
+    TooManyItems,
     /// The spliced route exceeds [`crate::types::MAX_ROUTE_LEN`].
     RouteTooLong,
     /// The reward does not carry exactly one leg.
@@ -43,16 +32,13 @@ pub enum ChainerError {
     AmountBelowFloor,
     /// `scale` is zero.
     InvalidScale,
-    /// `amount_in * scale` overflows even after reducing the fraction.
+    /// The scaled quotient (including ceil rounding) exceeds u128.
     ScaleOverflow,
-    /// A slot width is zero or above 32.
-    InvalidSlotWidth,
-    /// The destination amount does not fit the slot, e.g. a Solana u64 slot and an
+    /// An amount width is zero or above 32.
+    InvalidAmountWidth,
+    /// The destination amount does not fit the item width, e.g. a Solana u64 slot and an
     /// 18-decimal amount.
-    AmountExceedsSlotWidth,
-    /// Intent2's reward deadline is in the past or inside
-    /// [`crate::types::MIN_DEADLINE_BUFFER`].
-    DeadlineTooSoon,
+    AmountExceedsWidth,
     /// The `escrow_authority` address does not match the order's commitment.
     InvalidEscrowAuthority,
     /// The `escrow_ata` is not the escrow authority's derived ATA for `base_mint`.
@@ -71,17 +57,31 @@ pub enum ChainerError {
     IntentAlreadySettled,
     /// The vault holds less than was pushed, e.g. a token-2022 transfer fee.
     PushShortfall,
-    /// Intent2's vault is already funded to the amount being pushed.
-    ///
-    /// Nothing legitimate can pre-fund it — the address is unknowable until the
-    /// amount is measured — so this is a salt collision: the same order resolving
-    /// to a hash that already exists. The EVM contract gets this rejection free
-    /// from `publish`, which refuses an already-settled hash; portal's `publish`
-    /// is stateless, so it is checked here instead. Failing loudly beats a silent
-    /// top-up that merges two chains into one intent.
+    /// Intent2's vault already holds at least the input being pushed. The existing
+    /// collision guard tolerates dust below that threshold.
     VaultAlreadyFunded,
-    /// `portal_program` is not `portal::ID`.
+    /// `portal_program` does not match the committed `Order.portal`.
     InvalidPortalProgram,
-    /// The cluster clock is before the unix epoch.
-    InvalidClock,
+    /// Dependency graph exceeds MAX_VAULTS.
+    TooManyVaults,
+    /// A self, forward or missing vault reference (also excludes cycles).
+    InvalidVaultReference,
+    /// Aggregate node route/reward plus root output exceeds the rendering cap.
+    RenderedBytesExceeded,
+    /// Canonical Borsh preimage exceeds MAX_ORDER_BYTES.
+    OrderTooLarge,
+    MissingRemotePortal,
+    MissingCreate2Prefix,
+    MissingImplementation,
+    MissingInitCodeHash,
+    MissingTokenProgram,
+    MissingRemoteMint,
+    /// Buffer length, chunk length, or contiguous write offset is invalid.
+    InvalidOrderBufferWrite,
+    OrderBufferSealed,
+    OrderBufferNotSealed,
+    OrderBufferIncomplete,
+    /// Must decode exactly one canonical bounded Order, without trailing bytes.
+    InvalidBufferedOrder,
+    OrderCommitmentMismatch,
 }

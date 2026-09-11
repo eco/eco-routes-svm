@@ -4,6 +4,31 @@ use eco_svm_std::Bytes32;
 /// Seed for per-order `escrow_authority` PDAs.
 pub const ESCROW_SEED: &[u8] = b"escrow";
 
+/// Transport only: never a token custody authority or an execution signer.
+pub const ORDER_BUFFER_SEED: &[u8] = b"order_buffer";
+
+/// Fixed Borsh header followed by exactly `order_len` raw Borsh Order bytes.
+/// Keeping the payload outside a Vec avoids copying it on account load/exit.
+#[account]
+pub struct OrderBuffer {
+    pub authority: Pubkey,
+    /// Fresh random per-trade client seed; not a shared buffer index.
+    pub seed: [u8; 32],
+    pub order_commitment: Bytes32,
+    pub order_len: u32,
+    pub written: u32,
+    pub sealed: bool,
+    pub bump: u8,
+}
+
+impl OrderBuffer {
+    pub const HEADER_LEN: usize = 8 + 32 + 32 + 32 + 4 + 4 + 1 + 1;
+
+    pub fn pda(authority: &Pubkey, seed: &[u8; 32]) -> (Pubkey, u8) {
+        Pubkey::find_program_address(&[ORDER_BUFFER_SEED, authority.as_ref(), seed], &crate::ID)
+    }
+}
+
 /// Per-order custody authority: owns the ATA that intent1 delivers its output
 /// into, and signs the push of that balance into intent2's vault.
 ///
@@ -39,7 +64,7 @@ pub fn escrow_authority_pda(order_commitment: &Bytes32) -> (Pubkey, u8) {
 ///
 /// Re-derived here rather than calling `portal::state::vault_pda`, which resolves
 /// against portal's own `crate::ID` and would hard-bind this program to one portal
-/// deployment for its whole immutable life. The seed is portal's own public
+/// deployment. The seed is portal's own public
 /// constant, so the derivation cannot drift from the one portal itself uses.
 pub fn vault_pda(portal: &Pubkey, intent_hash: &Bytes32) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[portal::state::VAULT_SEED, intent_hash.as_ref()], portal)

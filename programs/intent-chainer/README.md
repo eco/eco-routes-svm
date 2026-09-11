@@ -1,477 +1,463 @@
-# Intent Chaining
+# Intent chainer: nested amount and vault templates
 
-`intent-chainer` publishes an intent whose amount does not exist until another intent executes.
+SVM semantic counterpart of [eco-routes PR #438](https://github.com/eco/eco-routes/pull/438),
+pinned to **`f8572a1971a7302d719878281bd3556fcb183463`**. Equivalent supported inputs
+produce the same remote route/reward bytes, hashes and recipients. The Order encoding,
+numeric domain, transaction mechanics and resource limits intentionally differ.
 
-It is the Solana counterpart of the EVM [`IntentChainer`](https://github.com/eco/eco-routes/blob/feat/intent-chainer/contracts/chain/IntentChainer.sol)
-(eco-routes#438). The encoding, the economics and the validation set are deliberately identical. The
-**shape** is not, and the reason is worth reading before changing anything here.
+## What moves, and what is only data
 
-## The problem
+`chain` measures the order-specific local escrow ATA, renders a child route, fills its
+local reward amount, validates the supplied local vault/ATA, transfers the measured
+tokens there, and optionally calls the committed local Portal's `publish`.
 
-An intent's reward amount is part of `Reward`, which is part of the intent hash, which is the seed of its
-vault PDA. So an intent whose amount is only known at execution time cannot be built, hashed, or funded
-ahead of time — the vault address itself moves with the amount.
+A template can contain an amount or a downstream vault recipient. For example, a later
+EVM route can contain a complete CCTP `depositForBurn(amount, domain, mintRecipient, token)`
+whose amount AND mintRecipient depend on the initial measurement. The downstream
+recipient is inserted into route bytes. **It is never a local transfer target.**
+There is no bridge adapter, CCTP execution in `chain`, or additional escrow layer.
 
-That blocks any flow where one intent's output feeds another's input. The motivating case is a swap
-expressed as two intents:
-
-```
-Solana                                           Solana / Base
-─────────────────────────────────────            ─────────────────────
-intent1  (same-chain, SVM → SVM)
-  route.tokens  [WSOL, amountIn]
-  route.calls
-    [0] swap(WSOL → USDC, → escrow ATA)   ── produces an amount nobody knew in advance
-                           │
-chain(order)  ─────────────┤   (its own transaction)
-                           ├─ measures the escrow's USDC balance      = amountIn
-                           ├─ splices ceil(amountIn * scale / WAD) into the route
-                           ├─ pushes amountIn into intent2's vault
-                           └─ optionally CPIs portal::publish
-                                                 │
-intent2  (SVM → SVM, or SVM → Base)              ▼
-  reward.tokens [USDC, amountIn]     solver delivers the scaled amount on the destination,
-  route         amountIn * scale     whose calls pay the user
+```text
+intent1 fulfillment → per-order SVM escrow ATA
+                              │
+                    separate chain transaction
+                              ├─ measure Input and derive Output once
+                              ├─ resolve remote recipients into route DATA
+                              └─ transfer Input → LOCAL child vault ATA
+                                                     │
+                                      later child fulfillment executes its route
 ```
 
-The user signs and funds only intent1.
+Solana accounts must be declared before execution. The caller reads the balance and
+derives the local child accounts; the program remeasures and checks them. A stale list
+fails atomically, leaving custody unchanged. Remote address rendering does not remove
+this scheduling constraint. `portal → chain → portal::publish` is also prohibited by
+SVM reentrancy rules. This is **not** EVM's atomic/no-balance-at-rest architecture.
 
-## Why this is a separate transaction, and the EVM one is not
+## Templates and amounts
 
-The EVM chainer runs *inside* intent1's fulfillment, as its last `Call`: it measures, calls
-`Portal.publish`, and pushes into the vault address that call returns — atomically. That atomicity is the
-source of its best property, that the intended flow never leaves a balance at rest, which is in turn why it
-needs no access control and no per-order state.
+```text
+Program { vaults: [Vault, ...], route: Template }
+Vault   { destination, route: Template, reward: Template, derivation }
+Template { segments: [bytes, ...], items: [Item, ...] }
 
-Solana cannot host that shape. Two independent reasons, and the first is decisive:
-
-- **Accounts are declared up front.** Intent2's vault, and its ATA, are PDAs of the intent hash, which
-  depends on the amount. A transaction must name every account it touches before it runs, so the account the
-  push targets cannot be known inside the transaction that discovers the amount. On EVM an address is just a
-  value returned from a call; here it is a scheduling input.
-- **Reentrancy.** Even setting the accounts aside, `portal::fulfill → chain → portal::publish` puts portal on
-  the instruction stack twice, and the runtime rejects it with `ReentrancyNotAllowed`. This is the same rule
-  that makes `flash-fulfiller` a separate program. `chain_cannot_publish_from_inside_a_route_call` pins it.
-
-A third constraint bounds how far the EVM shape could be pushed even if those were solved: intent2's route
-has to be carried somewhere, and a realistic `abi.encode(Route)` for a two-call EVM swap is ~960 bytes
-against the ~500 that remain inside intent1's own 1232-byte transaction.
-
-So `chain` is its own permissionless transaction. The caller reads the escrow balance, derives intent2's
-vault from it, and submits; the program re-measures on-chain and refuses to proceed unless the accounts it
-was handed match what the measurement implies. The measurement stays authoritative — a caller cannot declare
-an amount that is not there — but the caller carries the scheduling.
-
-One guarantee is genuinely weaker as a result, and it is worth stating rather than eliding. On EVM a failure
-inside `chain` reverts **intent1 whole**: the solver's input is untouched and the swap never happened. Here
-intent1 was fulfilled and settled in an earlier transaction and nothing can unwind it. What survives is that
-every check runs before any value moves, so a rejected order leaves the measured balance in the escrow,
-recoverable by re-running `chain` with a corrected one. Preserving the escrow is the whole of the guarantee.
-
-## What that costs, and how it is paid for
-
-Splitting the transaction means the balance **is** at rest between intent1's fulfillment and the `chain`
-call, and `chain` has no signer to gate. A single shared custody account would let whoever calls first sweep
-that balance into an order of their own authorship — with `reward.creator` set to themselves and a short
-deadline, they refund it out.
-
-The fix is that custody is **seeded by the order's own commitment**:
-
-```rust
-escrow_authority_pda(keccak(borsh(order)))
+render = segments[0] || render(items[0]) || segments[1] || ...
+segments.len == items.len + 1
 ```
 
-intent1's route names that address as its swap recipient, that route is hash-committed into intent1's own
-intent hash, and no other order can derive it. Funding the address *is* approval of the order behind it.
-This restores the EVM property — "intent1's hash authorizes the order" — transitively rather than directly.
+Vault nodes are dependency-first. Node i may reference only nodes below i; the root may
+reference any existing node. This excludes self/forward/missing references and cycles,
+including inside unused nodes. Each node is evaluated once; multiple references reuse
+its 32-byte recipient.
 
-**It is a security boundary.** Collapsing the seeds to anything the order does not determine reopens the
-sweep. `a_foreign_order_cannot_reach_another_orders_escrow` and `every_order_field_moves_the_escrow_address`
-pin it.
+The amount context never changes during nesting:
 
-The reward leg's `amount` must be authored as zero, which is what makes the commitment preimage canonical:
-otherwise two orders differing only in a field the program overwrites would be the same intent with two
-different escrows.
+| Value | Meaning |
+| --- | --- |
+| Input | Initial on-chain measured `amount_in: u64`; funds the local reward |
+| Output | `ceil(Input * order.scale / 1e18): u128` |
+| Amount item | `ceil(selected_context_value * item.scale / 1e18)` |
 
-## One chainer, many portals
+Both scales are explicit positive u128 WAD values. `Amount::output(width, little_endian)`
+is a builder for Output with an identity additional scale. Input items do not implicitly
+apply `order.scale`. Nested Output items do not compound ancestor scales.
 
-`Order.portal` names the **source-chain** portal whose vault holds intent2's reward. It is a committed field,
-not a linked-in constant and not a caller-supplied account, and both halves of that matter.
+Multiplication uses a full 256-bit intermediate with exact division and ceiling
+rounding, then checks that the result fits u128. It does not narrow Output to u64 and
+does not falsely overflow merely because the intermediate product exceeds u128.
+A 6→18 decimal conversion (`scale=1e30`) is supported when the final value fits.
 
-Not linked-in, because a chainer that resolved `portal::ID` at compile time would be bound to exactly one
-portal deployment for its whole life. This repo redeploys programs under a new id rather than upgrading them,
-so every portal release would orphan its chainer. Deriving from the order instead means one deployed chainer
-serves any number of portals, including several at once.
+An item encodes 1..32 bytes, either endian, zero-padding when wider than its value.
+Widths, scales, overflow and fit are checked; no truncation. Unlike EVM uint256,
+**SVM scales and every scaled result are limited to u128** (Input remains u64).
+A 32-byte encoding does not enlarge this arithmetic domain. Unsupported values fail.
 
-Not caller-supplied, because intent2's vault is `find_program_address([b"vault", intent_hash], portal)`. Leave
-the portal free and a caller passes a program of their own authorship: the vault derives under *it*, and the
-escrow sweeps into a PDA they can sign for — while the order's commitment still appears to authorise the
-transfer, since it pins the amount and says nothing about the destination. Committing it makes the portal the
-order author's choice, covered by intent1's hash transitively through the escrow address, exactly like every
-other field. `chain_rejects_a_portal_that_is_not_the_orders` and
-`changing_the_portal_moves_the_escrow_and_the_vault` pin both directions.
+Equivalent old amount-only outputs are obtained with no nodes and Output/identity items.
+There is no legacy Order entrypoint, hash, or escrow-address compatibility.
 
-Two consequences worth knowing:
+## Remote hashes and recipients
 
-- The PDA derivations are re-implemented in [`state`] against portal's own public seed constants rather than
-  calling `portal::state::vault_pda`, which resolves under portal's `crate::ID`. Same seeds, supplied program.
-- `Order.portal` is **not** the `portal` inside intent2's *route*. That one names the **destination** portal
-  and is checked by that chain's own `fulfill`. For an SVM → SVM chain the two coincide; for SVM → EVM they do
-  not.
+For each node, render its route and its **entire reward serialization**, then:
 
-The field set matches the EVM `Order`, but the **order of fields does not**, and that is worth knowing if you
-diff the two. eco-routes#438 now leads with `bool publish`; this struct carries the equivalent as
-`require_publish` in last position. The two also differ in semantics: theirs is absolute, while
-`require_publish` is a floor a caller may strengthen (`publish || order.require_publish`) but never weaken —
-so adding discoverability is always allowed and removing it never is. Neither struct is an ABI the other
-consumes; only the route bytes they produce have to agree.
-
-## Two amounts, one measurement
-
-| value                            | goes to                   | meaning                                                |
-| -------------------------------- | ------------------------- | ------------------------------------------------------ |
-| `amount_in`                      | `reward.tokens[0].amount` | escrowed on the source; what intent2's solver collects |
-| `ceil(amount_in * scale / WAD)`  | every route slot          | what that solver must deliver on the destination       |
-
-One committed number, `scale`, does the whole source-to-destination transform. The reward leg escrows the
-full measured `amount_in` while the route obliges only the scaled amount, so the gap between them is
-intent2's solver's entire margin.
-
-### Units are not the same across chains
-
-Part of `scale` is a unit conversion: "the same token" is not the same unit everywhere. USDC is 6 decimals
-on Solana and Base, but Binance-Peg USDC on BNB Chain is 18.
-
-| lane                         | `scale`           |
-| ---------------------------- | ----------------- |
-| same units, no spread        | `1e18`            |
-| same units, less 100bps      | `0.99e18`         |
-| 6 → 18 decimals              | `1e30`            |
-| 18 → 6 decimals              | `1e6`             |
-| 6 → 18 decimals, less 100bps | `1e30 * 99 / 100` |
-
-The denominator is **decimal, not binary**, on purpose. Unit conversions are powers of ten, so a decimal
-denominator represents every one of them exactly in both directions; a binary denominator (Q128 and friends)
-cannot — `2^128 / 1e12` is not an integer, so a downscaling lane would lean on rounding to recover a value it
-should have computed exactly.
-
-Rounding is toward the user (up), because the written value is the solver's delivery **floor**. Ceil rounding
-also makes a zero obligation unreachable: with `amount_in >= 1` and a reduced numerator `>= 1` the quotient is
-always at least 1, so the program carries no explicit zero-obligation check.
-
-### The gcd reduction is load-bearing on Solana
-
-Solana has no 256-bit integer, and the naive `amount_in * scale` overflows `u128` exactly on the lanes the
-unit conversion exists for: a 6→18 lane is `scale = 1e30`, and 1M USDC (`amount_in = 1e12`) gives `1e42`
-against a `u128` ceiling of `~3.4e38`.
-
-`scale_amount` therefore reduces the fraction by `gcd(scale, WAD)` before multiplying, which turns that same
-lane into `amount_in * 1e12 / 1`. Because unit conversions are powers of ten and `WAD` is `1e18`, the reduced
-numerator is small for every lane in the table above. A `scale` pathological enough to overflow anyway fails
-loudly as `ScaleOverflow` rather than wrapping. This is the one arithmetic difference from the EVM contract,
-which gets 256-bit multiplication for free.
-
-### The spread is proportional, not flat
-
-There is no separate flat fee field, matching the EVM contract after `e354167`. A flat fee and a ratio are
-different functions of `amount_in` — flat keeps the solver's take constant as the amount moves, proportional
-lets it grow — and a flat one cannot be folded into a ratio. The trade is deliberate:
-
-- **Lost:** pricing destination gas independently of size, which is genuinely fixed.
-- **Kept:** everything else, because the only thing that moves `amount_in` here is swap slippage, a percent
-  or so around a known expectation, over which the two are indistinguishable.
-
-Use `min_amount_in` to say "too small to be worth filling".
-
-## Slots and segments
-
-The route is opaque bytes; for an EVM destination it is not Borsh at all. Rather than carry the whole blob
-plus numeric write offsets, an order carries the literal bytes **around** each amount:
-
-```
-route = segments[0] ‖ enc(slots[0]) ‖ segments[1] ‖ … ‖ segments[n]
+```text
+intent_hash = keccak256(
+    uint64_be(destination) ||
+    keccak256(rendered_route) ||
+    keccak256(rendered_reward)
+)
 ```
 
-with `segments.len() == slots.len() + 1`. A mis-stated write position is not expressible, and the same
-representation serves an EVM destination and a Borsh one without the program knowing which it holds.
+`destination` is the downstream route-execution chain, not necessarily the chain hosting
+its reward vault. Remote bytes are opaque to this chainer; the author must use the
+target protocol's encoding:
 
-Each `Slot` is just geometry — `width` in bytes and `little_endian` — because every slot receives the same
-number. A value that does not fit its width reverts; it is never truncated. Silent truncation is the
-dangerous case: an amount wrapped into a Solana `u64` would publish an intent2 that is well-formed, fillable,
-and pays out a fraction of what was escrowed.
+- EVM: complete `abi.encode(Route)` / `abi.encode(Reward)`, including tuple offsets,
+  heads, array lengths and tails. Neither Borsh nor hashing just the amount is equivalent.
+- SVM: the actual Portal Borsh Route / Reward serialization.
 
-Offsets would be actively wrong here, for two independent reasons:
+Template validation cannot attest that an opaque route is executable, its reward
+describes what the bridge delivers, or its deadlines/prover/token identifiers are correct.
 
-- Canonical `abi.encode(Route)` puts every argument inside `calls[k].data` at an absolute offset
-  `≡ 4 (mod 32)`, because the 4-byte selector shifts the payload — so the 32-byte alignment invariant one
-  would naturally assert rejects every real EVM swap route.
-- In a Solana route the amount appears twice, and the second position moves with the call's account list
-  while the first does not.
+### EVM and TRON
+
+The EVM-tagged configuration explicitly supplies portal/deployer (20 bytes), prefix
+(one byte), implementation (20 bytes), and init-code hash (32 bytes). Every parameter
+must be nonzero.
+
+```text
+recipient = zero_pad_left_32(
+    last20(keccak256(prefix || portal_20 || intent_hash || init_code_hash))
+)
+```
+
+Use `0xff` for standard EVM CREATE2 and `0x41` for TRON. TRON must also supply the
+remote **VaultTron** implementation and its corresponding init-code hash, not just a
+different prefix. Worldchain works by supplying its different Portal; no chain-ID
+special cases exist.
+
+The init-code hash is the remote deployment's
+`keccak256(remote Proxy.creationCode || abi.encode(remote implementation))`.
+Never assume local Portal, implementation, Proxy bytecode or a universal hash.
+Implementation presence is checked, but this calculation **cannot attest its relationship
+to the supplied init-code hash or deployed code**. The author must verify that pair.
+The implementation field is still committed even though the address calculation consumes
+the already-computed init-code hash.
 
 ### Solana
 
-A Solana route is Borsh, and the amount appears **twice** — once as `route.tokens[0].amount` and again inside
-the SPL `transfer_checked` instruction data. Both are 8-byte little-endian `u64`, so amounts above
-`u64::MAX` are rejected. For the shape `DepositAddress_USDCTransfer_Solana._encodeRoute` emits (one token,
-one call, four account metas):
+The Solana-tagged configuration explicitly supplies nonzero Portal program, token program
+and mint:
 
-```
-  0  salt               32
- 32  deadline            8  u64 LE
- 40  portal             32
- 72  native_amount       8  u64 LE
- 80  tokens.len          4  u32 LE
- 84  tokens[0].token    32
-116  tokens[0].amount    8  u64 LE   ← slot
-124  calls.len           4  u32 LE
-128  calls[0].target    32
-160  calls[0].data.len   4  u32 LE
-164  instrData.len       4  u32 LE
-168  0x0c                1            transfer_checked discriminator
-169  amount              8  u64 LE   ← slot
-177  decimals            1
+```text
+vault     = canonical_PDA([b"vault", intent_hash], portal_program)
+recipient = canonical_ATA(vault, token_program, mint)
 ```
 
-Those offsets hold only for that shape — a second call or a different account list moves the one at 169,
-which is exactly why orders carry segments rather than offsets.
+The recipient is the full **ATA**, not the vault PDA. Native Solana PDA/ATA facilities
+select canonical bumps on every render. No bump is supplied, cached as a constant,
+or overridden by callers; runtime-dependent hashes can change both bumps.
 
-The SDK builds segments by encoding the route with a **sentinel** in every runtime position and splitting on
-it. That detail matters: it is what stops the segment table from being generated by the same offset
-arithmetic it is meant to replace. `integration-tests/tests/common/intent_chainer_context.rs` cuts segments
-exactly this way, and `chain_splices_both_solana_amount_positions` requires the spliced result to equal, byte
-for byte, what the reference encoder emits for that amount.
+The pinned EVM implementation limits its manual search to 32 attempts (255..224).
+SVM delegates to the native canonical search rather than importing MODEXP/field
+arithmetic or that EVM-specific budget (the SDK search considers 255..1).
+Consequently a canonical result beyond EVM's search budget can succeed on SVM where
+that EVM implementation rejects it. PDA search compute is input-dependent.
 
-### EVM
+## Exact Borsh schema
 
-An EVM route is `abi.encode(Route)`, and the amount typically appears in `route.tokens[0].amount` and again
-inside `calls[k].data`. Both are 32-byte big-endian words, i.e. `Slot { width: 32, little_endian: false }`.
+All scalars and vector lengths below are **little-endian**. Pubkeys/address arrays are
+raw bytes. Bool is one byte, 0 or 1. Enum tags are one byte; unknown tags are rejected.
+There are no opaque config blobs, padding/default fields, or bump fields.
 
-## Why it pushes and never funds
+```text
+Order =
+  portal[32] | base_mint[32] | destination:u64 |
+  TemplateProgram | Reward | scale:u128 | min_amount_in:u64 | require_publish:bool
 
-`chain` moves value with a plain `transfer_checked` into intent2's vault ATA. It never calls `portal::fund`.
+TemplateProgram = vault_count:u32 | Vault[vault_count] | Template(root)
+Vault = destination:u64 | Template(route) | Template(reward) | Derivation
+Template = segment_count:u32 | (byte_count:u32 | bytes)[segment_count] |
+           item_count:u32 | Item[item_count]
 
-- **Funding is unnecessary.** `withdraw_token` pays `min(reward_token_amount, vault_ata.amount)` and
-  `withdraw_native` pays `min(reward.native_amount, vault.lamports())`. There is no funded flag and no
-  `IntentFunded` precondition anywhere in `withdraw`, so a pushed intent is fully withdrawable by the proven
-  claimant. This mirrors the EVM `Status.Initial` property.
-  `chain_funds_the_vault_without_portal_fund` pins it.
-- **Funding is awkward from here.** `fund` requires `funder` to be a `Signer`; its ATA-creating path does a
-  system transfer from `payer`, and the system program refuses a transfer whose source carries data; and its
-  native leg computes `min(needed, funder.lamports())`, draining a short funder outright.
+Item tag 0 = AmountSource:u8 | scale:u128 | width:u8 | little_endian:bool
+Item tag 1 = vault_index:u8
+AmountSource tag 0 = Input
+AmountSource tag 1 = Output
 
-Because portal's `publish` is stateless, it cannot supply the EVM `publish`'s already-settled rejection. The
-stand-in is a direct read of `WithdrawnMarker::pda(intent_hash)` — a push into an already-withdrawn vault
-would be unrecoverable by the claimant, so it is refused
-(`chain_refuses_to_push_into_an_already_withdrawn_intent`).
+Derivation tag 0 = portal[20] | prefix:u8 | implementation[20] | init_code_hash[32]
+Derivation tag 1 = portal_program[32] | token_program[32] | mint[32]
 
-It is **narrower than the EVM check**, and the parity claim should be precise: `portal::refund` never creates
-a marker, it only reads one to permit the post-withdrawal sweep (`refund.rs:82`). So a *refunded* intent
-leaves no marker and passes this check, where on EVM `Status.Refunded` is terminal. The guarantee matches for
-withdrawal, not for refund. Not believed exploitable — two orders resolving to the same intent hash carry an
-identical reward by construction, so a re-funded intent still pays its own claimant or refunds to the same
-creator — but closing it properly would mean portal recording refunds, which is a portal decision rather than
-one this program can make.
+Reward = deadline:u64 | creator[32] | prover[32] | native_amount:u64 |
+         token_count:u32 | (mint[32] | amount:u64)[token_count]
 
-`PushShortfall` re-reads the vault ATA after the transfer, rejecting a mint that delivers less than it was
-sent. On Solana that is the token-2022 transfer-fee case.
-
-## The `publish` flag
-
-Unlike the EVM contract, where `publish` is unconditional because it is the only way to learn the vault
-address and to reject a settled hash, here it is a genuine choice: the vault is a derivable PDA and the
-settled check reads `WithdrawnMarker` directly, so `publish` buys **only** discoverability.
-
-The choice is **committed**, as `Order::require_publish`. Every other field deciding the outcome is inside the
-commitment, and this one gates discoverability — so with it caller-chosen, a solver watching `OrderAnnounced`
-could front-run the author with `publish = false`, fund intent2, and keep it out of the stream every other
-solver keys on, then fill it uncontested. Recoverable (anyone can call `portal::publish` afterward with the
-route and reward) but an exclusivity window the author never agreed to. The caller may still *strengthen* it —
-the effective decision is `publish || order.require_publish` — so the private path stays available to an author
-who wants it and cannot be taken from one who does not.
-
-The two features added here pull against each other exactly at this point: durability wants the order public,
-permissionless `chain` wants it private. Committing the flag is what lets both be safe.
-
-- `true` — portal emits its canonical `IntentPublished` carrying intent2's route as complete bytes. Use this
-  for anything an off-chain solver must find without bespoke indexing.
-- `false` — no portal CPI at all. Use it when the caller is itself the solver, or when the indexer
-  reconstructs intent2 from the transaction: the whole `Order` is in the instruction data and the splice is
-  deterministic given `amount_out`, so the route is always recoverable. `IntentChained` carries `route_hash`
-  so a reconstruction can be verified rather than trusted.
-
-### The route-length ceiling, measured
-
-`MAX_ROUTE_LEN` is **2 KB, set by measurement**. Three ceilings were candidates and the intuitive ranking
-turned out to be wrong. Driving `chain` with `publish` at increasing route lengths:
-
-| route bytes | compute units | transaction log bytes |
-| ----------: | ------------: | --------------------: |
-|        1024 |       450,496 |                 3,819 |
-|        2048 |       749,781 |                 5,181 |
-|        2560 |       877,855 |                 5,861 |
-|        3072 |     1,049,099 |                 6,546 |
-|        3584 |      heap OOM |                     — |
-
-- **The heap binds first.** This program installs no custom allocator, so it runs on the stock 32 KB heap,
-  and the route exists there several times over — Anchor's argument deserialization, the splice, and the
-  `publish` CPI's own serialization — on an allocator that never frees. Past ~3 KB that is an unrecoverable
-  `ProgramFailedToComplete`.
-- **Compute binds next**, at roughly 300 CU per route byte, because `portal::publish` hashes the route with
-  `tiny_keccak` in-program rather than through the keccak syscall. 3 KB already costs 1.05M of the 1.4M a
-  transaction can request, so publishing near the cap means raising the compute limit above the 400k default.
-- **The log budget never binds** in the reachable range. It looked like the dangerous ceiling because it fails
-  *silently* — `LogCollector` drops an oversized `Program data:` line without failing the transaction — but
-  the two hard ceilings arrive first and fail loudly.
-
-That last point is why `published_event_survives_the_log_budget_at_max_route_len` asserts the *event itself* is
-present and byte-exact at the cap, rather than trusting the arithmetic: the constant will drift and an
-assertion about the constant drifts with it. Raising `MAX_ROUTE_LEN` past ~3 KB requires the `flash-fulfiller`
-treatment — a custom `BumpAllocator` plus a mandatory `request_heap_frame` on every client transaction.
-
-Two consequences shaped the code. Shape checks (`TooManySlots`, `SegmentCountMismatch`, `RouteTooLong`) run in
-`validate_order` **before** `Order::hash` streams the order through keccak, so an over-length order is rejected
-while it is still cheap — otherwise the caller pays the full hash to be told the route was too long, and at
-the default compute limit runs out before hearing it. And `Order::hash` streams through `KeccakWriter` rather
-than `borsh::to_vec`, so deriving the commitment never materialises a second copy of the order on that heap.
-
-## Who lands the `chain` transaction
-
-Worth stating, because splitting the transaction moves this from "nobody has to care" to a real operational
-question. On EVM the chainer runs inside intent1's fulfillment, so intent1's solver pays for it as part of a
-job they already wanted to do; nobody else need be motivated.
-
-Here `chain` is a separate, permissionless transaction that nobody is *obliged* to send. Candidates, in the
-order they are likely to act:
-
-- **The party that authored the chain** — the user's relayer or frontend. It wants intent2 to exist and
-  already holds the order, so this is the intended path.
-- **Intent2's prospective solver.** It can call `chain` itself and immediately fulfill what it just created,
-  which is the closest analogue to the EVM flow and needs no coordination.
-- **Anyone**, for the price of a transaction, since the call is permissionless and its outcome is fixed by the
-  order.
-
-If none of them acts, the measured balance simply stays in the escrow — recoverable only by running `chain`,
-because custody is order-scoped. That is a liveness dependency the EVM design does not have, and it is the
-main operational cost of the split.
-
-## What the SDK must get right
-
-Three invariants are not enforceable on-chain:
-
-- **Fresh salt per order.** Intent2's salt is fixed in the committed template, so two orders sharing a salt
-  *and* landing on the same measured amount produce the same intent hash. That is now **refused**, not merged:
-  `chain` reads the vault before pushing and rejects `VaultAlreadyFunded` if it already holds at least the
-  amount being pushed. Nothing legitimate can pre-fund intent2's vault — the address is unknowable until the
-  amount is measured — so a balance already there means the hash is not fresh. This is the SVM stand-in for
-  the EVM `publish` rejecting an already-settled hash; loud beats a silent top-up that funds a delivery which
-  already has a claimant. A dust donation does not trip it
-  (`a_dust_donation_to_the_vault_does_not_block_the_chain`).
-
-  Note one aliasing worth knowing: `min_amount_in` is part of the order's commitment but **not** of the intent
-  hash, so two orders differing only in their floor derive different escrows and the *same* vault.
-- **Deadline headroom.** Intent2's deadlines are absolute and fixed when intent1 is authored, but intent1 may
-  be fulfilled any time up to its own route deadline. The program rejects a reward deadline inside
-  `MIN_DEADLINE_BUFFER` (5 minutes), but leaving real headroom is the builder's job.
-- **Slot and call agreement.** If a route's token leg and the calldata that moves it are cut as separate
-  slots they receive the same value — but if the template's *calls* expect a different amount than the token
-  leg declares, the difference is left on portal's shared executor, claimable by the next fulfiller of any
-  intent. `executor_atas_digest` will not save you: it protects `owner`, `delegate` and `close_authority`,
-  deliberately not `amount`. Emit both numbers from one value.
-
-## When a route does not fit
-
-The order travels in `chain`'s own instruction data, which is what keeps this program at zero stored state.
-**Measured capacity is ~1,376 bytes of route** — `a_realistic_evm_swap_route_fits_one_transaction` walks it.
-
-That is worth stating precisely, because the intuitive figure is wrong and pessimistic. ~500 bytes is what
-remains inside intent1's `fulfill` transaction, which carries far more accounts; it is the number that would
-matter if this program had the EVM's shape. `chain`'s own transaction is much leaner. A realistic two-call
-Base swap route (`approve` + `swapExactTokensForTokens`) is ~960 bytes of `abi.encode(Route)`, so **an
-SVM → EVM lane with a destination swap fits today**, with roughly 400 bytes of margin.
-
-Staging is therefore not a blocker for the canonical lanes — it is what a route beyond ~1.3 KB would need: a
-longer swap path, three or more calls, or a destination that inflates the encoding. Adding accounts or
-arguments to `chain` eats directly into that budget, which is what the test guards.
-
-**Stage it content-addressed, not writer-owned.** The obvious shape — a `(writer, id)`-seeded buffer with an
-open/append/seal lifecycle — makes the staging account a security boundary and drags in squatting rules,
-a seal ceremony, and a corrupt-buffer story (an RPC retry that duplicates a chunk silently poisons it). None
-of that is necessary. Derive the staging PDA from the order commitment the escrow already uses, and have
-`chain` verify the account's contents hash to it. Then:
-
-- The staging account is **untrusted data** that either hashes to the commitment or does not. Writer-binding,
-  squatting and the seal ceremony all stop being load-bearing.
-- A duplicated chunk becomes a failed hash check rather than a poisoned order, so a reset instruction is a
-  convenience rather than a correctness fix.
-- The commitment is already covered by intent1's hash through the escrow address, so the authorization story
-  does not change at all.
-
-This is the design to reach for when those lanes are needed; it is deliberately not built yet, since nothing
-in the current matrix requires it. Credit to the EVM side for the framing.
-
-## Recovery
-
-| state                                      | who recovers                                                                 | how                                                  |
-| ------------------------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------- |
-| swap under-delivered below `min_amount_in` | nobody needs to — `chain` fails and the escrow is untouched                   | retry when more arrives                              |
-| amount will not fit a slot's width         | nobody needs to — `chain` fails and the escrow is untouched                   | —                                                    |
-| intent2 published and funded, never solved | `reward.creator`                                                             | `portal::refund` after `reward.deadline`             |
-| intent2 solved                             | claimant takes `amount_in`; any surplus in the vault goes to `reward.creator` | `portal::withdraw`, then `portal::refund`            |
-| tokens sent to an escrow whose order is never chained | anyone holding the order preimage                                | `chain` it; custody is order-scoped, so nobody else can |
-
-The last row is the one place this port is structurally riskier than EVM, and it needs more than a habit.
-There, the whole order rides inside `intent1.route.calls[k].data`, so `IntentPublished` records it on-chain
-forever as a side effect of intent1 existing. Here the order travels only in `chain`'s own instruction data —
-so if `chain` is never called, the order was never on-chain at all. An indexer watching intent1 can see the
-escrow address but has no path from the address back to the order, and no sweep exists that does not need the
-order to derive its signer. **Losing the preimage strands the balance permanently.**
-
-`announce_order` closes that. It is permissionless, takes no accounts, and does nothing but emit the order
-alongside the commitment and escrow authority it derives. Call it in the same transaction that publishes
-intent1 and the preimage is durable public data, recoverable by anyone. It grants nothing — `chain` was
-already permissionless and its outcome is fixed by the order — so there is no reason not to.
-
-That recommendation needs its own guard, and has one. The log budget is **per transaction**, so an
-announcement sharing a transaction with intent1's `portal::publish` competes with it, and the overflow is
-dropped *silently* — the recovery record would vanish while the transaction reported success, in the one
-instruction whose entire purpose is recovery. `MAX_ROUTE_LEN` was measured for the publish path, which is not
-this path, so
-`announced_event_survives_the_log_budget_beside_intent1s_publish` asserts the announcement is byte-exact in
-exactly the bundled configuration recommended above. Measured at **4,530 of 10,000 bytes** at the route cap,
-so the headroom is real rather than assumed.
-
-An SDK that durably keeps its own orders needs neither; this is the on-chain option for those that would
-rather not carry that liability.
-
-## Tests
-
-```bash
-anchor build                       # required first: integration tests embed the .so
-cargo test --package intent-chainer   # 31 unit tests: splice, slot encoding, scale, commitment, cross-VM
-cargo test --test chain               # 39 integration tests
+chain arguments = Order | publish:bool
+announce_order arguments = Order
+init_order_buffer arguments = seed[32] | order_commitment[32] | order_len:u32 |
+                              chunk_len:u32 | chunk_bytes
+write_order_buffer arguments = offset:u32 | chunk_len:u32 | chunk_bytes
+seal_order_buffer arguments = (none)
+chain_from_account arguments = publish:bool
+close_order_buffer arguments = (none)
 ```
 
-Three tests carry more weight than the rest.
+These arguments follow their Anchor instruction discriminator. Standalone Borsh decoders
+must consume exactly the expected schema (`try_from_slice` rejects trailing bytes).
+Appending bumps is not a configuration mechanism.
 
-`splice_reproduces_the_evm_chainers_route_byte_for_byte` is the **cross-VM** check, and it reads
-`testdata/cross-vm-vectors.json` — a fixture meant to be checked into **both repos** and asserted by both
-suites. The two ports owe each other agreement on the bytes they produce, not on the shape of the input that
-produces them, and nothing else checks that. The vector is not hand-written: its segments are cut from the
-route the production Borsh encoder emits, and `expected_route` is what the **EVM** `IntentChainer` published
-for `amount_in = 2_500_000` at `scale = 0.96e18` (`eco-routes@e354167`). A transform mismatch, an endianness
-flip, or ceil landing on the wrong side would each pass every same-side test and still disagree across the
-boundary; this is the one failure mode that would otherwise surface as a solver delivering the wrong amount on
-a live lane. `fixture_wad_matches_this_crate` guards the fixture's own premise.
+`Order.hash() = keccak256(borsh(Order))`, streamed without a serialization copy.
+Every nested literal, item kind/source/scale/width/endian, reference, node destination,
+reward byte and remote configuration is committed. Mutating any of them changes the
+order hash and `escrow_authority_pda(order_hash)`.
 
-`intent1_hash_commits_to_the_order_through_the_escrow_address` walks the authorization chain end to end —
-altering any order field moves the escrow address, which moves intent1's route hash, which moves intent1's own
-intent hash — rather than asserting it in prose.
+## Custody, publication and retry boundaries
 
-`chain_cannot_publish_from_inside_a_route_call` drives a real `portal::fulfill` and asserts the exact
-`InstructionError::ReentrancyNotAllowed`, so the rule the design rests on is verified, not assumed.
+- Escrow authority remains `PDA([b"escrow", Order.hash()], chainer_program)`.
+  Intent1 commits to its escrow ATA as the output recipient. Presenting another order
+  cannot authorize spending that escrow.
+- `Order.portal` remains a committed **local** reward Portal. One chainer can serve
+  multiple Portal deployments. It is distinct from Portals in remote configurations.
+- The local reward must have exactly one base-mint token authored at amount zero and
+  native amount zero. The runtime measured Input fills that token amount.
+- Callers may strengthen publication, never weaken it:
+  `effective_publish = order.require_publish || call.publish`.
+- Existing local account checks, WithdrawnMarker check, funded-vault collision threshold,
+  transfer accounting, and Portal withdraw/refund behavior are unchanged. No Portal
+  settlement redesign or general Token-2022 extension/transfer-hook support is added.
+- A failed transaction rolls back its transfer and ATA creation, not intent1's earlier
+  fulfillment. A retry retains the exact committed order and recomputes the account list.
+- There is **no chainer deadline/buffer gate**. Builders budget deadline headroom before
+  funding intent1. After funding, solvers should still forward to the local vault even
+  near/after expiry, so Portal can refund an unproven intent or pay its proven claimant.
+  A valid proof blocks refund until withdrawal. All other chainer checks still apply.
+- Invalid amount widths, an unmet minimum, an unusable remote template or an existing
+  settled/colliding child are not repaired by an announcement. There is no generic
+  chainer refund or arbitrary sweep. Keeping the preimage is necessary, not a guarantee
+  that every permanently invalid funded order can recover.
 
-The integration suite is otherwise built around one end-to-end path that only uses real portal entry points —
-`chained_svm_to_svm_intent_is_funded_and_withdrawable`: fulfill intent1 so its route call delivers into the
-escrow, `chain` to resolve and fund intent2 from the measured balance, then prove and withdraw intent2 so the
-pushed tokens actually reach a claimant. The delivered amount is deliberately not a round number and not
-anything the order declares, so the test can only pass if the amount is genuinely measured.
+Use fresh route salts and coherent token-leg/call amounts. Different orders can resolve
+to the same child intent (for example, differing only in minimum input). A live destination
+balance can also change; custody/account checks remain authoritative.
+
+## Durable announcements and events
+
+Announce the complete order **before funding intent1**, or retain it durably elsewhere.
+Losing an unannounced preimage leaves no way to reconstruct it from the escrow address.
+
+`announce_order` validates the complete static preimage and records `OrderAnnounced`
+as an **Anchor self-CPI event**, not an ordinary `Program data:` log. It requires two
+read-only accounts: the chainer's `PDA([b"__event_authority"])` and the chainer program.
+The event authority signs the self-CPI. Its instruction data is:
+
+```text
+Anchor EVENT_IX_TAG_LE[8] | OrderAnnounced discriminator[8] |
+order_commitment[32] | escrow_authority[32] | Borsh Order
+```
+
+At the 4096-byte Order cap that is 4176 bytes. One exactly pre-sized buffer avoids the
+default event macro's repeated allocations on the non-freeing heap. Failure to record
+the CPI event fails the instruction; exhausting ordinary logs does not lose the preimage.
+
+Indexers must read successful transactions' inner instructions, verify the emitting
+chainer program/event framing, and validate the commitment. A logs-only subscription
+is insufficient. Persist finalized preimages; RPC historical retention is an operational
+dependency, not perpetual storage furnished by this program.
+
+`IntentChained` retains Input, Output, root route hash, local vault, order commitment and
+effective publication flag. Reconstruct using **both** initial amounts. `IntentPublished`
+is still Portal's ordinary full-route event; run the tested dedicated chain transaction,
+not an arbitrary log-heavy bundle. Its byte-exact visibility is tested at the root cap.
+
+## Bounds, resource measurements and transport
+
+### Native staged-order path
+
+Use **`chain_from_account`** when the inline Order does not fit. This adds transport
+state, not custody state. The existing `chain` and `announce_order` remain available
+for small orders; Order bytes, hashes and escrow derivation are unchanged by staging.
+Merely making the existing one-shot `announce_order(Order)` persist would still send
+the oversized preimage. Chunked upload plus a small seal/announcement handles both
+prepare and execution, without a generic external execution adapter.
+
+```text
+authority A: init(first chunk) → append chunks as needed → seal + announce
+                                                               │ read-only
+any payer B:                                     chain_from_account
+authority A: close separately, in any state → rent returned to A
+```
+
+The buffer PDA is `PDA([b"order_buffer", authority[32], seed[32]], chainer_program)`.
+Generate a fresh random 32-byte seed per trade; do not use a shared index/default seed.
+Authority A signs and pays buffer rent on initialization. No separate rent recipient
+is accepted: only A can write, seal, or close, and all closing lamports return to A.
+Chain's existing payer B pays transaction fees/local vault ATA rent; B can differ from A.
+Execution has **no buffer-authority account/signature**, no buffer signer seeds, no
+arbitrary execution target, and no combined execute-and-close instruction.
+
+| Instruction | Accounts (in order) | Behavior |
+| --- | --- | --- |
+| `init_order_buffer` | authority signer/writable, buffer writable, System | Validate 1..4096-byte length and <=800-byte first chunk; griefing-resistant allocation; bind authority, seed and declared commitment |
+| `write_order_buffer` | authority signer, buffer writable | Append 1..800 bytes at exactly `written`, within declared length; no overwrite or gaps |
+| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode; shared `validate_order`; hash match; full OrderAnnounced self-CPI; seal atomically |
+| `chain_from_account` | buffer read-only, then all existing Chain accounts | Require sealed, exact decode; invoke the SAME chain handler directly, recomputing hash and checking both buffer commitment and supplied escrow before value movement |
+| `close_order_buffer` | authority signer/writable, buffer writable | Close in any state; return rent to original authority; no token movement |
+
+All buffer consumers check program ownership, discriminator and its authority/seed PDA.
+The immutable fixed Borsh header (except `written`/`sealed` during upload) is followed
+by raw payload bytes, **not another Vec length**:
+
+```text
+OrderBuffer discriminator[8] = [150,173,11,86,146,96,229,77]
+authority[32] | seed[32] | order_commitment[32] |
+order_len:u32 | written:u32 | sealed:bool | canonical_bump:u8
+raw Borsh Order[order_len]    // payload starts at byte 114
+```
+
+The IDL account type describes the fixed header; fetch raw account data to access the
+tail. Instruction/account discriminators and nested Chain account groups are in the
+generated IDL. The bump is chosen by initialization, never accepted as an argument.
+This transport bump is unrelated to remote vault derivation, which still accepts none.
+
+Sealed buffers cannot be rewritten, including by A. Before sealing, even A can only
+append; retry upload by reading `written`, not resending an already committed chunk.
+A bad/incomplete upload can always be closed and recreated. Failed seal/publication
+does not seal it or prevent rent recovery. Keep the Order preimage independently and
+wait for successful seal/announcement before funding intent1.
+
+Closing can race execution and cause an account-not-found failure; it cannot move
+escrow funds. A may recreate the same PDA, but different bytes change Order.hash()
+and fail against the original escrow. Anyone can stage identical bytes in another
+buffer and retry; a third party staging different bytes cannot authorize that escrow.
+Closing cannot erase the recorded announcement or the escrow's commitment.
+
+Buffers are reusable transport, **not single-use settlement records**. Replaying after
+a drain fails on the empty escrow. Replaying against a different order's new escrow
+fails its commitment check. Re-funding the same order still follows the existing
+measurement, collision and WithdrawnMarker rules; staging adds no new settlement nonce.
+Every execution revalidates templates/configs/rewards, remeasures, checks local accounts,
+and applies publication strengthening. There is **no deadline gate**, including at seal.
+A stale account list or failed transfer/publication leaves both buffer and escrow intact.
+
+### Packet sizes and client integration
+
+The 781-byte transport fixture has a nested Solana vault, complete Portal Borsh
+route/reward bodies, and a root call with runtime amount/recipient. It is a
+production-shaped fixture, not the solver's exact captured quote. Tests sign and
+submit these legacy packets with a blockhash, CU limit **and CU price**, no ALT:
+
+| Transaction | Wire bytes |
+| --- | ---: |
+| Inline announce + escrow ATA (not submitted) | 1247 — too large |
+| Inline chain (not submitted) | 1376 — too large |
+| Prepare 1: init + all 781 Order bytes | **1150** |
+| Prepare 2: seal/announce + idempotent escrow ATA creation | **499** |
+| Execute: chain_from_account | **627** |
+| Close separately | 263 |
+
+Prepare is explicitly **two transactions**, not one. The small differences from a
+solver's 1254/1383-byte envelopes depend on framing; clients must still size their own
+final signed transactions. No stage packet carries an authority signature into execution.
+For a 4096-byte Order, upload is init with 800 bytes plus five append transactions;
+then seal/announce and execute. Init at 800 bytes is 1169 bytes, each full append
+1072 bytes, standalone seal 297 bytes, execution still 627 bytes. Every submitted
+native-path test packet is checked against 1232 bytes.
+
+Client changes (solver implementation remains out of scope):
+
+1. Use the new chainer artifact/IDL; compute the SAME Order commitment and escrow.
+2. Generate and retain a random seed, stage through the authority's wallet, then seal
+   (optionally bundled with escrow ATA creation). Persist the full announcement.
+3. After intent1 settles, read the escrow balance and derive the existing local child
+   accounts. Send `chain_from_account(publish)` with read-only buffer followed by the
+   existing Chain account list. The buffer authority is absent; the rent payer signs.
+4. Retry unchanged Orders with freshly derived local accounts when needed. Close the
+   buffer separately through its authority; retain preimages for restaging/recovery.
+5. Keep quote-time packet/CU admission checks. Staging Order data does not stage later
+   fulfillment calls, compress account keys, or remove SVM scheduling constraints.
+
+### Runtime bounds
+
+| Bound | SVM |
+| --- | --- |
+| Vault nodes | 8 |
+| Items per template | 8 (up to 136 over 17 templates) |
+| Aggregate rendered node routes + rewards + root | 2048 bytes |
+| Root route | 2048 bytes, within the aggregate bound |
+| Borsh Order preimage | 4096 bytes |
+
+Do not substitute EVM's 32 KiB rendered cap. Deserialization bounds vector counts and
+segment lengths before allocation and limits the Order reader to 4096 bytes. Shape,
+configuration, references and aggregate output are validated before hashing. Recipient
+results use a fixed array; downstream templates feed borrowed segments and stack-encoded
+items into native scatter/gather Keccak, without allocating route/reward bodies. The
+final root is pre-sized once. Success-path arithmetic
+does not allocate discarded Anchor errors. The stock allocator remains 32 KiB; no custom
+heap or heap-frame request is required.
+
+Fresh SBF/LiteSVM measurements (Anchor 1.1.2, platform-tools v1.52 / rustc 1.89.0-dev,
+LiteSVM 0.16.0; instrumented heap peaks before the metrics log):
+
+| Case | Order bytes | Root bytes | Chain CU (observed) | Chainer heap peak |
+| --- | ---: | ---: | ---: | ---: |
+| EVM / Worldchain / TRON CCTP route, one nested node | 1845 | 928 | 561–590k | 8217 |
+| Solana remote vault, Borsh reward | 1728 | 928 | 545–562k | 8081 |
+| Three levels, shared references, mixed VMs | 1299 | 109 | 352k | 4525 |
+| Eight nodes, eight items in every template, both byte caps | 4096 | 21 | 944k | 11141 |
+| Eight Solana nodes, near-maximum root | 3317 | 2032 | 1.083M | 14921 |
+| Maximum Order announcement (separate invocation) | 4096 | — | 532k | 13106 |
+
+PDA bumps make CU vary; these are measurements, not an upper bound for every possible
+configuration. Request up to 1.4M CU for dense cases and simulate the exact submission.
+The tests also cover root-only 2048-byte publication and deliberately exhausted logs
+before a full 4096-byte announcement.
+
+**Runtime acceptance is not packet transport.** The earlier claim that a ~960-byte route
+fits one ordinary chain transaction was incorrect: LiteSVM can execute oversized
+transactions. Tests now count actual wire bytes and submit only <=1232-byte packets.
+
+The historical test-only generic buffer remains for inline ABI/CPI/log-pressure
+regressions; it is not deployed or required by the native path. Production clients
+should use the native path above. An ALT only compresses account keys, not Order data.
+
+Native-path measurements retain the same 4096/2048 limits. A 4 KiB **encoded Order**
+does not authorize 4 KiB of rendered output. Native execution borrows the account's
+payload and deserializes one bounded Order, with no full-byte staging copy or extra
+execution CPI. Measured stock-heap peaks before the optional metrics log:
+
+| Native case | Chain CU (observed) | Chain heap | Seal/announcement heap |
+| --- | ---: | ---: | ---: |
+| 781-byte nested Order | ~285k | 4125 | 2351 |
+| 4096-byte Order, 8 nodes/136 items, 2048 aggregate rendered | ~922–934k | 11261 | 13490 |
+| 3317-byte Order, 8 Solana nodes, 2032-byte root | ~1.074–1.076M | 15041 | 8327 |
+
+Sealing the dense 4096-byte case uses about 533k CU and records all 4176 event bytes.
+These tests use the real SBF artifact and <=1232-byte native submissions, not host
+renderer calls or a generic-buffer execution shortcut. Keep both bounds: there is
+measured stock-32-KiB headroom, but no evidence here justifies larger limits. Native
+PDA search is input-dependent; simulate exact orders and request an adequate CU limit
+(up to 1.4M for dense cases). Do not interpret observations as a universal CU guarantee.
+
+## Build, validation and release
+
+Use CLAUDE.md's pinned host and SBF toolchains. Build fresh artifacts before tests:
+
+```sh
+anchor build --program-name intent-chainer --ignore-keys --no-idl
+anchor build --program-name portal --ignore-keys --no-idl
+anchor build --program-name local-prover --ignore-keys --no-idl
+cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
+cargo test --locked -p intent-chainer
+cargo test --locked --test chain --test chain_nested --test refund --test withdraw
+cargo clippy --all-targets -- -D warnings
+cargo +nightly fmt
+cargo sort --workspace --check
+anchor idl build --program-name intent-chainer --out target/idl/intent_chainer.json --out-ts target/types/intent_chainer.ts
+```
+
+`--ignore-keys` avoids rewriting program IDs from unrelated local keypairs. For a full
+workspace test, also build all other programs and mock-igp as CLAUDE.md specifies.
+Optional local heap profiling adds `-- --features resource-metrics` to the chainer SBF
+build; leave that feature disabled for release and rebuild uninstrumented for final tests.
+
+Independent fixtures:
+
+- `solana-vault-vectors.json` is copied verbatim from the pinned EVM corpus: Portal's
+  own vault golden, SDK ATA/bump fixtures, and 128 independent PDA vectors.
+- `nested-vectors.json` has full ABI/CCTP routes and complete ABI or Borsh rewards;
+  ethers/Solana SDK expectations were checked against the pinned Solidity harness on
+  local Anvil. `generate-nested-vectors.cjs` documents regeneration using a fresh local
+  Anvil instance. Neither generator calls a live chain.
+- The existing amount-only cross-VM output fixture is retained. The Order-hash golden
+  changes intentionally and was independently checked with manual Borsh + ethers Keccak.
+
+Redeploy the chainer under a **new program ID**; do not upgrade in place. Regenerate IDL
+and TS types, migrate all Order builders/encoders/commitment derivation, add CPI-event
+indexing and packet-checked staging, and stop authoring old-schema orders for the new ID.
+The new program cannot sign an old chainer's escrow PDAs. Existing old orders stay with
+their old program/preimages and recovery process. Respect the repo's coordinated
+Portal/prover release policy whenever those programs are released together.
+An unfunded pre-release deployment may retain its upgrade authority for testing and be
+finalized separately when approved. Retaining authority does not make schema-breaking
+upgrades safe for live orders; that authority controls the code authorizing escrow
+spends. Never use the old deployed ID for this Order ABI change.
+No deployment is part of this change. Separately discovered deployed-code fixes follow
+SECURITY.md's private advisory process, never a public feature PR.

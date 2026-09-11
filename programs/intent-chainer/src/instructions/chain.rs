@@ -10,9 +10,9 @@ use portal::types::{intent_hash, TokenTransferAccounts};
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::events::IntentChained;
-use crate::instructions::{now, ChainerError};
+use crate::instructions::ChainerError;
 use crate::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda, ESCROW_SEED};
-use crate::types::{scale_amount, Order, MAX_ROUTE_LEN, MAX_SLOTS, MIN_DEADLINE_BUFFER};
+use crate::types::{scale_amount, AmountContext, Order};
 
 /// Args for [`chain_intent`].
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -28,12 +28,8 @@ pub struct ChainArgs {
     /// is `publish || order.require_publish`, so a caller can add discoverability
     /// but never remove it. See that field for why it is committed.
     ///
-    /// A real choice on Solana, unlike on EVM where publish is unconditional
-    /// because it is the only way to learn the vault address and to reject an
-    /// already-settled hash. Here the vault is a derivable PDA and the settled
-    /// check reads `WithdrawnMarker` directly, so publish buys **only**
-    /// discoverability — and it costs the route bytes twice over in log budget and
-    /// an in-program keccak of the whole route inside portal.
+    /// Publication does not control the local settlement checks: those always
+    /// run. A published route is carried in Portal's full IntentPublished event.
     pub publish: bool,
 }
 
@@ -45,7 +41,6 @@ pub struct ChainArgs {
 /// they depend on the intent hash, which depends on the amount this instruction
 /// has not measured yet.
 #[derive(Accounts)]
-#[instruction(args: ChainArgs)]
 pub struct Chain<'info> {
     /// Pays the vault ATA's rent when it does not exist yet. A plain signer
     /// deliberately, never a PDA: the associated-token program funds a new account
@@ -84,31 +79,44 @@ pub struct Chain<'info> {
 
 /// Measure the escrow's balance of one mint and fund a follow-on intent with it.
 ///
-/// Ordering is load-bearing: everything that can fail — the shape, the floor, the
-/// slot widths, the deadline buffer, the already-settled check, every address
-/// derivation — is checked **before** any value moves, so a rejected order leaves
-/// the escrow exactly as it was and the call can be retried with a corrected one.
+/// Validate the order, amounts and derived accounts before moving value. Transfer
+/// or publication failures roll back the transaction, leaving the escrow intact.
 ///
-/// That is weaker than the EVM contract's guarantee and the difference is worth
-/// stating rather than eliding. There, `chain` runs inside intent1's fulfillment,
-/// so a failure reverts **intent1 whole** — the solver's input is untouched and
-/// the swap never happened. Here intent1 has already been fulfilled and settled in
-/// an earlier transaction; nothing can unwind it. What survives is only that the
-/// measured balance stays in the escrow, recoverable by re-running `chain` with a
-/// corrected order. Preserving the escrow is the whole of the guarantee.
+/// Unlike EVM's atomic chain, this cannot unwind intent1's earlier fulfillment.
+/// Retries must preserve the committed order; correcting a stale account list
+/// does not authorize changing the order or its deadline.
 pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -> Result<()> {
+    chain_order(ctx, args, None)
+}
+
+/// One validation/value-movement path for both transports. A staged invocation
+/// also checks the immutable buffer's declared commitment, hashing only once.
+pub(crate) fn chain_order<'info>(
+    ctx: Context<'info, Chain<'info>>,
+    args: ChainArgs,
+    buffered_commitment: Option<Bytes32>,
+) -> Result<()> {
     let ChainArgs { order, publish } = args;
     // The caller may strengthen the author's choice, never weaken it.
     let publish = publish || order.require_publish;
 
     validate_order(&order)?;
     let order_commitment = order.hash();
+    if let Some(expected) = buffered_commitment {
+        require!(
+            order_commitment == expected,
+            ChainerError::OrderCommitmentMismatch
+        );
+    }
     let escrow = validate_escrow(&ctx, &order, &order_commitment)?;
 
     let amount_in = measure(&ctx, &order)?;
-    let amount_out = scale_amount(amount_in, order.scale)?;
+    let amount_out = scale_amount(amount_in as u128, order.scale)?;
 
-    let route = order.build_route(amount_out)?;
+    let route = order.template.render(AmountContext {
+        input: amount_in,
+        output: amount_out,
+    })?;
     let route_hash = keccak(&route);
     let mut reward = order.reward.clone();
     reward.tokens[0].amount = amount_in;
@@ -135,32 +143,15 @@ pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -
         publish,
     ));
 
+    #[cfg(all(feature = "resource-metrics", target_os = "solana"))]
+    crate::log_heap_usage("complete");
+
     Ok(())
 }
 
 /// Rejects a malformed order before anything is measured or moved.
-fn validate_order(order: &Order) -> Result<()> {
-    // Shape first, and specifically *before* `Order::hash` streams the whole order
-    // through keccak in-program.
-    //
-    // `Order::build_route` re-checks all three. That is deliberate rather than
-    // redundant: it is a public constructor the SDK and tests call directly, so it
-    // cannot assume a caller ran this first. The duplication is safe because both
-    // sites read the same constants — if they are ever made to differ, the one
-    // here is the gate and the one there is the invariant. That hash costs compute proportional to the
-    // order's size, so an over-length order that is going to be rejected anyway
-    // must be rejected while it is still cheap — otherwise the caller pays the
-    // full hash to be told the route was too long, and at the default compute
-    // limit runs out before ever hearing it.
-    require!(order.slots.len() <= MAX_SLOTS, ChainerError::TooManySlots);
-    require!(
-        order.segments.len() == order.slots.len() + 1,
-        ChainerError::SegmentCountMismatch
-    );
-    require!(
-        order.route_len()? <= MAX_ROUTE_LEN,
-        ChainerError::RouteTooLong
-    );
+pub(crate) fn validate_order(order: &Order) -> Result<()> {
+    order.validate_template()?;
 
     require!(order.scale > 0, ChainerError::InvalidScale);
 
@@ -192,10 +183,11 @@ fn validate_order(order: &Order) -> Result<()> {
         ChainerError::NativeRewardNotSupported
     );
 
-    require!(
-        order.reward.deadline >= now()?.saturating_add(MIN_DEADLINE_BUFFER),
-        ChainerError::DeadlineTooSoon
-    );
+    // Do not gate this transfer on time: unlike the atomic EVM chain, intent1
+    // has already settled before this instruction runs. Rejecting a late order
+    // would strand its escrow. Preserve the committed deadline and let Portal
+    // decide whether the funded reward is refundable or claimable. Deadline
+    // headroom belongs in the builder's admission checks, before intent1 is funded.
 
     Ok(())
 }
@@ -292,8 +284,8 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
     // directly into the vault works at all. The flip side is that a push after
     // withdrawal is unrecoverable by the claimant, so refuse it.
     //
-    // This stands in for the EVM `publish`'s already-settled rejection, which
-    // portal's stateless `publish` cannot provide — but it is **narrower**, and
+    // This corresponds to the EVM chainer's unconditional Portal status check,
+    // independent of publication — but it is **narrower**, and
     // the difference is worth being precise about. `portal::refund` never creates
     // a marker; it only reads one, to permit the post-withdrawal sweep
     // (`refund.rs:82`). So a *refunded* intent leaves no marker and passes this
@@ -318,17 +310,15 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
 
 /// Refuses a salt collision before it becomes a silent merge.
 ///
-/// Two orders sharing a salt that resolve to the same measured amount produce the
-/// same intent hash, so the second push would top up the first intent's vault
-/// rather than create a second intent — funding a delivery that already has a
-/// claimant, with no signal that anything went wrong. The EVM contract cannot
-/// reach this state: its `publish` rejects an already-settled hash and unwinds
-/// intent1 whole. Portal's `publish` is stateless and offers no such check, so it
-/// is made here.
+/// Two orders producing identical destination, route and reward bytes resolve
+/// to the same intent hash. The second push would top up the first vault rather
+/// than create a second intent. Portal's stateless `publish` does not enforce
+/// freshness: settlement is checked separately in `validate_destination`, and
+/// this balance check preserves the existing funding-collision guard.
 ///
-/// Nothing legitimate pre-funds intent2's vault: the address depends on the
-/// measured amount, so it is unknowable before this instruction runs. A balance
-/// already at or above what is being pushed therefore means the hash is not fresh.
+/// The existing collision threshold is the measured input, not non-emptiness:
+/// dust donations below that threshold do not prevent chaining. The balance is
+/// a guard against merging funding, not proof that an intent hash is fresh.
 fn validate_vault_is_unfunded(ctx: &Context<Chain>, amount_in: u64) -> Result<()> {
     let vault_ata = &ctx.accounts.vault_ata;
     if vault_ata.data_is_empty() {
@@ -393,7 +383,8 @@ fn push<'info>(
     // Portal reads the vault's live balance to decide what a claimant is owed, so a
     // mint that delivers less than it was sent (a token-2022 transfer fee) would
     // leave intent2 quietly payable only in part. Reject it while the escrow is
-    // still whole. This is the EVM `PushShortfall` check.
+    // still whole. Preserve the existing local post-transfer balance floor;
+    // this is not an attestation of arbitrary Token-2022 extension semantics.
     require!(
         accounts.to_data()?.amount >= amount_in,
         ChainerError::PushShortfall

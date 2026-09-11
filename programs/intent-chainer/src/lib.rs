@@ -20,7 +20,7 @@
 //!                            │
 //! chain(order)  ─────────────┤  (its own transaction)
 //!                            ├─ measures the escrow's USDC balance = amount_in
-//!                            ├─ splices ceil(amount_in * scale / WAD) into the route
+//!                            ├─ renders amounts and remote vault recipients into route data
 //!                            ├─ pushes amount_in into intent2's vault
 //!                            └─ optionally CPIs portal::publish
 //!                                              │
@@ -34,8 +34,9 @@
 //! # Why this is a separate transaction, unlike the EVM contract
 //!
 //! The EVM `IntentChainer` runs *inside* intent1's fulfillment, as its last
-//! `Call`: it measures, calls `Portal.publish`, and pushes into the vault address
-//! that call returns — all atomically. That atomicity is the source of its best
+//! `Call`: it measures, derives/checks the local vault through the committed
+//! Portal, optionally publishes, and pushes into that vault — all atomically.
+//! That atomicity is the source of its best
 //! property, that the intended flow never leaves a balance at rest, which is in
 //! turn why it needs no access control and no per-order state.
 //!
@@ -51,10 +52,11 @@
 //!   rejects that with `ReentrancyNotAllowed` — the same rule that makes
 //!   `flash-fulfiller` a separate program.
 //!
-//! A third constraint bounds how far the EVM shape could be pushed even if those
-//! were solved: intent2's route has to be *carried* somewhere, and a realistic
-//! `abi.encode(Route)` for a two-call EVM swap is ~960 bytes against the ~500 that
-//! remain inside intent1's own 1232-byte transaction.
+//! Transport is a separate constraint: the complete Order and its instruction
+//! framing can exceed a 1232-byte transaction. Large orders use chunked upload,
+//! seal/announcement, and `chain_from_account` with a read-only Order buffer, not
+//! just staging of later fulfillment calldata. Buffer rent is reclaimed separately.
+//! Staging does not remove the local-account or reentrancy constraints above.
 //!
 //! So `chain` is its own permissionless transaction. The caller reads the escrow
 //! balance, derives intent2's vault from it, and submits; the program re-measures
@@ -75,10 +77,11 @@
 //! transitively, and it is a security boundary — read the doc comment there before
 //! touching the seeds.
 //!
-//! Everything else follows the EVM contract closely: segments rather than write
-//! offsets ([`types::Order`]), one WAD-denominated `scale` carrying both the unit
-//! conversion and the solver spread, ceil rounding toward the user, a direct push
-//! instead of `portal::fund`, and validate-everything-before-value-moves ordering.
+//! Templates use segments and typed amount/vault items. Remote recipients support
+//! EVM, TRON and Solana and are DATA only; local custody never follows a remote
+//! address. All nesting uses the same initial Input/Output context, positive WAD
+//! scales and ceil rounding. See `README.md` for the exact Borsh schema, u128 domain,
+//! measured SBF limits, complete self-CPI announcements and required staging.
 
 use anchor_lang::prelude::*;
 
@@ -88,7 +91,29 @@ pub mod events;
 pub mod instructions;
 mod keccak_writer;
 pub mod state;
+pub mod template;
 pub mod types;
+
+/// Observe the stock allocator's high-water mark only in explicitly instrumented
+/// local SBF builds. The allocator never frees, so its cursor records peak use.
+#[cfg(all(feature = "resource-metrics", target_os = "solana"))]
+fn log_heap_usage(stage: &str) {
+    use anchor_lang::solana_program::entrypoint::{HEAP_LENGTH, HEAP_START_ADDRESS};
+    // SAFETY: this build uses Solana's stock BumpAllocator. Its first heap word
+    // is the cursor (solana-program-entrypoint 3.1.1); read-only, aligned, mapped.
+    let cursor = unsafe { (HEAP_START_ADDRESS as *const usize).read_volatile() };
+    let used = if cursor == 0 {
+        0
+    } else {
+        HEAP_START_ADDRESS as usize + HEAP_LENGTH - cursor
+    };
+    msg!(
+        "chainer heap {} before metrics log: {} / {}",
+        stage,
+        used,
+        HEAP_LENGTH
+    );
+}
 
 use instructions::*;
 
@@ -96,9 +121,8 @@ use instructions::*;
 pub mod intent_chainer {
     use super::*;
 
-    /// Records an order's preimage on-chain so the escrow it derives can always be
-    /// reached again. Permissionless and account-free; see the handler docs for why
-    /// it exists at all.
+    /// Records the complete nested preimage as a self-CPI event. Permissionless;
+    /// requires the event authority and this program, not a custody account.
     pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> Result<()> {
         instructions::announce_order(ctx, args)
     }
@@ -110,6 +134,40 @@ pub mod intent_chainer {
     /// from the order's own commitment, not from a signer.
     pub fn chain<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -> Result<()> {
         chain_intent(ctx, args)
+    }
+
+    /// Allocate a per-(authority, random seed) transport PDA and write its first chunk.
+    pub fn init_order_buffer(
+        ctx: Context<InitOrderBuffer>,
+        args: InitOrderBufferArgs,
+    ) -> Result<()> {
+        instructions::init_order_buffer(ctx, args)
+    }
+
+    /// Authority-only contiguous append; a sealed buffer can never be rewritten.
+    pub fn write_order_buffer(
+        ctx: Context<WriteOrderBuffer>,
+        args: WriteOrderBufferArgs,
+    ) -> Result<()> {
+        instructions::write_order_buffer(ctx, args)
+    }
+
+    /// Validate the full preimage/commitment, emit OrderAnnounced, then seal it.
+    pub fn seal_order_buffer(ctx: Context<SealOrderBuffer>) -> Result<()> {
+        instructions::seal_order_buffer(ctx)
+    }
+
+    /// Permissionless execution from a read-only sealed buffer. No authority signer.
+    pub fn chain_from_account<'info>(
+        ctx: Context<'info, ChainFromAccount<'info>>,
+        publish: bool,
+    ) -> Result<()> {
+        instructions::chain_from_account(ctx, publish)
+    }
+
+    /// Separate authority-only rent reclamation, including abandoned buffers.
+    pub fn close_order_buffer(ctx: Context<CloseOrderBuffer>) -> Result<()> {
+        instructions::close_order_buffer(ctx)
     }
 }
 
