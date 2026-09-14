@@ -26,6 +26,7 @@ malicious-prover = { path = "programs/malicious-prover" }
 mock-igp = { path = "integration-tests/programs/mock-igp" }
 portal = { path = "programs/portal" }
 proof-helper = { path = "programs/proof-helper" }
+solana-instructions-sysvar = "3.0.0"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [profile.release]

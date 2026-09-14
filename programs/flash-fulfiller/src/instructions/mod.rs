@@ -3,11 +3,13 @@ use anchor_lang::prelude::*;
 mod append_flash_fulfill_intent_chunk;
 mod close_flash_fulfill_intent;
 mod flash_fulfill;
+mod prove_and_withdraw;
 mod set_flash_fulfill_intent;
 
 pub use append_flash_fulfill_intent_chunk::*;
 pub use close_flash_fulfill_intent::*;
 pub use flash_fulfill::*;
+pub use prove_and_withdraw::*;
 pub use set_flash_fulfill_intent::*;
 
 /// Errors emitted by the flash-fulfiller program.
@@ -35,6 +37,8 @@ pub enum FlashFulfillerError {
     InvalidProveAuthority,
     /// `portal_program` is not `portal::ID`.
     InvalidPortalProgram,
+    /// No matching top-level `portal.fulfill` exists elsewhere in this transaction.
+    MissingPairedFulfill,
 }
 
 pub fn close_buffer<'info>(

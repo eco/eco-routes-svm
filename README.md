@@ -300,6 +300,35 @@ Atomic flash-fulfillment orchestrator for same-chain solvers.
 #### Key Instructions:
 - `set_flash_fulfill_intent` - Pre-store a route + reward under a PDA indexed by intent hash
 - `flash_fulfill` - Atomically prove, withdraw, fulfill, and sweep leftovers to a user-supplied claimant
+- `prove_and_withdraw` - Prove and withdraw to a solver signer, paired with a separate top-level `portal.fulfill` in the same transaction
+
+#### Split fulfillment for deep CPI routes
+
+Use `prove_and_withdraw({ route_hash, reward })` when a route needs the CPI frame
+otherwise occupied by `flash_fulfill`. Build one transaction containing:
+
+1. `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` (required for every flash-fulfiller instruction).
+2. Any needed ATA creation instructions for the solver's reward mints.
+3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver.
+4. `portal.fulfill`, signed by the payer and the same solver, with the full route.
+
+The new instruction takes only the route hash and reward. Its remaining accounts
+are `(intent_vault_ata, solver_ata, mint)` triples, one per unique reward mint in
+`Reward::token_amounts()` order. Native rewards go directly to the solver. Fulfill
+spends from the solver's accounts, leaving the spread there without a sweep.
+
+Before either CPI, the guard reads the runtime Instructions sysvar and requires
+another top-level instruction with the portal program ID, the generated Fulfill
+discriminator, the same intent hash, the same solver signer at account 1, and the
+derived fulfill marker at account 3. A nested fulfill cannot satisfy it. An earlier
+top-level fulfill is also allowed because it has already succeeded; a later failure
+rolls back both instructions. Portal validates the full route and its execution.
+The guard does not require adjacency or constrain fulfill's claimant to the solver;
+the new proof's claimant and reward recipient are always the solver.
+
+Clients must still fit the whole transaction into Solana's transaction limits;
+this path removes a CPI frame, and does not provide an intent buffer. The existing
+`flash_fulfill` and buffer instructions remain available without changes.
 
 #### Key Accounts:
 - `FlashFulfillIntentAccount` - Optional buffer holding the route + reward for hash-based invocation

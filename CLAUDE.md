@@ -61,6 +61,15 @@ cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml -
 
 If proof-helper / pay_for_gas integration tests fail with a missing `.so`, run that command.
 
+`cpi-relay` is another non-Anchor test program, used to exercise transaction
+introspection and the five-frame CPI limit with real SBF calls. Before tests or clippy:
+
+```bash
+cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/cpi-relay/Cargo.toml --sbf-out-dir target/deploy
+```
+
+It lives under `integration-tests/programs/` and is excluded from production builds.
+
 The confused-deputy PoC programs `malicious-prover` and `malicious-proof-closer` **are** Anchor programs (in `programs/`, like `dummy-ism`), so a bare `anchor build` builds them. What keeps them out of devnet/mainnet artifacts is **not** the `[programs.localnet]` registration — `[programs.<cluster>]` only maps names to IDs. It is the explicit `--program-name` enumeration in the `build-devnet` / `build-mainnet` scripts (`Anchor.toml`) and the named IDL loops in `release.yml`. **Never replace those enumerations with a bare `anchor build`** — doing so would ship the PoC programs.
 
 ## Architecture
