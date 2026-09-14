@@ -7,6 +7,11 @@
 //! Solana's reentrancy rule — `local_prover` only appears on the stack
 //! inside portal's `close_proof` CPI, never twice.
 //!
+//! For routes needing another CPI frame, `prove_and_withdraw` pays the solver
+//! directly and requires a matching, separately signed top-level `portal.fulfill`
+//! in the same atomic transaction. No route body or intent buffer is needed by
+//! that instruction, and the spread stays with the solver.
+//!
 //! # Client requirement
 //!
 //! Every transaction invoking *any* instruction in this program must prepend
@@ -51,6 +56,7 @@ static ALLOCATOR: anchor_lang::solana_program::entrypoint::BumpAllocator = unsaf
 pub mod cpi;
 pub mod events;
 pub mod instructions;
+mod paired_fulfill;
 pub mod state;
 
 use instructions::*;
@@ -58,6 +64,17 @@ use instructions::*;
 #[program]
 pub mod flash_fulfiller {
     use super::*;
+
+    /// Proves and withdraws to the solver, paired with a separate top-level
+    /// `portal.fulfill` in the same atomic transaction. The solver must sign both.
+    /// Prepend `ComputeBudgetInstruction::request_heap_frame(256 * 1024)`:
+    /// the custom allocator applies to every instruction in this binary.
+    pub fn prove_and_withdraw<'info>(
+        ctx: Context<'info, ProveAndWithdraw<'info>>,
+        args: ProveAndWithdrawArgs,
+    ) -> Result<()> {
+        instructions::prove_and_withdraw(ctx, args)
+    }
 
     /// Initializes a buffer at `pda(writer, intent_hash)` and writes the
     /// supplied `(route, reward)` typed body into it. Use this when the full

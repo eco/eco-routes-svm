@@ -24,7 +24,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
-use solana_sdk::transaction::{Transaction, TransactionError};
+use solana_sdk::transaction::{Transaction, TransactionError, VersionedTransaction};
 
 mod aggregator_prover_context;
 mod flash_fulfiller_context;
@@ -34,6 +34,7 @@ mod local_prover_context;
 pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
+mod split_fulfill_context;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
@@ -457,7 +458,10 @@ impl Context {
         self.set_sysvar(&clock);
     }
 
-    pub fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
+    pub fn send_transaction(
+        &mut self,
+        transaction: impl Into<VersionedTransaction>,
+    ) -> TransactionResult {
         let result = self.svm.send_transaction(transaction);
         self.expire_blockhash();
         let slot = self.svm.get_sysvar::<Clock>().slot;
