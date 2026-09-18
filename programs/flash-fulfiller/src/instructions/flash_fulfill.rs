@@ -7,7 +7,7 @@ use anchor_spl::associated_token::{
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
 use eco_svm_std::{Bytes32, CHAIN_ID};
-use portal::instructions::FulfillArgs;
+use portal::instructions::{FulfillArgs, WithdrawArgs};
 use portal::types::{
     self, Reward, Route, TokenTransferAccounts, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
@@ -16,7 +16,6 @@ use portal::types::{
 use crate::cpi;
 use crate::events::FlashFulfilled;
 use crate::instructions::{close_buffer, FlashFulfillerError};
-use crate::prove_withdraw::ProveWithdraw;
 use crate::state::{
     flash_vault_pda, prove_authority_pda, FlashFulfillIntentAccount, FLASH_VAULT_SEED,
 };
@@ -173,8 +172,20 @@ pub fn flash_fulfill<'info>(
     let should_close = matches!(intent, FlashFulfillIntent::IntentHash(_));
     let (route, reward, route_hash, reward_hash, intent_hash) = resolve_intent(&ctx, intent)?;
     let native_fee = reward.native_amount.saturating_sub(route.native_amount);
+    let flash_vault = ctx.accounts.flash_vault.key();
     let (_, flash_vault_bump) = flash_vault_pda();
     let flash_vault_seeds: &[&[u8]] = &[FLASH_VAULT_SEED, &[flash_vault_bump]];
+
+    cpi::prove::prove_intent(
+        &ctx.accounts.local_prover_program,
+        &ctx.accounts.prove_authority,
+        &ctx.accounts.payer,
+        &ctx.accounts.system_program,
+        &ctx.accounts.local_prover_event_authority,
+        &ctx.accounts.proof,
+        intent_hash,
+        &flash_vault,
+    )?;
 
     let FlashFulfillAccounts {
         reward: reward_transfers,
@@ -183,22 +194,25 @@ pub fn flash_fulfill<'info>(
         calls,
     } = extract_flash_fulfill_accounts(&ctx, reward.token_amounts()?.len(), route.tokens.len())?;
 
-    ProveWithdraw {
-        payer: &ctx.accounts.payer,
-        claimant: &ctx.accounts.flash_vault,
-        proof: &ctx.accounts.proof,
-        intent_vault: &ctx.accounts.intent_vault,
-        withdrawn_marker: &ctx.accounts.withdrawn_marker,
-        proof_closer: &ctx.accounts.proof_closer,
-        portal_program: &ctx.accounts.portal_program,
-        local_prover_program: &ctx.accounts.local_prover_program,
-        prove_authority: &ctx.accounts.prove_authority,
-        local_prover_event_authority: &ctx.accounts.local_prover_event_authority,
-        token_program: &ctx.accounts.token_program,
-        token_2022_program: &ctx.accounts.token_2022_program,
-        system_program: &ctx.accounts.system_program,
-    }
-    .execute(intent_hash, route_hash, reward, &reward_transfers)?;
+    cpi::withdraw::withdraw_intent(
+        &ctx.accounts.portal_program,
+        &ctx.accounts.payer,
+        &ctx.accounts.flash_vault,
+        &ctx.accounts.intent_vault,
+        &ctx.accounts.proof,
+        &ctx.accounts.proof_closer,
+        &ctx.accounts.local_prover_program,
+        &ctx.accounts.withdrawn_marker,
+        &ctx.accounts.token_program,
+        &ctx.accounts.token_2022_program,
+        &ctx.accounts.system_program,
+        &reward_transfers,
+        WithdrawArgs {
+            destination: CHAIN_ID,
+            route_hash,
+            reward,
+        },
+    )?;
 
     let route = strip_call_accounts(route)?;
 

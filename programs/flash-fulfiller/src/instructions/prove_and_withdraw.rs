@@ -1,13 +1,14 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::{Bytes32, CHAIN_ID};
+use portal::instructions::WithdrawArgs;
 use portal::types::{
     self, Reward, VecTokenTransferAccounts, VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
 
+use crate::cpi;
 use crate::instructions::FlashFulfillerError;
 use crate::paired_fulfill::require_paired_fulfill;
-use crate::prove_withdraw::ProveWithdraw;
 use crate::state::prove_authority_pda;
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -88,20 +89,34 @@ pub fn prove_and_withdraw<'info>(
     );
     let reward_transfers = VecTokenTransferAccounts::try_from(ctx.remaining_accounts)?.into_inner();
 
-    ProveWithdraw {
-        payer: &ctx.accounts.payer,
-        claimant: &ctx.accounts.solver,
-        proof: &ctx.accounts.proof,
-        intent_vault: &ctx.accounts.intent_vault,
-        withdrawn_marker: &ctx.accounts.withdrawn_marker,
-        proof_closer: &ctx.accounts.proof_closer,
-        portal_program: &ctx.accounts.portal_program,
-        local_prover_program: &ctx.accounts.local_prover_program,
-        prove_authority: &ctx.accounts.prove_authority,
-        local_prover_event_authority: &ctx.accounts.local_prover_event_authority,
-        token_program: &ctx.accounts.token_program,
-        token_2022_program: &ctx.accounts.token_2022_program,
-        system_program: &ctx.accounts.system_program,
-    }
-    .execute(intent_hash, route_hash, reward, &reward_transfers)
+    cpi::prove::prove_intent(
+        &ctx.accounts.local_prover_program,
+        &ctx.accounts.prove_authority,
+        &ctx.accounts.payer,
+        &ctx.accounts.system_program,
+        &ctx.accounts.local_prover_event_authority,
+        &ctx.accounts.proof,
+        intent_hash,
+        &ctx.accounts.solver.key(),
+    )?;
+
+    cpi::withdraw::withdraw_intent(
+        &ctx.accounts.portal_program,
+        &ctx.accounts.payer,
+        &ctx.accounts.solver,
+        &ctx.accounts.intent_vault,
+        &ctx.accounts.proof,
+        &ctx.accounts.proof_closer,
+        &ctx.accounts.local_prover_program,
+        &ctx.accounts.withdrawn_marker,
+        &ctx.accounts.token_program,
+        &ctx.accounts.token_2022_program,
+        &ctx.accounts.system_program,
+        &reward_transfers,
+        WithdrawArgs {
+            destination: CHAIN_ID,
+            route_hash,
+            reward,
+        },
+    )
 }
