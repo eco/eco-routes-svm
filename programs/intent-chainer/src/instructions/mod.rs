@@ -55,10 +55,9 @@ pub enum ChainerError {
     /// Intent2's reward has already been withdrawn. Pushing more into a settled
     /// vault would be unrecoverable by the claimant.
     IntentAlreadySettled,
-    /// The vault holds less than was pushed, e.g. a token-2022 transfer fee.
+    /// The vault's balance increase differs from the measured transfer amount.
     PushShortfall,
-    /// Intent2's vault already holds at least the input being pushed. The existing
-    /// collision guard tolerates dust below that threshold.
+    /// Reserved legacy code, no longer emitted. Keep subsequent error codes stable.
     VaultAlreadyFunded,
     /// `portal_program` does not match the committed `Order.portal`.
     InvalidPortalProgram,

@@ -277,6 +277,54 @@ impl Context {
         self.set_account(*mint, mint_account).unwrap();
     }
 
+    /// Initializes an actual Token-2022 transfer-fee mint through its instructions.
+    /// ATA creation and transfers therefore exercise the real extension processor.
+    pub fn create_transfer_fee_mint(&mut self, basis_points: u16, maximum_fee: u64) -> Pubkey {
+        use spl_token_2022::extension::transfer_fee::instruction;
+        use spl_token_2022::extension::ExtensionType;
+
+        assert_eq!(self.token_program, token_2022::ID);
+        let mint = Keypair::new();
+        let size = ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[
+            ExtensionType::TransferFeeConfig,
+        ])
+        .unwrap();
+        let authority = self.mint_authority.pubkey();
+        let instructions = [
+            solana_system_interface::instruction::create_account(
+                &authority,
+                &mint.pubkey(),
+                self.get_sysvar::<Rent>().minimum_balance(size),
+                size as u64,
+                &self.token_program,
+            ),
+            instruction::initialize_transfer_fee_config(
+                &self.token_program,
+                &mint.pubkey(),
+                None,
+                None,
+                basis_points,
+                maximum_fee,
+            )
+            .unwrap(),
+            spl_token_2022::instruction::initialize_mint2(
+                &self.token_program,
+                &mint.pubkey(),
+                &authority,
+                None,
+                6,
+            )
+            .unwrap(),
+        ];
+        let transaction = Transaction::new(
+            &[&self.mint_authority, &mint],
+            Message::new(&instructions, Some(&authority)),
+            self.latest_blockhash(),
+        );
+        self.send_transaction(transaction).unwrap();
+        mint.pubkey()
+    }
+
     pub fn airdrop_token_ata(&mut self, mint: &Pubkey, recipient: &Pubkey, amount: u64) {
         let recipient_token =
             get_associated_token_address_with_program_id(recipient, mint, &self.token_program);

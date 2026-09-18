@@ -101,6 +101,181 @@ fn published(c: &ChainedIntent, route: Vec<u8>) -> IntentPublished {
 }
 
 #[test]
+fn prefunded_vaults_accept_the_full_transfer_through_both_transports() {
+    for staged in [false, true] {
+        for prefund in [0, 1, 1_234_566, 1_234_567, 2_469_134] {
+            let mut ctx = Context::default();
+            let input = 1_234_567;
+            let mint = Pubkey::new_unique();
+            ctx.set_mint_account(&mint);
+            let recipient = Pubkey::new_unique();
+            let mut order =
+                ctx.intent_chainer()
+                    .svm_order(mint, recipient, local_prover::ID, WAD, 1);
+            order.require_publish = true;
+            let c = ctx.intent_chainer().resolve(&order, input, recipient);
+            ctx.intent_chainer().seed_escrow(&c, input);
+            ctx.airdrop_token_ata(&mint, &c.vault, prefund);
+            let meta = if staged {
+                let payer = ctx.payer.insecure_clone();
+                let buffer = staging::upload(
+                    &mut ctx,
+                    &payer,
+                    [0x51; 32],
+                    order.hash(),
+                    &borsh::to_vec(&order).unwrap(),
+                );
+                staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+                    .0
+                    .unwrap();
+                let ix = staging::execute(chain_instruction(&ctx, &c), buffer, false);
+                staging::send(&mut ctx, &payer, &[ix]).0.unwrap()
+            } else {
+                ctx.intent_chainer().chain(&c, false).unwrap()
+            };
+            assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
+            assert_eq!(ctx.token_balance(&c.vault_ata), prefund + input);
+            assert_eq!(
+                c.reward.tokens[0].amount, input,
+                "prefunding does not enlarge the reward"
+            );
+            assert!(contains_event(published(
+                &c,
+                borsh::to_vec(&c.route).unwrap()
+            ))(meta.clone()));
+            assert!(contains_event(IntentChained::new(
+                c.intent_hash,
+                c.order_commitment,
+                c.vault,
+                mint,
+                input,
+                input as u128,
+                order.destination,
+                c.route.hash(),
+                true,
+            ))(meta));
+        }
+    }
+}
+
+#[test]
+fn transfer_fee_push_shortfall_rolls_back_even_with_prefunding_and_staging() {
+    use anchor_spl::token_2022::spl_token_2022::extension::transfer_fee::TransferFeeAmount;
+    use anchor_spl::token_2022::spl_token_2022::extension::{
+        BaseStateWithExtensions, StateWithExtensions,
+    };
+    use anchor_spl::token_2022::spl_token_2022::instruction::transfer_checked;
+    use anchor_spl::token_2022::spl_token_2022::state::Account;
+
+    let input = 1_234_567u64;
+    let fee = input.div_ceil(100); // 100 basis points, uncapped.
+    for staged in [false, true] {
+        // The fee-sized prefund used to mask the short delivery in a total-balance
+        // check. Also cover ATA creation, an empty ATA, dust, equal and larger balances.
+        for prefund in [
+            None,
+            Some(0),
+            Some(1),
+            Some(fee),
+            Some(input),
+            Some(2 * input),
+        ] {
+            let mut ctx = Context::new_with_token_2022();
+            let mint = ctx.create_transfer_fee_mint(100, u64::MAX);
+            let payer = ctx.payer.insecure_clone();
+            let recipient = Pubkey::new_unique();
+            ctx.airdrop_token_ata(&mint, &payer.pubkey(), input);
+            ctx.airdrop_token_ata(&mint, &recipient, 0);
+            let recipient_ata = ata(&recipient, &mint, &ctx.token_program);
+
+            // Control: this exact mint's real Token-2022 processor withholds the
+            // expected fee. A plain mint or broken setup must not satisfy the test.
+            let transfer = transfer_checked(
+                &ctx.token_program,
+                &ata(&payer.pubkey(), &mint, &ctx.token_program),
+                &mint,
+                &recipient_ata,
+                &payer.pubkey(),
+                &[],
+                input,
+                6,
+            )
+            .unwrap();
+            staging::send(&mut ctx, &payer, &[transfer]).0.unwrap();
+            let recipient_account = ctx.get_account(&recipient_ata).unwrap();
+            let recipient_state =
+                StateWithExtensions::<Account>::unpack(&recipient_account.data).unwrap();
+            assert_eq!(recipient_state.base.amount, input - fee);
+            assert_eq!(
+                u64::from(
+                    recipient_state
+                        .get_extension::<TransferFeeAmount>()
+                        .unwrap()
+                        .withheld_amount
+                ),
+                fee
+            );
+
+            let mut order =
+                ctx.intent_chainer()
+                    .svm_order(mint, recipient_ata, local_prover::ID, WAD, 1);
+            order.require_publish = true;
+            let c = ctx.intent_chainer().resolve(&order, input, recipient_ata);
+            ctx.intent_chainer().seed_escrow(&c, input);
+            if let Some(amount) = prefund {
+                ctx.airdrop_token_ata(&mint, &c.vault, amount);
+            }
+            let escrow_before = ctx.get_account(&c.escrow_ata);
+            let vault_before = ctx.get_account(&c.vault_ata);
+            let mint_before = ctx.get_account(&mint);
+            let err = if staged {
+                let buffer = staging::upload(
+                    &mut ctx,
+                    &payer,
+                    [0x52; 32],
+                    order.hash(),
+                    &borsh::to_vec(&order).unwrap(),
+                );
+                staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+                    .0
+                    .unwrap();
+                let buffer_before = ctx.get_account(&buffer);
+                let ix = staging::execute(chain_instruction(&ctx, &c), buffer, false);
+                let err = staging::send(&mut ctx, &payer, &[ix]).0.unwrap_err();
+                assert_eq!(ctx.get_account(&buffer), buffer_before);
+                err
+            } else {
+                ctx.intent_chainer().chain(&c, false).unwrap_err()
+            };
+            assert_eq!(ctx.token_balance(&c.escrow_ata), input);
+            assert_eq!(ctx.get_account(&c.escrow_ata), escrow_before);
+            assert_eq!(
+                ctx.get_account(&c.vault_ata),
+                vault_before,
+                "including withheld fees and ATA creation"
+            );
+            assert_eq!(ctx.get_account(&mint), mint_before);
+            assert!(!contains_event(published(
+                &c,
+                borsh::to_vec(&c.route).unwrap()
+            ))(err.meta.clone()));
+            assert!(!contains_event(IntentChained::new(
+                c.intent_hash,
+                c.order_commitment,
+                c.vault,
+                mint,
+                input,
+                input as u128,
+                order.destination,
+                c.route.hash(),
+                true,
+            ))(err.meta.clone()));
+            assert!(is_error(ChainerError::PushShortfall)(err));
+        }
+    }
+}
+
+#[test]
 fn wide_initial_output_is_scaled_without_narrowing_on_sbf() {
     let (mut ctx, mut order, _, _) = setup(&fixtures::nested()["cases"][0]);
     let input = 1_000_000_001u64;
@@ -303,9 +478,9 @@ fn nested_order_mutation_cannot_use_foreign_escrow() {
 }
 
 #[test]
-fn nested_settlement_collision_transfer_and_publish_failures_preserve_custody() {
+fn nested_settlement_transfer_and_publish_failures_preserve_custody() {
     let data = fixtures::nested();
-    for failure in 0..4 {
+    for failure in [0, 2, 3] {
         let (mut ctx, mut order, input, route) = setup(&data["cases"][0]);
         if failure == 3 {
             // An executable, committed target that has no Portal publish handler.
@@ -316,7 +491,6 @@ fn nested_settlement_collision_transfer_and_publish_failures_preserve_custody() 
         ctx.intent_chainer().seed_escrow(&c, input);
         match failure {
             0 => ctx.set_withdrawn_marker(withdrawn_marker_pda(&order.portal, &c.intent_hash).0),
-            1 => ctx.airdrop_token_ata(&order.base_mint, &c.vault, input),
             2 => {
                 // A frozen source is a real token-program rejection after local
                 // account validation. ATA creation must roll back with transfer.
@@ -359,8 +533,6 @@ fn nested_settlement_collision_transfer_and_publish_failures_preserve_custody() 
         assert_eq!(ctx.get_account(&buffer).unwrap(), buffer_before);
         if failure == 0 {
             assert!(is_error(ChainerError::IntentAlreadySettled)(err));
-        } else if failure == 1 {
-            assert!(is_error(ChainerError::VaultAlreadyFunded)(err));
         } else if failure == 3 {
             let mut transfer_checked = vec![12];
             transfer_checked.extend_from_slice(&input.to_le_bytes());
