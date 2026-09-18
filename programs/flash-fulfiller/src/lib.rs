@@ -57,6 +57,7 @@ pub mod cpi;
 pub mod events;
 pub mod instructions;
 mod paired_fulfill;
+mod prove_withdraw;
 pub mod state;
 
 use instructions::*;

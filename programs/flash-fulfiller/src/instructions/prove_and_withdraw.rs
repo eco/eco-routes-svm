@@ -1,16 +1,14 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{token, token_2022};
-use eco_svm_std::prover::{self, IntentHashClaimant, ProofData, ProveArgs};
 use eco_svm_std::{Bytes32, CHAIN_ID};
-use portal::instructions::WithdrawArgs;
 use portal::types::{
     self, Reward, VecTokenTransferAccounts, VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
 
-use crate::cpi;
 use crate::instructions::FlashFulfillerError;
 use crate::paired_fulfill::require_paired_fulfill;
-use crate::state::{prove_authority_pda, PROVE_AUTHORITY_SEED};
+use crate::prove_withdraw::ProveWithdraw;
+use crate::state::prove_authority_pda;
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ProveAndWithdrawArgs {
@@ -89,48 +87,21 @@ pub fn prove_and_withdraw<'info>(
         FlashFulfillerError::InvalidRemainingAccounts
     );
     let reward_transfers = VecTokenTransferAccounts::try_from(ctx.remaining_accounts)?.into_inner();
-    let local_prover = ctx.accounts.local_prover_program.key();
-    let (_, bump) = prove_authority_pda(&local_prover);
-    let seeds: &[&[u8]] = &[PROVE_AUTHORITY_SEED, local_prover.as_ref(), &[bump]];
 
-    prover::prove(
-        &ctx.accounts.local_prover_program.to_account_info(),
-        &ctx.accounts.prove_authority.to_account_info(),
-        seeds,
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
-        &ctx.accounts.local_prover_event_authority.to_account_info(),
-        &ctx.accounts.proof.to_account_info(),
-        ProveArgs {
-            domain_id: CHAIN_ID,
-            proof_data: ProofData {
-                destination: CHAIN_ID,
-                intent_hashes_claimants: vec![IntentHashClaimant {
-                    intent_hash,
-                    claimant: ctx.accounts.solver.key().to_bytes().into(),
-                }],
-            },
-            data: vec![],
-        },
-    )?;
-
-    cpi::withdraw::withdraw_intent(
-        &ctx.accounts.portal_program.to_account_info(),
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.solver.to_account_info(),
-        &ctx.accounts.intent_vault.to_account_info(),
-        &ctx.accounts.proof.to_account_info(),
-        &ctx.accounts.proof_closer.to_account_info(),
-        &ctx.accounts.local_prover_program.to_account_info(),
-        &ctx.accounts.withdrawn_marker.to_account_info(),
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.token_2022_program.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
-        &reward_transfers,
-        WithdrawArgs {
-            destination: CHAIN_ID,
-            route_hash,
-            reward,
-        },
-    )
+    ProveWithdraw {
+        payer: &ctx.accounts.payer,
+        claimant: &ctx.accounts.solver,
+        proof: &ctx.accounts.proof,
+        intent_vault: &ctx.accounts.intent_vault,
+        withdrawn_marker: &ctx.accounts.withdrawn_marker,
+        proof_closer: &ctx.accounts.proof_closer,
+        portal_program: &ctx.accounts.portal_program,
+        local_prover_program: &ctx.accounts.local_prover_program,
+        prove_authority: &ctx.accounts.prove_authority,
+        local_prover_event_authority: &ctx.accounts.local_prover_event_authority,
+        token_program: &ctx.accounts.token_program,
+        token_2022_program: &ctx.accounts.token_2022_program,
+        system_program: &ctx.accounts.system_program,
+    }
+    .execute(intent_hash, route_hash, reward, &reward_transfers)
 }
