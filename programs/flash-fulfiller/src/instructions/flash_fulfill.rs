@@ -6,7 +6,6 @@ use anchor_spl::associated_token::{
 };
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
-use eco_svm_std::prover::{self, IntentHashClaimant, ProofData, ProveArgs};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use portal::instructions::{FulfillArgs, WithdrawArgs};
 use portal::types::{
@@ -19,7 +18,6 @@ use crate::events::FlashFulfilled;
 use crate::instructions::{close_buffer, FlashFulfillerError};
 use crate::state::{
     flash_vault_pda, prove_authority_pda, FlashFulfillIntentAccount, FLASH_VAULT_SEED,
-    PROVE_AUTHORITY_SEED,
 };
 
 struct FlashFulfillAccounts<'a, 'info> {
@@ -178,33 +176,15 @@ pub fn flash_fulfill<'info>(
     let (_, flash_vault_bump) = flash_vault_pda();
     let flash_vault_seeds: &[&[u8]] = &[FLASH_VAULT_SEED, &[flash_vault_bump]];
 
-    let local_prover = ctx.accounts.local_prover_program.key();
-    let (_, prove_authority_bump) = prove_authority_pda(&local_prover);
-    let prove_authority_seeds: &[&[u8]] = &[
-        PROVE_AUTHORITY_SEED,
-        local_prover.as_ref(),
-        &[prove_authority_bump],
-    ];
-
-    prover::prove(
-        &ctx.accounts.local_prover_program.to_account_info(),
-        &ctx.accounts.prove_authority.to_account_info(),
-        prove_authority_seeds,
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
-        &ctx.accounts.local_prover_event_authority.to_account_info(),
-        &ctx.accounts.proof.to_account_info(),
-        ProveArgs {
-            domain_id: CHAIN_ID,
-            proof_data: ProofData {
-                destination: CHAIN_ID,
-                intent_hashes_claimants: vec![IntentHashClaimant {
-                    intent_hash,
-                    claimant: flash_vault.to_bytes().into(),
-                }],
-            },
-            data: vec![],
-        },
+    cpi::prove::prove_intent(
+        &ctx.accounts.local_prover_program,
+        &ctx.accounts.prove_authority,
+        &ctx.accounts.payer,
+        &ctx.accounts.system_program,
+        &ctx.accounts.local_prover_event_authority,
+        &ctx.accounts.proof,
+        intent_hash,
+        &flash_vault,
     )?;
 
     let FlashFulfillAccounts {
@@ -215,17 +195,17 @@ pub fn flash_fulfill<'info>(
     } = extract_flash_fulfill_accounts(&ctx, reward.token_amounts()?.len(), route.tokens.len())?;
 
     cpi::withdraw::withdraw_intent(
-        &ctx.accounts.portal_program.to_account_info(),
-        &ctx.accounts.payer.to_account_info(),
-        &ctx.accounts.flash_vault.to_account_info(),
-        &ctx.accounts.intent_vault.to_account_info(),
-        &ctx.accounts.proof.to_account_info(),
-        &ctx.accounts.proof_closer.to_account_info(),
-        &ctx.accounts.local_prover_program.to_account_info(),
-        &ctx.accounts.withdrawn_marker.to_account_info(),
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.token_2022_program.to_account_info(),
-        &ctx.accounts.system_program.to_account_info(),
+        &ctx.accounts.portal_program,
+        &ctx.accounts.payer,
+        &ctx.accounts.flash_vault,
+        &ctx.accounts.intent_vault,
+        &ctx.accounts.proof,
+        &ctx.accounts.proof_closer,
+        &ctx.accounts.local_prover_program,
+        &ctx.accounts.withdrawn_marker,
+        &ctx.accounts.token_program,
+        &ctx.accounts.token_2022_program,
+        &ctx.accounts.system_program,
         &reward_transfers,
         WithdrawArgs {
             destination: CHAIN_ID,
