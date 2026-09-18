@@ -1348,16 +1348,10 @@ fn chain_works_with_token_2022() {
 // idempotence / repeat
 // ===========================================================================
 
-/// A salt collision must fail loudly, not merge silently.
-///
-/// The same order resolving to the same measured amount produces the same intent
-/// hash, so a second push would top up the first intent's vault rather than
-/// create a second intent — funding a delivery that already has a claimant, with
-/// no signal. The EVM contract cannot reach this state: its `publish` rejects an
-/// already-settled hash. Portal's `publish` is stateless, so the check is made
-/// against the vault's own balance instead.
+/// Refilling an identical order at the same amount funds the same child. It is
+/// the builder's job to use a fresh child salt for an independent execution.
 #[test]
-fn chaining_the_same_order_twice_is_refused() {
+fn refilling_the_same_order_funds_the_same_child() {
     let (mut ctx, base_mint, recipient_ata) = setup();
     let order = ctx.intent_chainer().svm_order(
         base_mint,
@@ -1374,30 +1368,33 @@ fn chaining_the_same_order_twice_is_refused() {
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
     assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
 
-    // Refill and chain again at the identical amount: same hash, same vault.
-    ctx.airdrop_token_ata(&base_mint, &chained.escrow_authority, DELIVERED);
-
+    // Repeating the call alone cannot replay the parent or spend anything twice.
     assert!(ctx
         .intent_chainer()
         .chain(&chained, false)
-        .is_err_and(is_error(ChainerError::VaultAlreadyFunded)));
+        .is_err_and(is_error(ChainerError::ZeroAmount)));
+
+    // Refill and chain again at the identical amount: same hash, same vault.
+    ctx.airdrop_token_ata(&base_mint, &chained.escrow_authority, DELIVERED);
+
+    assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
     assert_eq!(
         ctx.token_balance(&chained.vault_ata),
-        DELIVERED,
-        "the vault must not be topped up behind an existing claimant"
+        2 * DELIVERED,
+        "the identical child hash deliberately addresses the same vault"
     );
-    assert_eq!(
-        ctx.token_balance(&chained.escrow_ata),
-        DELIVERED,
-        "the refused push must leave the escrow recoverable"
-    );
+    assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
 }
 
-/// A partially funded vault is not a collision, so it must not be refused — the
-/// guard keys on "already funded to at least this amount", not "non-empty".
+/// Refund does not retire a Portal hash. An old proof is still for that exact
+/// child, so a builder must change the child's route salt for a new execution.
 #[test]
-fn a_dust_donation_to_the_vault_does_not_block_the_chain() {
-    let (mut ctx, base_mint, recipient_ata) = setup();
+fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
+    let (mut ctx, base_mint, _) = setup();
+    let beneficiary = Pubkey::new_unique();
+    ctx.airdrop_token_ata(&base_mint, &beneficiary, 0);
+    let recipient_ata =
+        get_associated_token_address_with_program_id(&beneficiary, &base_mint, &ctx.token_program);
     let order = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
@@ -1405,16 +1402,148 @@ fn a_dust_donation_to_the_vault_does_not_block_the_chain() {
         IDENTITY_SCALE,
         1,
     );
-    let chained = ctx
+    let old = ctx
         .intent_chainer()
         .resolve(&order, DELIVERED, recipient_ata);
-    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+    ctx.intent_chainer().seed_escrow(&old, DELIVERED);
+    ctx.intent_chainer().chain(&old, true).unwrap();
 
-    // Anyone can compute the vault once the amount is known and dust it.
-    ctx.airdrop_token_ata(&base_mint, &chained.vault, 1);
+    let solver = ctx.solver.pubkey();
+    let claimant = ctx.payer.pubkey();
+    ctx.airdrop_token_ata(&base_mint, &solver, DELIVERED);
+    ctx.airdrop_token_ata(&base_mint, &claimant, 0);
+    let (minimal_call, _, call_accounts) =
+        ctx.intent_chainer()
+            .deliver_to_escrow_call(base_mint, recipient_ata, DELIVERED);
+    let mut route = old.route.clone();
+    route.calls = vec![minimal_call];
+    let marker = FulfillMarker::pda(&old.intent_hash).0;
+    let solver_ata =
+        get_associated_token_address_with_program_id(&solver, &base_mint, &ctx.token_program);
+    let executor_ata = get_associated_token_address_with_program_id(
+        &executor_pda().0,
+        &base_mint,
+        &ctx.token_program,
+    );
+    ctx.portal()
+        .fulfill_intent(
+            old.intent_hash,
+            &route,
+            old.reward.hash(),
+            claimant.to_bytes().into(),
+            executor_pda().0,
+            marker,
+            vec![
+                AccountMeta::new(solver_ata, false),
+                AccountMeta::new(executor_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+            call_accounts,
+        )
+        .unwrap();
+    assert_eq!(ctx.token_balance(&recipient_ata), DELIVERED);
 
-    assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
-    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED + 1);
+    let creator = order.reward.creator;
+    ctx.airdrop_token_ata(&base_mint, &creator, 0);
+    let creator_ata =
+        get_associated_token_address_with_program_id(&creator, &base_mint, &ctx.token_program);
+    let old_proof = Proof::pda(&old.intent_hash, &local_prover::ID).0;
+    let old_withdrawn = withdrawn_marker_pda(&order.portal, &old.intent_hash).0;
+    ctx.warp_to_timestamp(old.reward.deadline as i64 + 1);
+    ctx.portal()
+        .refund_intent(
+            order.destination,
+            old.reward.clone(),
+            old.vault,
+            old.route.hash(),
+            old_proof,
+            old_withdrawn,
+            creator,
+            vec![
+                AccountMeta::new(old.vault_ata, false),
+                AccountMeta::new(creator_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+        )
+        .unwrap();
+    assert!(ctx.get_account(&old.vault_ata).is_none());
+    assert!(ctx.get_account(&old_withdrawn).is_none());
+    assert_eq!(ctx.token_balance(&creator_ata), DELIVERED);
+
+    // Proof propagation can finish after the refund. No replacement fulfillment
+    // occurs; this proof is authenticated by the original fulfillment marker.
+    ctx.portal()
+        .prove_intent_via_local_prover(
+            vec![old.intent_hash],
+            CHAIN_ID,
+            vec![marker],
+            dispatcher_pda(&local_prover::ID).0,
+            vec![old_proof],
+        )
+        .unwrap();
+
+    let mut fresh_order = order.clone();
+    let mut fresh_route = old.route.clone();
+    fresh_route.salt = [0x83; 32].into();
+    // Preserve every other rendered/hashed field, including the measured amount.
+    fresh_order.template.route =
+        intent_chainer::types::Template::literal(borsh::to_vec(&fresh_route).unwrap());
+    let fresh = ctx
+        .intent_chainer()
+        .resolve(&fresh_order, DELIVERED, recipient_ata);
+    assert_ne!(fresh.order_commitment, old.order_commitment);
+    assert_ne!(fresh.intent_hash, old.intent_hash);
+    assert_ne!(fresh.vault, old.vault);
+    assert_ne!(fresh.escrow_ata, old.escrow_ata);
+    assert_eq!(
+        borsh::to_vec(&fresh.reward).unwrap(),
+        borsh::to_vec(&old.reward).unwrap()
+    );
+    ctx.intent_chainer().seed_escrow(&fresh, DELIVERED);
+    ctx.intent_chainer().chain(&fresh, true).unwrap();
+    let fresh_withdrawn = withdrawn_marker_pda(&order.portal, &fresh.intent_hash).0;
+    let claimant_ata =
+        get_associated_token_address_with_program_id(&claimant, &base_mint, &ctx.token_program);
+    assert!(ctx
+        .portal()
+        .withdraw_intent(
+            order.destination,
+            fresh.reward.clone(),
+            fresh.vault,
+            fresh.route.hash(),
+            claimant,
+            old_proof,
+            fresh_withdrawn,
+            proof_closer_pda(&local_prover::ID).0,
+            vec![
+                AccountMeta::new(fresh.vault_ata, false),
+                AccountMeta::new(claimant_ata, false),
+                AccountMeta::new_readonly(base_mint, false)
+            ],
+            vec![AccountMeta::new(claimant, true)],
+        )
+        .is_err_and(is_error(portal::instructions::PortalError::InvalidProof)));
+    assert_eq!(ctx.token_balance(&fresh.vault_ata), DELIVERED);
+    assert_eq!(ctx.token_balance(&claimant_ata), 0);
+
+    ctx.portal()
+        .refund_intent(
+            order.destination,
+            fresh.reward.clone(),
+            fresh.vault,
+            fresh.route.hash(),
+            Proof::pda(&fresh.intent_hash, &local_prover::ID).0,
+            fresh_withdrawn,
+            creator,
+            vec![
+                AccountMeta::new(fresh.vault_ata, false),
+                AccountMeta::new(creator_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+        )
+        .unwrap();
+    assert_eq!(ctx.token_balance(&creator_ata), 2 * DELIVERED);
+    assert!(ctx.get_account(&fresh.vault_ata).is_none());
 }
 
 #[test]

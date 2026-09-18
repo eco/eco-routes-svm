@@ -200,9 +200,12 @@ order hash and `escrow_authority_pda(order_hash)`.
   native amount zero. The runtime measured Input fills that token amount.
 - Callers may strengthen publication, never weaken it:
   `effective_publish = order.require_publish || call.publish`.
-- Existing local account checks, WithdrawnMarker check, funded-vault collision threshold,
-  transfer accounting, and Portal withdraw/refund behavior are unchanged. No Portal
-  settlement redesign or general Token-2022 extension/transfer-hook support is added.
+- Local account checks and the WithdrawnMarker check apply regardless of publication.
+  Existing vault balances of any size are allowed. `PushShortfall` requires the vault's
+  balance increase to equal the measured input; existing funds cannot mask a transfer
+  fee. A short transfer rolls back the escrow debit, vault credit, withheld fees and
+  any new ATA. Portal withdraw/refund behavior is unchanged; this does not add general
+  Token-2022 extension/transfer-hook support.
 - A failed transaction rolls back its transfer and ATA creation, not intent1's earlier
   fulfillment. A retry retains the exact committed order and recomputes the account list.
 - There is **no chainer deadline/buffer gate**. Builders budget deadline headroom before
@@ -210,13 +213,34 @@ order hash and `escrow_authority_pda(order_hash)`.
   near/after expiry, so Portal can refund an unproven intent or pay its proven claimant.
   A valid proof blocks refund until withdrawal. All other chainer checks still apply.
 - Invalid amount widths, an unmet minimum, an unusable remote template or an existing
-  settled/colliding child are not repaired by an announcement. There is no generic
+  withdrawn child are not repaired by an announcement. There is no generic
   chainer refund or arbitrary sweep. Keeping the preimage is necessary, not a guarantee
   that every permanently invalid funded order can recover.
 
-Use fresh route salts and coherent token-leg/call amounts. Different orders can resolve
-to the same child intent (for example, differing only in minimum input). A live destination
-balance can also change; custody/account checks remain authoritative.
+### Child identity belongs to the builder
+
+Use a fresh child route salt for every independent execution and coherent token-leg/call
+amounts. Uniqueness is required for each nested child as well as the root. Different
+parents or Order commitments do not imply different children: changing only minimum input
+can change the escrow while leaving the rendered child intent unchanged.
+
+Reusing the child's salt, destination, all route/reward bytes and measured amount derives
+the same intent hash and vault. Funding it again funds that same intent; it does not buy
+another fulfillment. A vault balance cannot prove freshness, and legitimate prefunding
+can have any size, so the chainer imposes no empty-vault or already-funded-vault policy.
+The reserved `VaultAlreadyFunded` error number remains for ABI compatibility but is never
+emitted. `PushShortfall` checks the current transfer independently of existing funds.
+
+Portal's refund does not write a terminal marker. A delayed proof for a refunded hash
+still refers to that exact child; re-funding the same hash can pay its original claimant.
+Builders must not treat a refund as permission to recycle a child salt. A fresh salt
+derives a different vault and proof PDA. The chainer keeps the WithdrawnMarker check,
+but adds no consumption registry or settlement nonce. Repeating `chain` after draining
+the escrow fails with `ZeroAmount`; putting new tokens into that escrow is a separate
+funding action, not replay of the parent's fulfillment.
+
+A live escrow balance can change before execution; custody/account checks remain
+authoritative, and callers must rederive the child accounts when it does.
 
 ## Durable announcements and events
 
@@ -312,7 +336,7 @@ Closing cannot erase the recorded announcement or the escrow's commitment.
 Buffers are reusable transport, **not single-use settlement records**. Replaying after
 a drain fails on the empty escrow. Replaying against a different order's new escrow
 fails its commitment check. Re-funding the same order still follows the existing
-measurement, collision and WithdrawnMarker rules; staging adds no new settlement nonce.
+measurement, transfer-delivery and WithdrawnMarker rules; staging adds no new settlement nonce.
 Every execution revalidates templates/configs/rewards, remeasures, checks local accounts,
 and applies publication strengthening. There is **no deadline gate**, including at seal.
 A stale account list or failed transfer/publication leaves both buffer and escrow intact.

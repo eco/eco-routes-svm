@@ -3,7 +3,6 @@ use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
 use anchor_lang::InstructionData;
 use anchor_spl::associated_token::{self, get_associated_token_address_with_program_id};
-use anchor_spl::token_interface::TokenAccount;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::Bytes32;
 use portal::types::{intent_hash, TokenTransferAccounts};
@@ -123,7 +122,6 @@ pub(crate) fn chain_order<'info>(
 
     let intent_hash = intent_hash(order.destination, &route_hash, &reward.hash());
     validate_destination(&ctx, &order, &intent_hash)?;
-    validate_vault_is_unfunded(&ctx, amount_in)?;
 
     push(&ctx, &order_commitment, escrow, amount_in)?;
 
@@ -157,11 +155,10 @@ pub(crate) fn validate_order(order: &Order) -> Result<()> {
 
     // Exactly one leg, in the measured mint, authored at zero.
     //
-    // A leg in any other mint could never be funded from here — the vault address
-    // is unknowable until the amount is measured, so nothing can pre-fund it — and
-    // once such an intent is proven its vault is stuck: portal's `refund` refuses
-    // for as long as a `Proof` exists, while `withdraw` pays only what the vault
-    // actually holds.
+    // This program transfers only the measured mint. It cannot guarantee funding
+    // for another reward leg, even if a caller separately prefunds that vault.
+    // Portal's `refund` refuses while a `Proof` exists, while `withdraw` pays only
+    // what the vault actually holds.
     require!(
         order.reward.tokens.len() == 1,
         ChainerError::InvalidRewardLegCount
@@ -291,11 +288,11 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
     // (`refund.rs:82`). So a *refunded* intent leaves no marker and passes this
     // check, where on EVM `Status.Refunded` is terminal.
     //
-    // Not believed exploitable: two orders resolving to the same intent hash carry
-    // an identical reward by construction, so a re-funded intent still pays its own
-    // claimant or refunds to the same creator. Closing it properly would mean
-    // portal recording refunds, which is a portal decision, not one this program
-    // can make.
+    // A fresh child route salt is the builder's responsibility. Reusing every
+    // hashed field and the measured amount funds the SAME child intent, including
+    // any delayed proof for it; a different parent or order does not create a new
+    // claim. Neither a vault balance nor this marker proves child-hash uniqueness.
+    // Portal's refund/late-proof semantics are unchanged here.
     require!(
         ctx.accounts.withdrawn_marker.key() == withdrawn_marker_pda(&order.portal, intent_hash).0,
         ChainerError::InvalidWithdrawnMarker
@@ -304,32 +301,6 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
         ctx.accounts.withdrawn_marker.data_is_empty(),
         ChainerError::IntentAlreadySettled
     );
-
-    Ok(())
-}
-
-/// Refuses a salt collision before it becomes a silent merge.
-///
-/// Two orders producing identical destination, route and reward bytes resolve
-/// to the same intent hash. The second push would top up the first vault rather
-/// than create a second intent. Portal's stateless `publish` does not enforce
-/// freshness: settlement is checked separately in `validate_destination`, and
-/// this balance check preserves the existing funding-collision guard.
-///
-/// The existing collision threshold is the measured input, not non-emptiness:
-/// dust donations below that threshold do not prevent chaining. The balance is
-/// a guard against merging funding, not proof that an intent hash is fresh.
-fn validate_vault_is_unfunded(ctx: &Context<Chain>, amount_in: u64) -> Result<()> {
-    let vault_ata = &ctx.accounts.vault_ata;
-    if vault_ata.data_is_empty() {
-        return Ok(());
-    }
-
-    let funded = TokenAccount::try_deserialize(&mut &vault_ata.try_borrow_data()?[..])
-        .map(|account| account.amount)
-        .unwrap_or_default();
-
-    require!(funded < amount_in, ChainerError::VaultAlreadyFunded);
 
     Ok(())
 }
@@ -369,6 +340,10 @@ fn push<'info>(
         ))?;
     }
 
+    // Prefunding is allowed at any balance. Child-hash uniqueness belongs to the
+    // builder; this snapshot measures only what the current transfer delivers.
+    let balance_before = accounts.to_data()?.amount;
+
     // The commitment is threaded in rather than recomputed: `Order::hash` keccaks
     // the whole order, route segments included, and once per call is enough.
     let signer_seeds = [ESCROW_SEED, order_commitment.as_ref(), &[escrow.bump]];
@@ -380,13 +355,11 @@ fn push<'info>(
         amount_in,
     )?;
 
-    // Portal reads the vault's live balance to decide what a claimant is owed, so a
-    // mint that delivers less than it was sent (a token-2022 transfer fee) would
-    // leave intent2 quietly payable only in part. Reject it while the escrow is
-    // still whole. Preserve the existing local post-transfer balance floor;
-    // this is not an attestation of arbitrary Token-2022 extension semantics.
+    // Existing funds must not mask an outbound transfer fee. Reject any short
+    // delivery atomically, restoring both the escrow and the prefunded vault.
+    // This does not attest to arbitrary Token-2022 extension semantics.
     require!(
-        accounts.to_data()?.amount >= amount_in,
+        accounts.to_data()?.amount.checked_sub(balance_before) == Some(amount_in),
         ChainerError::PushShortfall
     );
 
