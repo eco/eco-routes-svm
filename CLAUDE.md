@@ -114,6 +114,12 @@ User ───────────────► Portal ◄──── Sol
 
 In `flash_fulfill`, `strip_call_accounts` truncates each call's Borsh tail in-place rather than deserialize/reserialize — the bump allocator never frees, so a round-trip retains ~3× the call size and pushes deep CPI chains into OOM.
 
+### flash-fulfiller / portal ABI coupling
+
+`paired_fulfill.rs` matches the paired instruction against `portal::ID`, `portal::instruction::Fulfill::DISCRIMINATOR`, the intent hash at `data[8..40]`, and account indices 1 (`solver`) and 3 (`fulfill_marker`). All four are compiled into the flash-fulfiller binary from the portal crate, and `fulfill_abi_pins_hash_offset_and_account_indices` pins them against the same source tree — so it cannot see drift against a *deployed* portal.
+
+Under the redeploy model (portal gets a new program ID, never an in-place upgrade) this is self-enforcing: a new ID changes `portal::ID`, which forces a flash-fulfiller rebuild that picks up any layout change with it. **The one unguarded case is upgrading portal in place with a reordered `FulfillArgs` or `Fulfill` account list.** That either bricks `prove_and_withdraw` (every call returns `MissingPairedFulfill`) or, if index 1 stops being the solver signer, matches a weaker shape than intended. Redeploy flash-fulfiller alongside any portal change that touches either layout.
+
 ## Integration tests (`integration-tests/`)
 
 Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_token_account`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.

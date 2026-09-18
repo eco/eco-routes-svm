@@ -312,6 +312,19 @@ otherwise occupied by `flash_fulfill`. Build one transaction containing:
 3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver.
 4. `portal.fulfill`, signed by the payer and the same solver, with the full route.
 
+`portal::accounts::Fulfill` does not declare `executor` as `mut`, so Anchor's
+generated metas leave it read-only. When `route.native_amount > 0`, portal's
+`fund_executor` transfers lamports into it and the instruction fails with
+`PrivilegeEscalation` unless the client marks it writable:
+
+```rust
+let mut accounts = portal::accounts::Fulfill { /* ... */ }.to_account_metas(None);
+accounts[2].is_writable = route.native_amount > 0; // executor
+```
+
+A route whose `calls` already pass the executor writable is unaffected; the split
+path's routes often have none, so the fixup is load-bearing there.
+
 The new instruction takes only the route hash and reward. Its remaining accounts
 are `(intent_vault_ata, solver_ata, mint)` triples, one per unique reward mint in
 `Reward::token_amounts()` order. Native rewards go directly to the solver. Fulfill
@@ -325,6 +338,10 @@ top-level fulfill is also allowed because it has already succeeded; a later fail
 rolls back both instructions. Portal validates the full route and its execution.
 The guard does not require adjacency or constrain fulfill's claimant to the solver;
 the new proof's claimant and reward recipient are always the solver.
+
+The guard's match is pinned at compile time — see
+[flash-fulfiller / portal ABI coupling](CLAUDE.md#flash-fulfiller--portal-abi-coupling)
+before upgrading portal in place.
 
 Clients must still fit the whole transaction into Solana's transaction limits;
 this path removes a CPI frame, and does not provide an intent buffer. The existing
