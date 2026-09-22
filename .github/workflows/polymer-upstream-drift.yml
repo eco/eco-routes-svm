@@ -67,6 +67,18 @@ jobs:
         if: matrix.cluster == 'mainnet'
         run: anchor build --program-name polymer-prover -- --features mainnet
 
+      # The matrix duplicates the crate's cluster constants by hand; a typo in either
+      # copy would dump a different program than the one polymer-prover CPIs into.
+      # Whitespace-collapsed so `cargo +nightly fmt` wrapping the declaration (both are
+      # over max_width) cannot break the match.
+      - name: Assert the matrix program ID matches the crate constant
+        env:
+          KIND: ${{ matrix.cluster == 'mainnet' && 'MAINNET' || 'DEVNET' }}
+          PROGRAM_ID: ${{ matrix.program_id }}
+        run: |
+          tr -s '[:space:]' ' ' < programs/polymer-prover/src/polymer.rs \
+            | grep -Eq "${KIND}_POLYMER_PROVER_ID: ?Pubkey ?= ?pubkey!\(\"${PROGRAM_ID}\"\)"
+
       - name: Dump Polymer's deployed program
         run: |
           solana program show ${{ matrix.program_id }} --url ${{ matrix.url }}
@@ -76,4 +88,6 @@ jobs:
       - name: Run the real-program wiring test
         env:
           POLYMER_PROVER_SO: ${{ runner.temp }}/polymer_prover.so
-        run: cargo test ${{ matrix.test_features }} --test validate_polymer_prover_real -- --ignored
+        # --nocapture surfaces the measured `validate_event` compute cost in the job
+        # log so the trend is visible before the inbound batch headroom is breached.
+        run: cargo test ${{ matrix.test_features }} --test validate_polymer_prover_real -- --ignored --nocapture

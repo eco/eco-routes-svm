@@ -1,7 +1,10 @@
 //! Hand-rolled mirror of the pieces of Polymer's deployed `polymer_prover`
-//! program (polymerdao/solana-prover-contracts v1.0.4) that this program
-//! consumes. Kept as constants rather than a crate dependency so Polymer's
-//! crypto dependencies and Anchor pin stay out of our build graph.
+//! program (polymerdao/solana-prover-contracts v1.0.4) that this repository
+//! consumes: the program itself (`validate_event`, the result account, the
+//! PDAs) plus the relayer-side selectors the real-binary smoke test drives
+//! (`create_accounts`, `load_proof`, `InternalAccount`). Kept as constants
+//! rather than a crate dependency so Polymer's crypto dependencies and Anchor
+//! pin stay out of our build graph.
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
@@ -9,10 +12,20 @@ use anchor_lang::solana_program::program::invoke;
 
 use crate::instructions::PolymerProverError;
 
+// Both clusters' IDs are named so the PDA golden can pin both derivations
+// whatever feature the test build uses. `.github/workflows/polymer-upstream-drift.yml`
+// greps these two declarations (whitespace-insensitively, so rustfmt may wrap
+// them) to keep its matrix in step; `cluster_ids_are_polymers_deployments`
+// pins the literals on the Rust side.
+pub const MAINNET_POLYMER_PROVER_ID: Pubkey =
+    pubkey!("CdvSq48QUukYuMczgZAVNZrwcHNshBdtqrjW26sQiGPs");
+pub const DEVNET_POLYMER_PROVER_ID: Pubkey =
+    pubkey!("FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3");
+
 #[cfg(feature = "mainnet")]
-pub const POLYMER_PROVER_ID: Pubkey = pubkey!("CdvSq48QUukYuMczgZAVNZrwcHNshBdtqrjW26sQiGPs");
+pub const POLYMER_PROVER_ID: Pubkey = MAINNET_POLYMER_PROVER_ID;
 #[cfg(not(feature = "mainnet"))]
-pub const POLYMER_PROVER_ID: Pubkey = pubkey!("FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3");
+pub const POLYMER_PROVER_ID: Pubkey = DEVNET_POLYMER_PROVER_ID;
 
 pub const CACHE_SEED: &[u8] = b"cache";
 pub const RESULT_SEED: &[u8] = b"result";
@@ -153,21 +166,65 @@ mod tests {
         );
     }
 
-    /// Pins the PDAs under the configured Polymer program. The golden holds the
-    /// devnet derivation; under `mainnet` the constant (and so every address)
-    /// differs by design, so the test is skipped rather than failed there.
+    /// Pins the PDA derivations under both clusters' Polymer program IDs
+    /// explicitly, not under the cfg-selected one, so the golden is identical
+    /// with and without `--features mainnet` and runs in both profiles.
     #[test]
-    #[cfg_attr(
-        feature = "mainnet",
-        ignore = "golden pins the devnet POLYMER_PROVER_ID"
-    )]
     fn pdas_deterministic() {
         let authority = Pubkey::new_from_array([7u8; 32]);
+        let pdas = |program: &Pubkey| {
+            (
+                Pubkey::find_program_address(&[CACHE_SEED, authority.as_ref()], program),
+                Pubkey::find_program_address(&[RESULT_SEED, authority.as_ref()], program),
+                Pubkey::find_program_address(&[INTERNAL_SEED], program),
+            )
+        };
         goldie::assert_json!((
-            cache_pda(&authority),
-            result_pda(&authority),
-            internal_pda()
+            pdas(&DEVNET_POLYMER_PROVER_ID),
+            pdas(&MAINNET_POLYMER_PROVER_ID)
         ));
+    }
+
+    /// Feature-independent twin of the drift workflow's matrix grep: the two
+    /// literals are Polymer's deployments (polymerdao/solana-prover-contracts
+    /// v1.0.4), so a refactor of the declarations cannot swap or retype them.
+    #[test]
+    fn cluster_ids_are_polymers_deployments() {
+        assert_eq!(
+            MAINNET_POLYMER_PROVER_ID,
+            pubkey!("CdvSq48QUukYuMczgZAVNZrwcHNshBdtqrjW26sQiGPs")
+        );
+        assert_eq!(
+            DEVNET_POLYMER_PROVER_ID,
+            pubkey!("FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3")
+        );
+    }
+
+    #[test]
+    fn polymer_prover_id_tracks_the_mainnet_feature() {
+        #[cfg(feature = "mainnet")]
+        assert_eq!(POLYMER_PROVER_ID, MAINNET_POLYMER_PROVER_ID);
+        #[cfg(not(feature = "mainnet"))]
+        assert_eq!(POLYMER_PROVER_ID, DEVNET_POLYMER_PROVER_ID);
+    }
+
+    /// The helpers derive under the cfg-selected ID; `pdas_deterministic` pins
+    /// the bytes, this pins the wiring between the two.
+    #[test]
+    fn pda_helpers_derive_under_the_selected_id() {
+        let authority = Pubkey::new_from_array([7u8; 32]);
+        assert_eq!(
+            cache_pda(&authority),
+            Pubkey::find_program_address(&[CACHE_SEED, authority.as_ref()], &POLYMER_PROVER_ID)
+        );
+        assert_eq!(
+            result_pda(&authority),
+            Pubkey::find_program_address(&[RESULT_SEED, authority.as_ref()], &POLYMER_PROVER_ID)
+        );
+        assert_eq!(
+            internal_pda(),
+            Pubkey::find_program_address(&[INTERNAL_SEED], &POLYMER_PROVER_ID)
+        );
     }
 
     fn sample_result() -> ValidationResult {
