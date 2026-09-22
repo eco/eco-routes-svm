@@ -50,6 +50,13 @@ A specialized program that integrates with Hyperlane for cross-chain message del
 - **Message Validation**: Uses Hyperlane's default ISM (Interchain Security Module) for message security — the prover does not configure a custom ISM, so the mailbox's default ISM is used for all incoming messages
 - **Account Management**: Manages proof accounts and cleanup operations
 
+#### **Polymer-Prover Program** (`programs/polymer-prover/`)
+A pull-based prover backed by Polymer's proof network:
+
+- **Proof Validation**: Permissionless `validate` CPIs Polymer's `validate_event` and reads the freshly-written result account in the same instruction, then mirrors the Solidity `PolymerProver.validate` checks before creating idempotent `Proof` PDAs
+- **Reverse Direction**: `prove` emits a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse
+- **Proof Cleanup**: Called back by Portal during `withdraw` to close the Proof PDA and reclaim rent
+
 #### **Local-Prover Program** (`programs/local-prover/`)
 A prover for same-chain intents (Solana source and destination):
 
@@ -285,6 +292,20 @@ anchor test --skip-deploy
 - `ProofAccount` - Stores proof data for intent fulfillment
 - `Config` - Prover configuration with whitelisted senders
 
+### Polymer-Prover Program
+
+A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobody calls it directly — a relayer loads a Polymer proof into Polymer's program, then calls this program's permissionless `validate`.
+
+#### Key Instructions:
+- `init` - Initialize prover with whitelisted emitters
+- `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
+- `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse
+- `close_proof` - Clean up proof accounts after successful withdrawal (called by Portal during `withdraw`)
+
+#### Key Accounts:
+- `ProofAccount` - Stores proof data for intent fulfillment
+- `Config` - Prover configuration with whitelisted emitters
+
 ### Local-Prover Program
 
 A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
@@ -338,6 +359,11 @@ A simplified ISM implementation used as the mailbox's default ISM in local test 
 - `flash_fulfill.rs` - Atomic flash-fulfillment flows
 - `set_flash_fulfill_intent.rs` - Flash-fulfillment intent buffer writes
 - `pay_for_gas.rs` - Hyperlane gas payment via proof-helper
+- `init_polymer_prover.rs` - PolymerProver initialization
+- `validate_polymer_prover.rs` - PolymerProver proof validation
+- `prove_polymer_prover.rs` - PolymerProver reverse-direction log emission
+- `close_proof_polymer_prover.rs` - PolymerProver proof cleanup
+- `validate_polymer_prover_real.rs` - Ignored smoke test against Polymer's real deployed program
 
 #### Test Patterns:
 ```rust
@@ -389,7 +415,7 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `flash-fulfiller`, `proof-helper`):
+The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`):
 
 ```toml
 [features]
@@ -439,16 +465,18 @@ anchor deploy --provider.cluster mainnet
 
 The `Anchor.toml` file includes network-specific program configurations:
 
-- **Localnet**: Includes `dummy-ism` for testing
-- **Devnet**: Excludes `dummy-ism` (production-like environment)
-- **Mainnet**: Excludes `dummy-ism` (production only)
+- **Localnet**: Includes `dummy-ism` and `mock-polymer-prover` for testing
+- **Devnet**: Excludes `dummy-ism` and `mock-polymer-prover` (production-like environment)
+- **Mainnet**: Excludes `dummy-ism` and `mock-polymer-prover` (production only)
 
 ```toml
 [programs.localnet]
 dummy-ism = "..."         # Only for testing
+mock-polymer-prover = "..." # Only for testing
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
+polymer-prover = "..."
 portal = "..."
 proof-helper = "..."
 
@@ -456,17 +484,19 @@ proof-helper = "..."
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
+polymer-prover = "..."
 portal = "..."
 proof-helper = "..."
-# dummy-ism excluded
+# dummy-ism, mock-polymer-prover excluded
 
 [programs.mainnet]
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
+polymer-prover = "..."
 portal = "..."
 proof-helper = "..."
-# dummy-ism excluded
+# dummy-ism, mock-polymer-prover excluded
 ```
 
 ### Environment Configuration

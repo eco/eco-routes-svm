@@ -306,8 +306,10 @@ constructed with the existing Tron whitelist plus the Solana program ID.
 
 ### Integration (litesvm)
 
-- New `integration-tests/programs/mock-polymer-prover`, an Anchor program registered under
-  `[programs.localnet]` only and declared at the devnet Polymer ID. It implements
+- New `programs/mock-polymer-prover`, an Anchor program registered under
+  `[programs.localnet]` only and declared at the devnet Polymer ID. It lives beside
+  `dummy-ism` because `anchor build` compiles `programs/*`; `integration-tests/programs/`
+  is only for non-Anchor programs built with `cargo build-sbf`. It implements
   `create_accounts`, `load_proof` and `validate_event` with Polymer's exact account seeds
   and layouts. Its `validate_event` interprets the accumulated cache bytes as a Borsh
   `ValidationResultAccount` body, writes it to the result account and clears the cache, so
