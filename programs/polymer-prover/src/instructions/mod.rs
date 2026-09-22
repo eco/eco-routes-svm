@@ -4,12 +4,12 @@ use anchor_lang::prelude::*;
 // mod close_proof;
 mod init;
 // mod prove;
-// mod validate;
+mod validate;
 
 // pub use close_proof::*;
 pub use init::*;
 // pub use prove::*;
-// pub use validate::*;
+pub use validate::*;
 
 #[error_code]
 pub enum PolymerProverError {

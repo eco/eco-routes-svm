@@ -47,7 +47,7 @@ const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer
 const MOCK_POLYMER_PROVER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/mock_polymer_prover.so");
 
-type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
+pub type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
 /// An intent already put through `fulfill` by [`Context::fulfill_rand_intents`].
 /// `route` and `reward_hash` are kept so callers can replay the same `fulfill`.

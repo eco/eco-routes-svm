@@ -16,4 +16,8 @@ pub mod polymer_prover {
     pub fn init(ctx: Context<Init>, args: InitArgs) -> Result<()> {
         instructions::init(ctx, args)
     }
+
+    pub fn validate<'info>(ctx: Context<'info, Validate<'info>>) -> Result<()> {
+        instructions::validate(ctx)
+    }
 }
