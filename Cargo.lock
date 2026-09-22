@@ -2181,6 +2181,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "polymer-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "eco-svm-std",
+ "getrandom 0.2.17",
+ "goldie",
+ "portal",
+]
+
+[[package]]
 name = "polyval"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

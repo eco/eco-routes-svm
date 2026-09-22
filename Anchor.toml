@@ -12,6 +12,7 @@ malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
+polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
@@ -20,6 +21,7 @@ flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
+polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
@@ -27,6 +29,7 @@ flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
+polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [registry]
@@ -38,8 +41,8 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 build-localnet = "anchor build"
-build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper"
-build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet"
-deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name flash-fulfiller && anchor deploy --provider.cluster devnet --program-name proof-helper"
-deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name flash-fulfiller && anchor deploy --provider.cluster mainnet --program-name proof-helper"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper && anchor build --program-name polymer-prover"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet && anchor build --program-name polymer-prover -- --features mainnet"
+deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name flash-fulfiller && anchor deploy --provider.cluster devnet --program-name proof-helper && anchor deploy --provider.cluster devnet --program-name polymer-prover"
+deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name flash-fulfiller && anchor deploy --provider.cluster mainnet --program-name proof-helper && anchor deploy --provider.cluster mainnet --program-name polymer-prover"
 test = "cargo test --no-fail-fast"

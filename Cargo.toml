@@ -24,6 +24,7 @@ local-prover = { path = "programs/local-prover" }
 malicious-proof-closer = { path = "programs/malicious-proof-closer" }
 malicious-prover = { path = "programs/malicious-prover" }
 mock-igp = { path = "integration-tests/programs/mock-igp" }
+polymer-prover = { path = "programs/polymer-prover" }
 portal = { path = "programs/portal" }
 proof-helper = { path = "programs/proof-helper" }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
