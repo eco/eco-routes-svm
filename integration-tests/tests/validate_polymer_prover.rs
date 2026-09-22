@@ -1,5 +1,5 @@
 use anchor_lang::prelude::{borsh, AccountMeta};
-use anchor_lang::AccountDeserialize;
+use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
 use eco_svm_std::prover::{self, IntentHashClaimant, Proof, ProofData};
 use eco_svm_std::CHAIN_ID;
 use mock_polymer_prover::ValidationResultAccount;
@@ -225,4 +225,226 @@ fn mock_polymer_load_result_roundtrip() {
     let _: ValidationResultAccount = ctx
         .account(&polymer::result_pda(&authority.pubkey()).0)
         .unwrap();
+}
+
+#[test]
+fn validate_polymer_invalid_result_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let mut event = event_for(&pairs);
+    event.is_valid = false;
+    event.error_message = "invalid membership proof: can't read path".into();
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::PolymerProofInvalid)));
+}
+
+#[test]
+fn validate_non_whitelisted_emitter_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let mut event = event_for(&pairs);
+    event.emitting_contract = [0x11; 20];
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(
+        PolymerProverError::InvalidEmittingContract
+    )));
+}
+
+#[test]
+fn validate_wrong_topics_length_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let mut event = event_for(&pairs);
+    event.topics.extend_from_slice(&[0u8; 32]);
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidTopicsLength)));
+}
+
+#[test]
+fn validate_wrong_event_signature_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let mut event = event_for(&pairs);
+    event.topics[0] ^= 0xff;
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidEventSignature)));
+}
+
+#[test]
+fn validate_wrong_source_chain_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let event = intent_fulfilled_result(
+        EMITTER,
+        CHAIN_ID + 1,
+        EVM_CHAIN_ID,
+        ProofData::new(EVM_CHAIN_ID.into(), pairs.clone()).to_bytes(),
+    );
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidSourceChain)));
+}
+
+#[test]
+fn validate_destination_mismatch_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    // Payload claims destination 10, Polymer says the event came from 8453.
+    let event = intent_fulfilled_result(
+        EMITTER,
+        CHAIN_ID,
+        EVM_CHAIN_ID,
+        ProofData::new(10, pairs.clone()).to_bytes(),
+    );
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(
+        PolymerProverError::InvalidDestinationChain
+    )));
+}
+
+#[test]
+fn validate_malformed_abi_data_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let mut event = event_for(&pairs);
+    event.unindexed_data.truncate(40);
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidEventData)));
+}
+
+#[test]
+fn validate_unaligned_pairs_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let mut encoded = ProofData::new(EVM_CHAIN_ID.into(), pairs.clone()).to_bytes();
+    encoded.push(0);
+    let event = intent_fulfilled_result(EMITTER, CHAIN_ID, EVM_CHAIN_ID, encoded);
+
+    let result = load_and_validate(&mut fixture, &event, proof_metas(&pairs));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidEventData)));
+}
+
+#[test]
+fn validate_empty_pairs_fail() {
+    let mut fixture = setup();
+    let event = intent_fulfilled_result(
+        EMITTER,
+        CHAIN_ID,
+        EVM_CHAIN_ID,
+        ProofData::new(EVM_CHAIN_ID.into(), vec![]).to_bytes(),
+    );
+
+    let result = load_and_validate(&mut fixture, &event, vec![]);
+    assert!(result.is_err_and(common::is_error(PolymerProverError::EmptyProofData)));
+}
+
+#[test]
+fn validate_proof_account_count_mismatch_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(2);
+
+    let result = load_and_validate(&mut fixture, &event_for(&pairs), proof_metas(&pairs[..1]));
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidProof)));
+}
+
+#[test]
+fn validate_wrong_proof_pda_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let wrong = vec![AccountMeta::new(Pubkey::new_unique(), false)];
+
+    let result = load_and_validate(&mut fixture, &event_for(&pairs), wrong);
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidProof)));
+}
+
+#[test]
+fn validate_wrong_polymer_program_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    fixture
+        .ctx
+        .polymer_prover()
+        .polymer_load_result(&fixture.authority, &event_for(&pairs))
+        .unwrap();
+
+    // Hand-build the instruction with local-prover in the Polymer program slot.
+    let authority = &fixture.authority;
+    let mut accounts = polymer_prover::accounts::Validate {
+        authority: authority.pubkey(),
+        config: Config::pda().0,
+        cache_account: polymer::cache_pda(&authority.pubkey()).0,
+        result_account: polymer::result_pda(&authority.pubkey()).0,
+        internal: polymer::internal_pda().0,
+        polymer_prover_program: local_prover::ID,
+        system_program: anchor_lang::system_program::ID,
+        event_authority: eco_svm_std::event_authority_pda(&polymer_prover::ID).0,
+        program: polymer_prover::ID,
+    }
+    .to_account_metas(None);
+    accounts.extend(proof_metas(&pairs));
+    let instruction = solana_sdk::instruction::Instruction {
+        program_id: polymer_prover::ID,
+        accounts,
+        data: polymer_prover::instruction::Validate {}.data(),
+    };
+    let transaction = solana_sdk::transaction::Transaction::new(
+        &[authority],
+        solana_sdk::message::Message::new(&[instruction], Some(&authority.pubkey())),
+        fixture.ctx.latest_blockhash(),
+    );
+
+    let result = fixture.ctx.send_transaction(transaction);
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidPolymerProver)));
+}
+
+#[test]
+fn validate_result_account_for_other_authority_fail() {
+    let mut fixture = setup();
+    let pairs = rand_pairs(1);
+    let other = Keypair::new();
+    fixture
+        .ctx
+        .polymer_prover()
+        .polymer_create_accounts(&other)
+        .unwrap();
+    fixture
+        .ctx
+        .polymer_prover()
+        .polymer_load_result(&other, &event_for(&pairs))
+        .unwrap();
+
+    // Authority signs, but points at `other`'s result account.
+    let authority = &fixture.authority;
+    let mut accounts = polymer_prover::accounts::Validate {
+        authority: authority.pubkey(),
+        config: Config::pda().0,
+        cache_account: polymer::cache_pda(&authority.pubkey()).0,
+        result_account: polymer::result_pda(&other.pubkey()).0,
+        internal: polymer::internal_pda().0,
+        polymer_prover_program: polymer::POLYMER_PROVER_ID,
+        system_program: anchor_lang::system_program::ID,
+        event_authority: eco_svm_std::event_authority_pda(&polymer_prover::ID).0,
+        program: polymer_prover::ID,
+    }
+    .to_account_metas(None);
+    accounts.extend(proof_metas(&pairs));
+    let instruction = solana_sdk::instruction::Instruction {
+        program_id: polymer_prover::ID,
+        accounts,
+        data: polymer_prover::instruction::Validate {}.data(),
+    };
+    let transaction = solana_sdk::transaction::Transaction::new(
+        &[authority],
+        solana_sdk::message::Message::new(&[instruction], Some(&authority.pubkey())),
+        fixture.ctx.latest_blockhash(),
+    );
+
+    let result = fixture.ctx.send_transaction(transaction);
+    assert!(result.is_err_and(common::is_error(PolymerProverError::InvalidResultAccount)));
 }
