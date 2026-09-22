@@ -1,6 +1,7 @@
 use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
+use eco_svm_std::prover::{ProofData, ProveArgs};
 use eco_svm_std::{event_authority_pda, Bytes32};
 use mock_polymer_prover::ValidationResultAccount;
 use polymer_prover::event::{abi_encode_bytes, INTENT_FULFILLED_FROM_SOURCE_SELECTOR};
@@ -185,5 +186,37 @@ impl PolymerProver<'_> {
         }
 
         Ok(last.expect("result body is never empty"))
+    }
+
+    /// Direct call to `prove` (bypassing Portal) with an arbitrary signer in the
+    /// dispatcher slot; used to pin the dispatcher gate.
+    pub fn prove(
+        &mut self,
+        portal_dispatcher: &Keypair,
+        domain_id: u64,
+        proof_data: ProofData,
+    ) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: polymer_prover::ID,
+            accounts: polymer_prover::accounts::Prove {
+                portal_dispatcher: portal_dispatcher.pubkey(),
+            }
+            .to_account_metas(None),
+            data: polymer_prover::instruction::Prove {
+                args: ProveArgs {
+                    domain_id,
+                    proof_data,
+                    data: vec![],
+                },
+            }
+            .data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, portal_dispatcher],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
     }
 }

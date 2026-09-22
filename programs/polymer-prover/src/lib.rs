@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use eco_svm_std::prover;
 
 declare_id!("EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo");
 
@@ -19,5 +20,9 @@ pub mod polymer_prover {
 
     pub fn validate<'info>(ctx: Context<'info, Validate<'info>>) -> Result<()> {
         instructions::validate(ctx)
+    }
+
+    pub fn prove(ctx: Context<Prove>, args: prover::ProveArgs) -> Result<()> {
+        prove_intent(ctx, args)
     }
 }
