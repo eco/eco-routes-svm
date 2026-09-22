@@ -150,7 +150,8 @@ Flow:
 2. Decode `result_account`: owner must be `POLYMER_PROVER_ID`, discriminator must match,
    Borsh-decode `ValidationResult`. Require `is_valid`, else `PolymerProofInvalid` and
    `msg!` Polymer's `error_message`.
-3. Mirror the Solidity `validate` checks:
+3. Apply the same gates as the Solidity `validate` (ordered topics-first here; the
+   Solidity checks payload shape first — diagnostics differ, accepted outcomes do not):
    - `emitting_contract` left-padded to `Bytes32` is in `config.whitelisted_emitters`,
      else `InvalidEmittingContract`.
    - `topics.len() == 64`, else `InvalidTopicsLength`.
@@ -304,7 +305,11 @@ Outbound additions:
 - Constructor gains `uint32 _solanaPolymerChainId` (Polymer's identifier for Solana,
   documented as `2`, confirmed with Polymer per environment before deployment) and
   `uint64 _solanaChainId` (Eco's Solana chain ID). Both stored as immutables. The Solana
-  program ID (raw 32 bytes) is added to the existing bytes32 whitelist.
+  program ID (raw 32 bytes) is added to the existing bytes32 whitelist. Both are rejected
+  as zero (`InvalidSolanaChainConfig`). Deliberate: every argument is immutable with no
+  setter, so a misconfiguration is only recoverable by redeploying at a new CREATE3 salt
+  and re-whitelisting the new address on the Solana side; configured-wrong must fail at
+  deploy time, not at first proof.
 - `validateSolana(bytes calldata proof)` and `validateSolanaBatch(bytes[] calldata)`:
   1. `(chainId, programID, logs) = CROSS_L2_PROVER_V2.validateSolLogs(proof)`.
   2. `chainId == SOLANA_POLYMER_CHAIN_ID`, else `InvalidDestinationChain`.
@@ -330,12 +335,30 @@ Outbound additions:
      chains. Such lines are skipped, but at least one line must be for this chain or the
      call reverts `InvalidSourceChain`, so a proof sent to the wrong chain's prover still
      fails loudly.
-- `prove()`, `validate()`, `validateBatch()` and `getProofType()` are unchanged.
+- `prove()` and `getProofType()` are unchanged. `validate()` gains one shape check folded
+  into the existing decode: a length floor (`decodedData.length < 8`, merged into the
+  stride check so a short payload reverts `ArrayLengthMismatch` instead of underflowing to
+  `Panic(0x11)`), for parity with `ProofData::from_bytes` in `eco-svm-std`. No other
+  behaviour change: a destination-only (zero-pair) payload remains a successful no-op, as
+  in `BaseProver`. It deliberately does **not** adopt this side's `EmptyProofData`
+  rejection of a zero-pair payload: `Inbox.prove` has no empty-array guard and no access
+  control, so anyone can emit a destination-only `IntentFulfilledFromSource` from any
+  already-deployed Inbox for one cheap transaction, and because `validateBatch()` is
+  atomic a revert there would let that free event discard a whole batch. The Solana
+  `validate` can reject it because its own emitter, `portal::prove_intent`, never
+  produces one. `validateBatch()`'s code is unchanged; only its NatSpec changes, to state
+  the atomicity and that a destination-only element cannot poison a batch.
 - Base58 decoding uses a small audited library (research existing Solidity
   implementations before writing one) or a compact in-house decoder if none fits.
 
 Deployment: new `PolymerProver` on each EVM chain that pairs with Solana, Base first,
-constructed with the existing Tron whitelist plus the Solana program ID.
+constructed with the existing Tron whitelist plus the Solana program ID. Every
+`PolymerProver` deployable from this branch is therefore Solana-capable:
+`POLYMER_SOLANA_CHAIN_ID`, `SOLANA_CHAIN_ID` and `POLYMER_SOLANA_PROVER` are all required
+whenever `POLYMER_CROSS_L2_PROVER_V2` is set. A Polymer-only EVM↔EVM chain with no Solana
+pairing is out of scope for this branch; if one is ever needed, the right shape is a
+separate deploy-time opt-in flag, not a zeroed immutable (a prover whose whitelist omits
+the Solana program can only ever revert `InvalidSolanaProgram`).
 
 ## 6. Testing
 
@@ -424,7 +447,16 @@ non-EVM claimant skipped, already-proven emits `IntentAlreadyProven`.
    redeploy. Do not proceed to step 5 until the read-back passes — that step is what makes
    the prover load-bearing, and nothing can route to a hijacked config before it.
 5. eco-routes: extend `PolymerProver`, redeploy on Base with the Solana program ID
-   whitelisted.
+   whitelisted. eco-routes pins this program's `Prove:` wire format as a hand-copied
+   literal (`SVM_GOLDEN_LOG` in `test/prover/PolymerProver.t.sol`, copied from
+   `prove_log_line_format.golden`, plus `SVM_PROGRAM_KEY` and the non-mainnet `CHAIN_ID`
+   behind `SVM_GOLDEN_DEST_CHAIN_ID`), and nothing mechanically enforces the pair: any
+   change to `prove_log_line` (separator, field order or widths, prefix) or a golden
+   regeneration must update those eco-routes constants in the same release, or both
+   suites stay green while a real proof reverts on chain. A cross-repo drift check is a
+   tracked follow-up (preferred home: eco-routes CI, checking out this repo at a pinned
+   ref and `grep -F`ing the golden into the test file; a read-only cross-repo token is the
+   only prerequisite).
 6. Out of scope, tracked separately: eco-solver work to request proofs from Polymer's API
    (`polymer_requestProof` / `polymer_queryProof`), run `create_accounts` and `load_proof`,
    and call `validate`; and the equivalent EVM-side relaying of Solana log proofs.
