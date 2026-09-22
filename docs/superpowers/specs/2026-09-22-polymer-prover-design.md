@@ -211,10 +211,13 @@ Checks:
   intent costs about 347 bytes end to end: the 222-byte `Prove:` line, the runtime's 13-byte
   `Program log: ` prefix, and Portal's own ~110-byte `Program data:` `IntentProven` event.
   24 x 347 = ~8.3 KB of the 10 KB budget. Measured through `portal::prove` in litesvm: every
-  `Prove:` line survives up to 27 intents; 28 starts truncating, 29-31 silently drop `Prove:`
-  lines while the transaction succeeds, and 32 exhausts Portal's 32 KB heap. 24 leaves margin
-  for future Portal log additions. An integration test drives exactly `MAX_INTENTS_PER_PROVE`
-  intents through Portal and asserts no truncation so the cap cannot drift above the buffer.
+  `Prove:` line survives up to 27 intents. From 28 the log collector overflows — a single
+  mechanism, not a gradient: it appends one `Log truncated` marker and from then on drops
+  each message that would cross the limit (a shorter one that still fits is kept), so 28-31
+  lose progressively more `Prove:` lines while the transaction still succeeds. 32 instead
+  fails outright, exhausting Portal's 32 KB heap. 24 leaves margin for future Portal log
+  additions. An integration test drives exactly `MAX_INTENTS_PER_PROVE` intents through
+  Portal and asserts no truncation so the cap cannot drift above the buffer.
   Caller contract: the 10,000-byte buffer is shared by every instruction and CPI in the
   transaction, so a `prove` at or near the cap must be the transaction's only log-emitting
   instruction — batching two capped proves, or a capped prove plus other logging
