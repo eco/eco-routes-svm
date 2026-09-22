@@ -87,3 +87,63 @@ fn malicious_proof_closer_cannot_close_unrelated_proof_via_proof_closer() {
         LocalProverError::InvalidPortalProofCloser
     )));
 }
+
+/// Same property against polymer-prover: its `close_proof` accepts only
+/// `proof_closer_pda(&polymer_prover::ID)`.
+#[test]
+fn malicious_proof_closer_cannot_close_polymer_proof_via_proof_closer() {
+    let mut ctx = common::Context::default();
+
+    let victim_intent_hash: Bytes32 = rand::random::<[u8; 32]>().into();
+    let victim_proof = Proof::pda(&victim_intent_hash, &polymer_prover::ID).0;
+    ctx.set_proof(
+        victim_proof,
+        Proof::new(CHAIN_ID, Pubkey::new_unique()),
+        polymer_prover::ID,
+    );
+
+    let attacker = ctx.payer.pubkey();
+    let route_hash: Bytes32 = rand::random::<[u8; 32]>().into();
+    let reward = Reward {
+        deadline: ctx.now() + 3600,
+        creator: attacker,
+        prover: malicious_proof_closer::ID,
+        native_amount: 0,
+        tokens: vec![],
+    };
+    let attacker_intent_hash = intent_hash(CHAIN_ID, &route_hash, &reward.hash());
+    let vault = vault_pda(&attacker_intent_hash).0;
+    ctx.airdrop(&vault, 1_000_000_000).unwrap();
+    let attacker_proof = Proof::pda(&attacker_intent_hash, &malicious_proof_closer::ID).0;
+    ctx.set_proof(
+        attacker_proof,
+        Proof::new(CHAIN_ID, attacker),
+        malicious_proof_closer::ID,
+    );
+
+    let result = ctx.portal().withdraw_intent(
+        CHAIN_ID,
+        reward,
+        vault,
+        route_hash,
+        attacker,
+        attacker_proof,
+        WithdrawnMarker::pda(&attacker_intent_hash).0,
+        proof_closer_pda(&malicious_proof_closer::ID).0,
+        vec![],
+        vec![
+            AccountMeta::new_readonly(polymer_prover::ID, false),
+            AccountMeta::new(victim_proof, false),
+            AccountMeta::new(attacker, true),
+        ],
+    );
+
+    assert!(result
+        .clone()
+        .is_err_and(common::reached_program(polymer_prover::ID)));
+    assert!(result.is_err_and(common::is_program_error(
+        polymer_prover::ID,
+        polymer_prover::instructions::PolymerProverError::InvalidPortalProofCloser
+    )));
+    assert!(ctx.get_account(&victim_proof).is_some());
+}

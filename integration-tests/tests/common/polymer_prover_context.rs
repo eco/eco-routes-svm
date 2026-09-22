@@ -219,4 +219,28 @@ impl PolymerProver<'_> {
 
         self.send_transaction(transaction)
     }
+
+    pub fn close_proof(
+        &mut self,
+        portal_proof_closer: &Keypair,
+        proof: Pubkey,
+    ) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: polymer_prover::ID,
+            accounts: polymer_prover::accounts::CloseProof {
+                portal_proof_closer: portal_proof_closer.pubkey(),
+                proof,
+                payer: self.payer.pubkey(),
+            }
+            .to_account_metas(None),
+            data: polymer_prover::instruction::CloseProof {}.data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, portal_proof_closer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
 }

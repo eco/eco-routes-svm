@@ -25,4 +25,8 @@ pub mod polymer_prover {
     pub fn prove(ctx: Context<Prove>, args: prover::ProveArgs) -> Result<()> {
         prove_intent(ctx, args)
     }
+
+    pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
+        instructions::close_proof(ctx)
+    }
 }
