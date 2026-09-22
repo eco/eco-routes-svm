@@ -178,21 +178,44 @@ Flow:
    `claimantBytes >> 160 != 0` skip is bytes32-to-address narrowing for its own leg, not a
    validation this side lacks; hyper-prover and local-prover behave the same way.
    There is no partial-batch or resume mode, so the relayer must drain the whole event in
-   one transaction: pairs per event are bounded by transaction account locks (64 in total
-   minus the fixed accounts, so roughly 55 with an address lookup table and roughly 25 in a
-   legacy transaction), by the 1.4M CU limit, and above both by Polymer's `unindexed_data`
-   cap (~45 pairs). Operational guidance: keep EVM `Inbox.prove(prover = PolymerProver, …)`
-   batches destined for Solana at or below `MAX_INTENTS_PER_PROVE` (24), symmetric with the
-   outbound cap, so one number covers both directions. An oversized event is not lost —
-   `Inbox.claimants` persists and `Inbox.prove` can be re-called with a smaller batch — but
-   the Polymer proof already requested for it is wasted.
+   one transaction. That bounds pairs per event; the limits, in the order they bind
+   (`validate.rs::mark_intent_hashes_proven`'s doc comment owns the arithmetic, and
+   `validate_polymer_prover.rs` pins each one):
+
+   - The 64-entry instruction trace (`MAX_INSTRUCTION_TRACE_LENGTH`) is the real ceiling:
+     3 fixed entries (ComputeBudget, `validate`, the `validate_event` CPI) plus 2 per fresh
+     pair (the system `create_account` inside `AccountExt::init`, and `emit_cpi!`), so 30
+     fresh pairs. A pre-funded Proof PDA takes `create_account`'s griefing-resistant
+     `transfer + allocate + assign` path — 4 entries per pair, 3 at or above the
+     rent-exempt minimum — dropping the ceiling to 15-20 (see section 4, batch-ceiling
+     griefing).
+   - Legacy transaction size: 450 + 33N bytes against the 1232-byte packet, so
+     `MAX_PAIRS_PER_VALIDATE_LEGACY_TX` (23) pairs at 1209 bytes; 24 is 1242 and needs a
+     v0 transaction with an address lookup table.
+   - Compute: ~252k CU at 24 pairs through the mock, so the 1.4M transaction limit is not
+     binding but the 200k default is — callers must raise it; Polymer's real
+     `validate_event` sits on top (see
+     `polymer_prover_context.rs::VALIDATE_COMPUTE_UNIT_LIMIT`).
+   - Account locks (64): 10 fixed keys plus N, so 54 pairs — never binding.
+   - Polymer's 3000-byte `unindexed_data` cap: 1632 bytes at 24 pairs
+     (`64 + ceil32(8 + 64N)`), ~45 pairs — never binding.
+
+   Operational guidance: keep EVM `Inbox.prove(prover = PolymerProver, …)` batches destined
+   for Solana at or below `MAX_INTENTS_PER_PROVE` (24), symmetric with the outbound cap so
+   one number covers both directions, and deliver them as a v0 transaction with an address
+   lookup table; an ALT-free relayer stays at `MAX_PAIRS_PER_VALIDATE_LEGACY_TX`. An
+   oversized or griefed event is not lost — `Inbox.claimants` persists and `Inbox.prove` can
+   be re-called with a smaller batch, which is also the answer to
+   `MaxInstructionTraceLengthExceeded` — but the Polymer proof already requested for it is
+   wasted.
 6. `emit_cpi!(IntentProven { intent_hash, claimant, destination })` for every pair,
    including no-op ones, so a consumer that missed an earlier delivery still sees the
    recorded state.
 
 Compute: Polymer's `validate_event` is heavy (secp256k1 recovery plus SHA-256 IAVL paths).
 Callers set the compute unit limit to 1.4M. Polymer's `unindexed_data` cap of 3000 bytes
-bounds a single event to about 45 pairs.
+bounds a single event to about 45 pairs, well above the instruction-trace ceiling in step 5,
+so it never binds.
 
 ### 3.5 `prove(ProveArgs)` (outbound)
 
@@ -211,14 +234,17 @@ Checks:
   transaction still succeeds, so a line that fell past the limit can never be proven. Each
   intent costs about 347 bytes end to end: the 222-byte `Prove:` line, the runtime's 13-byte
   `Program log: ` prefix, and Portal's own ~110-byte `Program data:` `IntentProven` event.
-  24 x 347 = ~8.3 KB of the 10 KB budget. Measured through `portal::prove` in litesvm: every
+  24 x 347 = ~8.3 KB of intent log, ~8.9 KB measured with the transaction's own framing
+  (invoke / success / consumed-CU lines), so ~1.1 KB of the 10 KB budget is left — about
+  three more intents. Measured through `portal::prove` in litesvm: every
   `Prove:` line survives up to 27 intents. From 28 the log collector overflows — a single
   mechanism, not a gradient: it appends one `Log truncated` marker and from then on drops
   each message that would cross the limit (a shorter one that still fits is kept), so 28-31
   lose progressively more `Prove:` lines while the transaction still succeeds. 32 instead
   fails outright, exhausting Portal's 32 KB heap. 24 leaves margin for future Portal log
   additions. An integration test drives exactly `MAX_INTENTS_PER_PROVE` intents through
-  Portal and asserts no truncation so the cap cannot drift above the buffer.
+  Portal and asserts no truncation, and that at least two intents' worth of headroom
+  remains, so the cap cannot drift up to the buffer.
   Caller contract: the 10,000-byte buffer is shared by every instruction and CPI in the
   transaction, so a `prove` at or near the cap must be the transaction's only log-emitting
   instruction — batching two capped proves, or a capped prove plus other logging
@@ -276,6 +302,13 @@ the local-prover model: rent returns to whoever pays for `withdraw`.
   same four checks as the Solidity `validate`.
 - **Replay.** Re-validating a proof is idempotent; a disagreeing proof for a recorded
   intent is rejected.
+- **Batch-ceiling griefing (residual).** Anyone can pre-fund a Proof PDA before the
+  relayer's `validate` lands; `create_account`'s griefing-resistant path then costs 4
+  instruction-trace entries per pair instead of 2, and 7 such PDAs push a 24-pair batch
+  past `MAX_INSTRUCTION_TRACE_LENGTH` (`3 + 2(24 - k) + 4k <= 64` gives `k <= 6`). The
+  event aborts atomically — nothing is partially proven, no intent is lost,
+  `Inbox.claimants` persists — but the Polymer proof is wasted; recovery is a smaller
+  re-prove on EVM. Pinned by `validate_prefunded_proof_pdas_lower_the_batch_ceiling`.
 - **Prover-scoped authorities.** `prove` accepts only `dispatcher_pda(&crate::ID)` and
   `close_proof` only `proof_closer_pda(&crate::ID)`, preserving the confused-deputy
   boundary documented in CLAUDE.md and exercised by `prove_confused_deputy.rs` and
@@ -391,11 +424,23 @@ the Solana program can only ever revert `InvalidSolanaProgram`).
 - `polymer_prover_context.rs` beside the other contexts with `init`, `validate`, `prove`
   and `close_proof` builders, plus a helper that runs the mock's `create_accounts` and
   `load_proof` for a given event.
-- Tests: `init_polymer_prover.rs`, `validate_polymer_prover.rs` (happy path with several
-  intents, idempotent re-validation, disagreeing claimant rejected, `is_valid == false`,
-  each rejected check, wrong Polymer program account, wrong result PDA),
-  `prove_polymer_prover.rs` (log lines asserted from
-  transaction logs, cap, empty batch, non-dispatcher caller, wrong destination),
+- Tests: `init_polymer_prover.rs` (including a full `MAX_WHITELIST_LEN` whitelist — the
+  one-shot path that would burn the program ID at rollout), `validate_polymer_prover.rs`
+  (happy path with several intents, idempotent re-validation, disagreeing claimant
+  rejected, `is_valid == false` with Polymer's `error_message` asserted from the logs, a
+  second `validate` without a reload aborting inside Polymer's frame, the claimant shapes
+  the EVM leg skips recorded verbatim, the batch ceilings of step 5 — 30 fresh, 15 and 20
+  pre-funded, 6 pre-funded within a 24-pair batch, 23 in a legacy packet — each rejected
+  check, both directions of the account-count guard, wrong Polymer program account, wrong
+  result PDA), `prove_polymer_prover.rs` (log lines asserted from transaction logs, the
+  `MAX_INTENTS_PER_PROVE` cap at and above the limit with the log-budget headroom
+  measured, non-dispatcher caller, and an empty batch — which Portal rejects with
+  `PortalError::EmptyIntentHashes` before the CPI; `check_prove_args`'s
+  `InvalidDestination` and `EmptyProofData` branches are defence in depth and unreachable
+  through Portal, the only caller that can sign `dispatcher_pda`, since Portal always
+  builds `ProofData::new(CHAIN_ID, ..)` and rejects an empty batch first, so they are
+  pinned by the `check_prove_args` unit tests in
+  `programs/polymer-prover/src/instructions/prove.rs` rather than by integration tests),
   `close_proof_polymer_prover.rs` (through Portal `withdraw`, asserting the account is
   gone and rent returned), and Polymer arms added to the confused-deputy tests where the
   malicious programs can target the new prover.
