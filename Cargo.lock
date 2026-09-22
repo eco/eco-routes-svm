@@ -1636,8 +1636,10 @@ dependencies = [
  "proof-helper",
  "rand 0.10.2",
  "solana-compute-budget-interface",
+ "solana-packet 4.1.0",
  "solana-sdk",
  "solana-system-interface 3.2.0",
+ "solana-transaction-context",
  "tiny-keccak",
 ]
 

@@ -87,7 +87,11 @@ impl Default for Context {
         svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
             .unwrap();
         // The mock declares Polymer's devnet ID, which is what non-mainnet
-        // polymer-prover builds CPI into.
+        // polymer-prover builds CPI into. Under `--features mainnet` this
+        // address is the mainnet one and the mock's declared ID no longer
+        // matches — only `validate_polymer_prover_real` runs in that
+        // configuration, and it replaces this program with Polymer's dumped
+        // binary.
         svm.add_program(
             polymer_prover::polymer::POLYMER_PROVER_ID,
             MOCK_POLYMER_PROVER_BIN,

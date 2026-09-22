@@ -62,16 +62,6 @@ pub struct CreateAccounts<'info> {
 }
 
 #[derive(Accounts)]
-pub struct CloseAccounts<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
-    #[account(mut, close = authority, seeds = [b"cache", authority.key().as_ref()], bump)]
-    pub cache_account: Account<'info, ProofCacheAccount>,
-    #[account(mut, close = authority, seeds = [b"result", authority.key().as_ref()], bump)]
-    pub result_account: Account<'info, ValidationResultAccount>,
-}
-
-#[derive(Accounts)]
 pub struct LoadProof<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -98,10 +88,6 @@ pub mod mock_polymer_prover {
     use super::*;
 
     pub fn create_accounts(_ctx: Context<CreateAccounts>) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn close_accounts(_ctx: Context<CloseAccounts>) -> Result<()> {
         Ok(())
     }
 

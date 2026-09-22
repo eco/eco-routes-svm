@@ -14,7 +14,7 @@
 use anchor_lang::prelude::{AccountInfo, AccountMeta};
 use anchor_lang::AnchorSerialize;
 use polymer_prover::event::evm_address_to_bytes32;
-use polymer_prover::instructions::PolymerProverError;
+use polymer_prover::instructions::{PolymerProverError, MAX_INTENTS_PER_PROVE};
 use polymer_prover::polymer;
 use polymer_prover::state::Config;
 use solana_sdk::account::Account;
@@ -26,7 +26,18 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
+use crate::common::polymer_prover_context::PolymerProver;
+
 pub mod common;
+
+// The two halves of the inbound compute claim: our share of a full batch must
+// fit under the transaction maximum, and (below) Polymer's frame must leave it.
+const _: () =
+    assert!(PolymerProver::OUR_VALIDATE_CU_BUDGET < PolymerProver::VALIDATE_COMPUTE_UNIT_LIMIT);
+const _: () = assert!(
+    PolymerProver::OUR_VALIDATE_CU_BUDGET as u64
+        >= MAX_INTENTS_PER_PROVE as u64 * PolymerProver::PER_PAIR_CU_BOUND
+);
 
 const FIXTURE_EMITTER: [u8; 20] = [
     0xf2, 0x21, 0x75, 0x0e, 0x52, 0xaa, 0x08, 0x08, 0x35, 0xd2, 0x95, 0x7f, 0x2e, 0xed, 0x0d, 0x5d,
@@ -93,7 +104,11 @@ fn polymer_written_result_account_decodes_with_our_mirror() {
     // Four topics; our own event has two, which is why the wiring test below
     // expects `InvalidTopicsLength`.
     assert_eq!(result.topics.len(), 4 * 32);
-    // One ABI word of non-indexed data.
+    // One ABI word of non-indexed data. This fixture pins the
+    // `ValidationResultAccount` layout only: it exercises neither our two-topic
+    // shape nor the dynamic-`bytes` head (`offset == 32`) that
+    // `decode_encoded_proofs` insists on. That inbound wire format is pinned by
+    // `event::tests::parse_matches_solidity_abi_encoding`.
     assert_eq!(result.unindexed_data.len(), 32);
 }
 
@@ -183,6 +198,9 @@ fn real_polymer_program_validates_fixture_proof_and_our_checks_run() {
 
     // Our `validate`: Polymer accepts the proof (is_valid), the emitter is
     // whitelisted, then our topic-count check rejects the four-topic event.
+    // Zero pairs on purpose: no Polymer-signed proof of our own event can be
+    // synthesised here, so the pair loop cannot be driven against the real
+    // binary. What can be measured is everything before it.
     let result = ctx.polymer_prover().validate(&authority, vec![]);
 
     // Polymer's frame must have returned Ok: its success log is what separates
@@ -200,5 +218,23 @@ fn real_polymer_program_validates_fixture_proof_and_our_checks_run() {
             PolymerProverError::InvalidTopicsLength
         )),
         "{result:?}"
+    );
+
+    // The fixture aborts at the topic-count check, so this is exactly Polymer's
+    // `validate_event` frame plus our pre-loop work: the budget the pair loop
+    // has to live in. `OUR_VALIDATE_CU_BUDGET` is what a full
+    // `MAX_INTENTS_PER_PROVE` batch needs through the mock (see
+    // `validate_per_pair_compute_cost_is_bounded`). This test only runs in the
+    // weekly `polymer-upstream-drift` canary, so this is a warning channel, not
+    // a merge gate: if it fails, re-derive the inbound cap from the printed
+    // measurement and update `CLAUDE.md`, `validate.rs`'s batch-limit comment
+    // and spec section 3.4 together.
+    let cu = result.unwrap_err().meta.compute_units_consumed;
+    println!("polymer validate_event frame: {cu} CU");
+    assert!(
+        cu <= u64::from(
+            PolymerProver::VALIDATE_COMPUTE_UNIT_LIMIT - PolymerProver::OUR_VALIDATE_CU_BUDGET
+        ),
+        "Polymer's frame ({cu} CU) leaves no room for a full {MAX_INTENTS_PER_PROVE}-pair batch",
     );
 }

@@ -52,9 +52,23 @@ pub fn intent_fulfilled_result(
 }
 
 impl PolymerProver<'_> {
-    /// Compute limit for `validate`: Polymer's real `validate_event` needs
-    /// close to the 1.4M transaction maximum.
+    /// Compute limit for `validate`, and for a full-batch `portal::prove` into
+    /// polymer-prover: the maximum a transaction can request. Polymer's real
+    /// `validate_event` (secp256k1 recovery plus SHA-256 IAVL paths) is heavy
+    /// enough that relayers simply request the maximum; its actual cost is
+    /// measured by the weekly drift test (`validate_polymer_prover_real.rs`),
+    /// not assumed here. The mock's `validate_event` is nearly free.
     pub const VALIDATE_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+    /// Ceiling on polymer-prover's own share of a `validate` transaction at a
+    /// full `MAX_INTENTS_PER_PROVE` batch (measured ~252k through the mock: the
+    /// account checks, result decode, 24 Proof creations and 24 `emit_cpi!`).
+    /// A regression guard on our marginal cost, and the headroom the real
+    /// `validate_event` must leave below `VALIDATE_COMPUTE_UNIT_LIMIT`.
+    pub const OUR_VALIDATE_CU_BUDGET: u32 = 400_000;
+    /// Ceiling on the marginal cost of one pair in `validate` (measured
+    /// ~9-10k: one `create_account` CPI, one Proof write, one `emit_cpi!`).
+    /// Deliberately loose — CU counts move on Anchor and toolchain bumps.
+    pub const PER_PAIR_CU_BOUND: u64 = 15_000;
 
     pub fn init(
         &mut self,
@@ -116,14 +130,15 @@ impl PolymerProver<'_> {
         )
     }
 
-    /// `validate` with the fixed slots supplied verbatim, on the same
-    /// transaction shape (compute budget included) as the canonical path.
-    pub fn validate_with_accounts(
-        &mut self,
-        authority: &Keypair,
+    /// The legacy message every `validate` transaction here is built from:
+    /// compute budget plus `validate` with `proof_accounts` appended to the
+    /// fixed slots. Exposed so the packet-size test measures the exact shape
+    /// the suite sends (litesvm does not enforce the 1232-byte limit).
+    pub fn validate_message(
+        authority: &Pubkey,
         accounts: polymer_prover::accounts::Validate,
         proof_accounts: Vec<AccountMeta>,
-    ) -> TransactionResult {
+    ) -> Message {
         let accounts = accounts
             .to_account_metas(None)
             .into_iter()
@@ -134,17 +149,26 @@ impl PolymerProver<'_> {
             accounts,
             data: polymer_prover::instruction::Validate {}.data(),
         };
+        Message::new(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(Self::VALIDATE_COMPUTE_UNIT_LIMIT),
+                instruction,
+            ],
+            Some(authority),
+        )
+    }
+
+    /// `validate` with the fixed slots supplied verbatim, on the same
+    /// transaction shape (compute budget included) as the canonical path.
+    pub fn validate_with_accounts(
+        &mut self,
+        authority: &Keypair,
+        accounts: polymer_prover::accounts::Validate,
+        proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
         let transaction = Transaction::new(
             &[authority],
-            Message::new(
-                &[
-                    ComputeBudgetInstruction::set_compute_unit_limit(
-                        Self::VALIDATE_COMPUTE_UNIT_LIMIT,
-                    ),
-                    instruction,
-                ],
-                Some(&authority.pubkey()),
-            ),
+            Self::validate_message(&authority.pubkey(), accounts, proof_accounts),
             self.latest_blockhash(),
         );
 

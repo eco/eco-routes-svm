@@ -8,7 +8,9 @@ edition = "2021"
 # `POLYMER_PROVER_ID` and `MAILBOX_ID` match `.so` files built with
 # `--features mainnet`. Used by the Polymer upstream-drift workflow to run the
 # real-program test against Polymer's mainnet binary, which Anchor only runs at
-# the mainnet ID; the rest of the suite assumes localnet builds.
+# the mainnet ID. `--features mainnet` is only valid with
+# `--test validate_polymer_prover_real`: the mock-driven polymer tests are
+# devnet-only (mock-polymer-prover declares the devnet ID) and will fail under it.
 mainnet = [
     "eco-svm-std/mainnet",
     "flash-fulfiller/mainnet",
@@ -39,8 +41,12 @@ portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }
 rand = "0.10.2"
 solana-compute-budget-interface = "3.0.0"
+# `PACKET_DATA_SIZE` and `MAX_INSTRUCTION_TRACE_LENGTH` are not re-exported by
+# solana-sdk 4; the batch-ceiling tests take the granular crates directly.
+solana-packet = "4.1"
 solana-sdk = "4.0.1"
 # solana-sdk 3.x's `system_instruction` module no longer re-exports `SystemError`;
 # take the granular crate directly.
 solana-system-interface = "3.1"
+solana-transaction-context = "4.2"
 tiny-keccak = { workspace = true }

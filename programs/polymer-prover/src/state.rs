@@ -5,7 +5,14 @@ use eco_svm_std::Bytes32;
 use crate::instructions::PolymerProverError;
 
 pub const CONFIG_SEED: &[u8] = b"config";
-const MAX_WHITELIST_LEN: usize = 20;
+/// Largest emitter whitelist `init` can write. `Config::INIT_SPACE` is
+/// `4 + 32 * MAX_WHITELIST_LEN` and `AccountExt::init` allocates exactly
+/// `8 + INIT_SPACE`, so a full whitelist serializes byte-for-byte into the
+/// account; raising this constant without the `#[max_len]` below moving with
+/// it makes `init` fail at serialization. `init` is one-shot and
+/// unauthenticated, so that failure burns the program ID at rollout.
+/// Pinned by `init_polymer_prover_at_max_whitelist_success`.
+pub const MAX_WHITELIST_LEN: usize = 20;
 
 #[account]
 #[derive(InitSpace)]
@@ -63,14 +70,27 @@ mod tests {
     /// The portal authority `prove` accepts, scoped to this program's ID. A seed
     /// change here silently locks out portal — pin the address, not just the
     /// derivation.
+    ///
+    /// The golden is a byte array nobody can read in a diff, so the base58 form
+    /// is asserted inline too: a seed change then fails with a readable address.
     #[test]
     fn accepted_prove_caller_authority_deterministic() {
+        let (pda, _) = portal::state::dispatcher_pda(&crate::ID);
+        assert_eq!(
+            pda.to_string(),
+            "ACL8p7ice1LimrdnB9355y54dS5gmXi5Zm675bybhU7S"
+        );
         goldie::assert_json!(portal::state::dispatcher_pda(&crate::ID));
     }
 
     /// The portal authority `close_proof` accepts, scoped to this program's ID.
     #[test]
     fn accepted_proof_closer_authority_deterministic() {
+        let (pda, _) = portal::state::proof_closer_pda(&crate::ID);
+        assert_eq!(
+            pda.to_string(),
+            "93EzFXtxNJataBPhTEbZv21aPmr5uZwSCtRqgN7iV8SC"
+        );
         goldie::assert_json!(portal::state::proof_closer_pda(&crate::ID));
     }
 
