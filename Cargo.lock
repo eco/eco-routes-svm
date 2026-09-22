@@ -1630,6 +1630,8 @@ dependencies = [
  "malicious-proof-closer",
  "malicious-prover",
  "mock-igp",
+ "mock-polymer-prover",
+ "polymer-prover",
  "portal",
  "proof-helper",
  "rand 0.10.2",
@@ -1951,6 +1953,13 @@ dependencies = [
 
 [[package]]
 name = "mock-igp"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
+name = "mock-polymer-prover"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",

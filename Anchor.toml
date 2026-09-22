@@ -9,6 +9,7 @@ skip-lint = false
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 malicious-proof-closer = "3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp"
 malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"
+mock-polymer-prover = "FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"

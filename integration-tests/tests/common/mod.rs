@@ -30,6 +30,7 @@ mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
 mod local_prover_context;
+pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
 
@@ -42,6 +43,9 @@ const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_
 const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
+const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const MOCK_POLYMER_PROVER_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/mock_polymer_prover.so");
 
 type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -80,6 +84,15 @@ impl Default for Context {
             .unwrap();
         svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN)
             .unwrap();
+        svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
+            .unwrap();
+        // The mock declares Polymer's devnet ID, which is what non-mainnet
+        // polymer-prover builds CPI into.
+        svm.add_program(
+            polymer_prover::polymer::POLYMER_PROVER_ID,
+            MOCK_POLYMER_PROVER_BIN,
+        )
+        .unwrap();
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);
