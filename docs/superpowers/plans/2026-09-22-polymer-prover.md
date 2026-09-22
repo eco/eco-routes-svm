@@ -2039,7 +2039,7 @@ Claude-Session: https://claude.ai/code/session_01NHPxMueoj9Tu91K7asAKq8"
 
 **Interfaces:**
 - Consumes: `eco_svm_std::prover::{ProveArgs, ProofData, IntentHashClaimant}`, `portal::state::dispatcher_pda`.
-- Produces: `MAX_INTENTS_PER_PROVE: usize = 32`, `PROVE_LOG_PAYLOAD_LEN: usize = 160`, `prove_log_payload(source: u64, destination: u64, pair: &IntentHashClaimant) -> [u8; 160]`, `check_prove_args(&ProofData) -> Result<()>`, `prove_log_line(program_id: &Pubkey, payload: &[u8; 160]) -> String` (test helper, `pub`).
+- Produces: `MAX_INTENTS_PER_PROVE: usize = 24` (measured log-buffer ceiling through Portal is 26; see spec 3.5), `PROVE_LOG_PAYLOAD_LEN: usize = 160`, `prove_log_payload(source: u64, destination: u64, pair: &IntentHashClaimant) -> [u8; 160]`, `check_prove_args(&ProofData) -> Result<()>`, `prove_log_line(program_id: &Pubkey, payload: &[u8; 160]) -> String` (test helper, `pub`).
 
 - [ ] **Step 1: Write the failing unit tests**
 
@@ -2124,8 +2124,10 @@ use eco_svm_std::CHAIN_ID;
 use crate::instructions::PolymerProverError;
 
 /// Solana truncates a transaction's log buffer at 10 KB and a truncated log can
-/// never be proven; 32 lines of ~222 bytes leave room for Portal's own logs.
-pub const MAX_INTENTS_PER_PROVE: usize = 32;
+/// never be proven. Each intent costs ~347 bytes end to end (222-byte line +
+/// 13-byte `Program log: ` prefix + Portal's ~110-byte `IntentProven` event);
+/// 24 x 347 = ~8.3 KB. Measured ceiling through Portal is 26; see spec 3.5.
+pub const MAX_INTENTS_PER_PROVE: usize = 24;
 /// hex(source u64 ‖ destination u64 ‖ intent_hash ‖ claimant) = 2 * 80.
 pub const PROVE_LOG_PAYLOAD_LEN: usize = 160;
 const HEX: &[u8; 16] = b"0123456789abcdef";

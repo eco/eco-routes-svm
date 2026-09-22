@@ -4,9 +4,17 @@ use eco_svm_std::CHAIN_ID;
 
 use crate::instructions::PolymerProverError;
 
-/// Solana truncates a transaction's log buffer at 10 KB and a truncated log can
-/// never be proven; 32 lines of ~222 bytes leave room for Portal's own logs.
-pub const MAX_INTENTS_PER_PROVE: usize = 32;
+/// Solana truncates a transaction's log buffer at 10,000 bytes
+/// (`LOG_MESSAGES_BYTES_LIMIT`) while the transaction still succeeds, so an
+/// intent whose line fell past the limit can never be proven. Each intent costs
+/// ~347 bytes end to end: the 222-byte `Prove:` line, its 13-byte
+/// `Program log: ` runtime prefix, and Portal's own ~110-byte
+/// `Program data: ` `IntentProven` event. 24 x 347 = ~8.3 KB of the 10 KB
+/// budget; 26 is the measured ceiling through `portal::prove`, and the margin
+/// absorbs future Portal log additions. Pinned by the
+/// `prove_via_portal_at_max_intents_emits_every_log_untruncated` integration
+/// test.
+pub const MAX_INTENTS_PER_PROVE: usize = 24;
 /// hex(source u64 ‖ destination u64 ‖ intent_hash ‖ claimant) = 2 * 80.
 pub const PROVE_LOG_PAYLOAD_LEN: usize = 160;
 const HEX: &[u8; 16] = b"0123456789abcdef";

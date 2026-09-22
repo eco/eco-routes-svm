@@ -188,9 +188,16 @@ forwards whatever tail the caller supplied; this instruction needs none.
 Checks:
 
 - `proof_data.destination == CHAIN_ID`, else `InvalidDestination`.
-- `1 <= pairs.len() <= 32`, else `EmptyProofData` / `TooManyIntents`. Solana truncates a
-  transaction's log buffer at 10 KB and a truncated log can never be proven; 32 lines of
-  about 222 bytes leave headroom for Portal's own logs and events.
+- `1 <= pairs.len() <= 24`, else `EmptyProofData` / `TooManyIntents`. Solana truncates a
+  transaction's log buffer at 10,000 bytes (`LOG_MESSAGES_BYTES_LIMIT`) while the
+  transaction still succeeds, so a line that fell past the limit can never be proven. Each
+  intent costs about 347 bytes end to end: the 222-byte `Prove:` line, the runtime's 13-byte
+  `Program log: ` prefix, and Portal's own ~110-byte `Program data:` `IntentProven` event.
+  24 x 347 = ~8.3 KB of the 10 KB budget. Measured through `portal::prove` in litesvm: 26 is
+  the ceiling (27 fits, 28 starts truncating, 29-31 silently drop `Prove:` lines while the
+  transaction succeeds, 32 exhausts Portal's 32 KB heap); 24 leaves margin for future Portal
+  log additions. An integration test drives exactly `MAX_INTENTS_PER_PROVE` intents through
+  Portal and asserts no truncation so the cap cannot drift above the buffer.
 - `domain_id` is the EVM source chain ID and is passed through untouched. `data` is ignored,
   as in the Solidity `prove`.
 
