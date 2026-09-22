@@ -54,7 +54,7 @@ A specialized program that integrates with Hyperlane for cross-chain message del
 A pull-based prover backed by Polymer's proof network:
 
 - **Proof Validation**: Permissionless `validate` CPIs Polymer's `validate_event` and reads the freshly-written result account in the same instruction, then mirrors the Solidity `PolymerProver.validate` checks before creating idempotent `Proof` PDAs
-- **Reverse Direction**: `prove` emits a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse
+- **Reverse Direction**: `prove` emits a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse (at most 24 intents per call; see the `prove` note under [Polymer-Prover Program](#polymer-prover-program) for the per-transaction log budget)
 - **Proof Cleanup**: Called back by Portal during `withdraw` to close the Proof PDA and reclaim rent
 
 #### **Local-Prover Program** (`programs/local-prover/`)
@@ -299,7 +299,7 @@ A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobo
 #### Key Instructions:
 - `init` - Initialize prover with whitelisted emitters
 - `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
-- `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse
+- `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse. Capped at 24 intents per call because Solana truncates a transaction's logs at 10 KB while the transaction still succeeds; that budget is shared by every instruction in the transaction, so submit `portal::prove` as the only log-emitting instruction in its transaction, then count the `Program log: Prove: program: <polymer_prover id>, ` lines in `meta.logMessages` against the hashes sent and resubmit any shortfall (`prove` writes no state, so the retry is safe)
 - `close_proof` - Clean up proof accounts after successful withdrawal (called by Portal during `withdraw`)
 
 #### Key Accounts:
@@ -465,14 +465,17 @@ anchor deploy --provider.cluster mainnet
 
 The `Anchor.toml` file includes network-specific program configurations:
 
-- **Localnet**: Includes `dummy-ism` and `mock-polymer-prover` for testing
-- **Devnet**: Excludes `dummy-ism` and `mock-polymer-prover` (production-like environment)
-- **Mainnet**: Excludes `dummy-ism` and `mock-polymer-prover` (production only)
+- **Localnet**: Includes the localnet-only test programs — `dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`
+- **Devnet** / **Mainnet**: Exclude the localnet-only test programs (production-like / production only)
+
+What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]` registration — that only maps names to IDs — but the explicit `--program-name` enumeration in `Anchor.toml`'s `build-devnet` / `build-mainnet` scripts and the named IDL loops in `release.yml`.
 
 ```toml
 [programs.localnet]
-dummy-ism = "..."         # Only for testing
-mock-polymer-prover = "..." # Only for testing
+dummy-ism = "..."              # localnet-only test program
+mock-polymer-prover = "..."    # localnet-only test program
+malicious-prover = "..."       # localnet-only test program
+malicious-proof-closer = "..." # localnet-only test program
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
@@ -487,7 +490,7 @@ local-prover = "..."
 polymer-prover = "..."
 portal = "..."
 proof-helper = "..."
-# dummy-ism, mock-polymer-prover excluded
+# localnet-only test programs excluded
 
 [programs.mainnet]
 flash-fulfiller = "..."
@@ -496,7 +499,7 @@ local-prover = "..."
 polymer-prover = "..."
 portal = "..."
 proof-helper = "..."
-# dummy-ism, mock-polymer-prover excluded
+# localnet-only test programs excluded
 ```
 
 ### Environment Configuration
@@ -518,11 +521,13 @@ Releases are published via the manual `Release` GitHub Actions workflow (`.githu
 Each release attaches mainnet and devnet IDLs as downloadable assets on the GitHub Release:
 
 ```
-dist/idl/mainnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.json
-dist/idl/devnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.json
+dist/idl/mainnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.mainnet.json
+dist/idl/devnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.devnet.json
 ```
 
-`dummy-ism` and `mock-polymer-prover` are excluded — they're test-only programs and never shipped.
+Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.json`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
+
+The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
 ### Versioning
 
@@ -537,7 +542,7 @@ Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conve
 
 If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
 
-The `version` field in each released crate's `Cargo.toml` (the 6 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. `dummy-ism` and `mock-polymer-prover` are not bumped.
+The `version` field in each released crate's `Cargo.toml` (the 6 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
 
 ### First release
 

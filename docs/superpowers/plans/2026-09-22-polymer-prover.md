@@ -2881,6 +2881,8 @@ Portal on devnet needs no change: `dispatcher_pda(args.prover)` is derived per c
 
 Run `init` with the devnet EVM `PolymerProver` address(es) left-padded to 32 bytes, using the Solana CLI keypair as payer (see `solana config get`). Use the IDL in `target/idl/polymer_prover.json` with `anchor` TS or a small Rust bin; do not put a private key in any script.
 
+Treat this as a verified, burn-on-failure gate (spec, Rollout step 4): send `init` immediately after the deploy, then read `Config` back at `["config"]` and assert it byte-equals the intended emitter list. `init` is unauthenticated and the whitelist is immutable, so if `init` fails (`ConstraintZero` means someone else won the race) or the read-back does not match, the program ID is burned — grind a fresh `Eco…` keypair and redeploy. Do not whitelist the Solana program ID on the EVM side until the read-back passes.
+
 - [ ] **Step 3: Produce a `Prove:` log through Portal**
 
 Fulfill a devnet intent whose `reward.prover` is the new program (routes-cli), then call Portal `prove` with `prover = polymer_prover::ID`, `source_chain_domain_id = <EVM testnet chain id>`, the fulfill marker, and no tail accounts. Confirm the transaction logs show `Program log: Prove: program: <id>, <160 hex>` nested under the polymer-prover invoke.

@@ -277,7 +277,12 @@ the local-prover model: rent returns to whoever pays for `withdraw`.
   boundary documented in CLAUDE.md and exercised by `prove_confused_deputy.rs` and
   `withdraw_confused_deputy.rs`.
 - **Config immutability.** `init` runs once. Changing the whitelist means a new release,
-  consistent with the redeploy-never-upgrade policy.
+  consistent with the redeploy-never-upgrade policy. Residual: `init` is unauthenticated, so
+  the first caller after deploy owns the whitelist forever (see Rollout step 4 for the gate);
+  and rotating the EVM emitter set later strands in-flight intents that named this program
+  ID, the escape hatch being a program upgrade that adds a set-emitters instruction — the
+  programs are deployed upgradeable (`deploy-mainnet` in `Anchor.toml` uses plain
+  `anchor deploy`, no `--final`).
 - **No reentrancy surface.** Polymer's program performs no CPIs back into callers.
 - **Atomic release.** `polymer-prover` joins the set that must ship from one tree with
   Portal, since its authorities derive from Portal's ID.
@@ -371,8 +376,15 @@ constructed with the existing Tron whitelist plus the Solana program ID.
 - `#[ignore]` smoke test: loads Polymer's real `.so` from a local path when present, seeds
   `["internal"]` with the fixture parameters from their repository (`proof_api`, their
   test sequencer address, peptide chain 901), loads their published fixture proof through
-  the real `load_proof`, and expects `InvalidEventSignature` from our `validate`. This
-  proves CPI wiring and result decoding against the real binary.
+  the real `load_proof`, and expects `InvalidTopicsLength` from our `validate` — their
+  fixture event carries four topics (a 128-byte blob), ours two, so the
+  `topics.len() == 64` check in `IntentFulfilledFromSource::parse` rejects on length before
+  it reaches the selector comparison. This proves CPI wiring and result decoding against the
+  real binary. The `result` account bytes that real program wrote for the fixture are
+  committed as `fixtures/polymer/validation-result-v1.0.4.hex` and decoded by a non-ignored
+  test on every PR, so a field reorder or width change in the `polymer.rs` mirror fails
+  without network access; a weekly `Polymer upstream drift` workflow re-runs the ignored
+  test against the binaries deployed on devnet and mainnet-beta.
 
 ### EVM (Foundry, eco-routes)
 
@@ -400,7 +412,14 @@ non-EVM claimant skipped, already-proven emits `IntentAlreadyProven`.
 2. Add the mock program to `[programs.localnet]` and the integration-test `Context`.
 3. Update CLAUDE.md architecture: sixth production program, Polymer's pull-based flow, the
    hand-rolled `polymer.rs` mirror, the atomic-release set.
-4. `init` on devnet, then mainnet, with the EVM `PolymerProver` addresses whitelisted.
+4. `init` on devnet, then mainnet, as a verified, burn-on-failure gate: immediately after
+   `anchor deploy --program-name polymer-prover`, send `init` with the exact EVM
+   `PolymerProver` address set, then read `Config` back at `["config"]` and assert it
+   byte-equals the intended emitter list. `init` is unauthenticated and the whitelist is
+   immutable, so if `init` fails (`ConstraintZero` means someone else won the race) **or**
+   the read-back does not match, the program ID is burned: grind a fresh `Eco…` keypair and
+   redeploy. Do not proceed to step 5 until the read-back passes — that step is what makes
+   the prover load-bearing, and nothing can route to a hijacked config before it.
 5. eco-routes: extend `PolymerProver`, redeploy on Base with the Solana program ID
    whitelisted.
 6. Out of scope, tracked separately: eco-solver work to request proofs from Polymer's API
