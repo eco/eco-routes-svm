@@ -66,7 +66,10 @@ design targets.
 Polymer proves `msg!` log lines. Requirements from Polymer:
 
 - The line starts with `Prove: program: <base58 program id>, ` and is emitted by the
-  program being proven. Polymer strips the `Prove: ` prefix in what it returns.
+  program being proven. Polymer strips the `Prove: ` prefix in what it returns. That is
+  documented but unverified against the deployed indexer, so the EVM parser accepts the
+  line with or without the prefix (and with or without the Solana runtime's
+  `Program log: ` prefix); the tolerance is confined to the head of the line.
 - Fields are comma-delimited. Keep each line under roughly 500 bytes.
 - Several `Prove:` lines in one transaction are all proven together.
 
@@ -299,13 +302,26 @@ Outbound additions:
   2. `chainId == SOLANA_POLYMER_CHAIN_ID`, else `InvalidDestinationChain`.
   3. `isWhitelisted(programID)`, else `InvalidEmittingContract`-style error carrying the
      bytes32.
-  4. For each log: split at the first comma. The head must be `program: <base58>`; decode
-     the base58 and require it equals `programID` (Polymer's recommended defense in depth
-     against indexer misattribution of nested CPI logs). The tail must be exactly 160 hex
-     characters; decode to 80 bytes. Require source equals `block.chainid` and destination
-     equals `SOLANA_CHAIN_ID`. Then `processIntent(intentHash, claimant, destination)`,
-     which already skips claimants that are not 160-bit EVM addresses.
+  4. For each log: split at the first comma. The head must be `program: <base58>`,
+     optionally preceded by an un-stripped `Prove:` and/or the runtime's `Program log: `;
+     the shapes parse identically. Require the base58 string to equal, byte for byte, the
+     canonical base58 encoding of the authenticated `programID` (Polymer's recommended
+     defense in depth against indexer misattribution of nested CPI logs). Comparing the
+     canonical string rather than decoding means a non-canonical id (leading `1`
+     padding), a non-alphabet character or an over-long field all fail closed with the
+     contract's own `SolanaLogProgramMismatch` and no library error escapes. The tail must
+     be exactly 160 hex characters; decode to 80 bytes. Require destination equals
+     `SOLANA_CHAIN_ID`. Then, if source equals `block.chainid`,
+     `processIntent(intentHash, claimant, destination)`, which skips claimants that are
+     not 160-bit EVM addresses and, like `BaseProver`, zero claimants (a zero claimant is
+     the "unproven" sentinel and must never be recorded or announced).
   5. Malformed logs revert; they indicate a bug or a hostile emitter, never normal traffic.
+     A well-formed line whose source is another EVM chain is *not* malformed: a Polymer
+     Solana proof covers a whole transaction while `source_chain_domain_id` is set per
+     `portal::prove` instruction, so one transaction may carry lines for several source
+     chains. Such lines are skipped, but at least one line must be for this chain or the
+     call reverts `InvalidSourceChain`, so a proof sent to the wrong chain's prover still
+     fails loudly.
 - `prove()`, `validate()`, `validateBatch()` and `getProofType()` are unchanged.
 - Base58 decoding uses a small audited library (research existing Solidity
   implementations before writing one) or a compact in-house decoder if none fits.
