@@ -29,3 +29,6 @@ getrandom = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }
+# Anchor 1.x's `solana_program` facade has no `hash` module; the tests take the
+# granular sha256 crate directly to re-derive Anchor discriminators.
+solana-sha256-hasher = "3.1"
