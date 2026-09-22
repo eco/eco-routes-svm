@@ -10,7 +10,12 @@ name = "polymer_prover"
 
 [features]
 cpi = ["no-entrypoint"]
-default = []
+# polymer-prover's logs ARE the cross-chain ABI: EVM PolymerProver._processSolanaLog
+# reverts InvalidSolanaLog() on any line without a `program: ` head, and one bad line
+# aborts validateSolana for the whole batch. Anchor's dispatcher would otherwise emit
+# `Instruction: Prove` alongside the `Prove:` lines. Unlike every other program here,
+# this one must stay silent, so the feature is on by default rather than declared-only.
+default = ["no-log-ix-name"]
 idl-build = ["anchor-lang/idl-build"]
 mainnet = ["eco-svm-std/mainnet", "portal/mainnet"]
 no-entrypoint = []
