@@ -518,11 +518,11 @@ Releases are published via the manual `Release` GitHub Actions workflow (`.githu
 Each release attaches mainnet and devnet IDLs as downloadable assets on the GitHub Release:
 
 ```
-dist/idl/mainnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper}.json
-dist/idl/devnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper}.json
+dist/idl/mainnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.json
+dist/idl/devnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.json
 ```
 
-`dummy-ism` is excluded — it's a test-only program and never shipped.
+`dummy-ism` and `mock-polymer-prover` are excluded — they're test-only programs and never shipped.
 
 ### Versioning
 
@@ -537,7 +537,7 @@ Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conve
 
 If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
 
-The `version` field in each released crate's `Cargo.toml` (the 5 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. `dummy-ism` is not bumped.
+The `version` field in each released crate's `Cargo.toml` (the 6 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. `dummy-ism` and `mock-polymer-prover` are not bumped.
 
 ### First release
 
