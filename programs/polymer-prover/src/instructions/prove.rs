@@ -10,10 +10,21 @@ use crate::instructions::PolymerProverError;
 /// ~347 bytes end to end: the 222-byte `Prove:` line, its 13-byte
 /// `Program log: ` runtime prefix, and Portal's own ~110-byte
 /// `Program data: ` `IntentProven` event. 24 x 347 = ~8.3 KB of the 10 KB
-/// budget; 26 is the measured ceiling through `portal::prove`, and the margin
-/// absorbs future Portal log additions. Pinned by the
-/// `prove_via_portal_at_max_intents_emits_every_log_untruncated` integration
-/// test.
+/// budget, comfortably below the measured truncation point through
+/// `portal::prove` (see the design spec, section 3.5), and the margin absorbs
+/// future Portal log additions.
+///
+/// That budget is per transaction, not per instruction: the cap assumes this
+/// `prove` is the transaction's only meaningful log producer (ComputeBudget
+/// instructions emit none). A transaction that packs a second `prove`, or any
+/// other log-emitting instruction, re-opens the silent truncation, and the
+/// program cannot reject it because the cap is enforced per invocation. The
+/// transaction succeeds and the intents past the limit have no provable log.
+/// Re-proving is permitted (no marker blocks it), so the recovery is to
+/// resubmit the missing hashes in a fresh transaction.
+///
+/// Pinned by the `prove_via_portal_at_max_intents_emits_every_log_untruncated`
+/// integration test.
 pub const MAX_INTENTS_PER_PROVE: usize = 24;
 /// hex(source u64 ‖ destination u64 ‖ intent_hash ‖ claimant) = 2 * 80.
 pub const PROVE_LOG_PAYLOAD_LEN: usize = 160;
@@ -103,15 +114,27 @@ mod tests {
         IntentHashClaimant::new([0x11; 32].into(), [0x22; 32].into())
     }
 
+    /// The goldens below pin the byte layout the EVM `validateSolana` parses, so
+    /// they use a literal destination rather than `CHAIN_ID`, which the
+    /// `mainnet` feature flips. `CHAIN_ID` wiring is covered by
+    /// `prove_log_payload_encodes_chain_id` and the integration tests.
+    const DEVNET_CHAIN_ID: u64 = 1399811150;
+
     #[test]
     fn prove_log_payload_layout() {
-        let payload = prove_log_payload(8453, CHAIN_ID, &pair());
+        let payload = prove_log_payload(8453, DEVNET_CHAIN_ID, &pair());
         goldie::assert_debug!(core::str::from_utf8(&payload).unwrap());
     }
 
     #[test]
-    fn prove_log_line_format() {
+    fn prove_log_payload_encodes_chain_id() {
         let payload = prove_log_payload(8453, CHAIN_ID, &pair());
+        assert_eq!(&payload[16..32], format!("{CHAIN_ID:016x}").as_bytes());
+    }
+
+    #[test]
+    fn prove_log_line_format() {
+        let payload = prove_log_payload(8453, DEVNET_CHAIN_ID, &pair());
         let line = prove_log_line(&crate::ID, &payload);
         assert!(line.starts_with(&format!("Prove: program: {}, ", crate::ID)));
         assert!(line.len() < 500);

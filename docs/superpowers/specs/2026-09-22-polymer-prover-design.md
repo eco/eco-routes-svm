@@ -167,7 +167,21 @@ Flow:
    equal `(destination, claimant)`, else `IntentAlreadyProven`; otherwise create it with
    `authority` as payer. This matters for Polymer because a proof can be re-validated any
    number of times and a later EVM `prove()` may legitimately re-include an already-proven
-   hash.
+   hash. The 32-byte claimant is recorded as an opaque pubkey by construction: supplying a
+   real Solana pubkey when the source chain is Solana is a solver obligation enforced
+   off-chain before it calls EVM `fulfill` (any other 32 bytes still record a Proof, which
+   blocks `refund`, for an address nobody can spend from). PolymerProver.sol's
+   `claimantBytes >> 160 != 0` skip is bytes32-to-address narrowing for its own leg, not a
+   validation this side lacks; hyper-prover and local-prover behave the same way.
+   There is no partial-batch or resume mode, so the relayer must drain the whole event in
+   one transaction: pairs per event are bounded by transaction account locks (64 in total
+   minus the fixed accounts, so roughly 55 with an address lookup table and roughly 25 in a
+   legacy transaction), by the 1.4M CU limit, and above both by Polymer's `unindexed_data`
+   cap (~45 pairs). Operational guidance: keep EVM `Inbox.prove(prover = PolymerProver, …)`
+   batches destined for Solana at or below `MAX_INTENTS_PER_PROVE` (24), symmetric with the
+   outbound cap, so one number covers both directions. An oversized event is not lost —
+   `Inbox.claimants` persists and `Inbox.prove` can be re-called with a smaller batch — but
+   the Polymer proof already requested for it is wasted.
 6. `emit_cpi!(IntentProven { intent_hash, claimant, destination })` for every pair,
    including no-op ones, so a consumer that missed an earlier delivery still sees the
    recorded state.
@@ -193,11 +207,17 @@ Checks:
   transaction still succeeds, so a line that fell past the limit can never be proven. Each
   intent costs about 347 bytes end to end: the 222-byte `Prove:` line, the runtime's 13-byte
   `Program log: ` prefix, and Portal's own ~110-byte `Program data:` `IntentProven` event.
-  24 x 347 = ~8.3 KB of the 10 KB budget. Measured through `portal::prove` in litesvm: 26 is
-  the ceiling (27 fits, 28 starts truncating, 29-31 silently drop `Prove:` lines while the
-  transaction succeeds, 32 exhausts Portal's 32 KB heap); 24 leaves margin for future Portal
-  log additions. An integration test drives exactly `MAX_INTENTS_PER_PROVE` intents through
-  Portal and asserts no truncation so the cap cannot drift above the buffer.
+  24 x 347 = ~8.3 KB of the 10 KB budget. Measured through `portal::prove` in litesvm: every
+  `Prove:` line survives up to 27 intents; 28 starts truncating, 29-31 silently drop `Prove:`
+  lines while the transaction succeeds, and 32 exhausts Portal's 32 KB heap. 24 leaves margin
+  for future Portal log additions. An integration test drives exactly `MAX_INTENTS_PER_PROVE`
+  intents through Portal and asserts no truncation so the cap cannot drift above the buffer.
+  Caller contract: the 10,000-byte buffer is shared by every instruction and CPI in the
+  transaction, so a `prove` at or near the cap must be the transaction's only log-emitting
+  instruction — batching two capped proves, or a capped prove plus other logging
+  instructions, truncates again and cannot be rejected on-chain, since the cap is per
+  invocation. A truncated batch is recoverable: `portal::prove` writes no state, so the
+  relayer can simply re-prove the missing hashes in a fresh transaction.
 - `domain_id` is the EVM source chain ID and is passed through untouched. `data` is ignored,
   as in the Solidity `prove`.
 
@@ -301,7 +321,13 @@ constructed with the existing Tron whitelist plus the Solana program ID.
   length; selector constant recomputed with `solana_program::keccak`; topic parsing.
 - `prove.rs`: hex log line formatting for one and several pairs.
 - `polymer.rs`: PDA derivations and both discriminators; `ValidationResult` decode from
-  a hand-built buffer.
+  a hand-built buffer, and `try_from_account_info` over an in-memory `AccountInfo`: a
+  Polymer-owned account decodes, a fake result account owned by another program, a wrong
+  discriminator and a sub-8-byte account are all `InvalidResultAccount`. The foreign-owner
+  case lives here rather than in `validate_polymer_prover.rs` because it is unreachable
+  through a litesvm `validate` call: the `address = result_pda(&authority)` constraint plus
+  the mock's owner-checked `Account<'info, ValidationResultAccount>` make the CPI abort
+  with `AccountOwnedByWrongProgram` first.
 - `state.rs`: PDAs, whitelist limit.
 
 ### Integration (litesvm)
@@ -320,8 +346,8 @@ constructed with the existing Tron whitelist plus the Solana program ID.
   `load_proof` for a given event.
 - Tests: `init_polymer_prover.rs`, `validate_polymer_prover.rs` (happy path with several
   intents, idempotent re-validation, disagreeing claimant rejected, `is_valid == false`,
-  each rejected check, wrong Polymer program account, fake result account owned by another
-  program, wrong result PDA), `prove_polymer_prover.rs` (log lines asserted from
+  each rejected check, wrong Polymer program account, wrong result PDA),
+  `prove_polymer_prover.rs` (log lines asserted from
   transaction logs, cap, empty batch, non-dispatcher caller, wrong destination),
   `close_proof_polymer_prover.rs` (through Portal `withdraw`, asserting the account is
   gone and rent returned), and Polymer arms added to the confused-deputy tests where the

@@ -76,6 +76,16 @@ pub fn validate<'info>(ctx: Context<'info, Validate<'info>>) -> Result<()> {
     mark_intent_hashes_proven(&ctx, proof_data)
 }
 
+/// One Proof PDA per pair, all in this instruction: there is no partial-batch or
+/// resume mode, so the relayer must drain the whole event in one transaction.
+/// That bounds pairs-per-event by transaction account locks (64 in total, minus
+/// the fixed accounts here, so roughly 55 with an address lookup table and
+/// roughly 25 in a legacy transaction) and by the 1.4M CU limit, and above both
+/// by Polymer's 3000-byte `unindexed_data` cap (~45 pairs). Keep EVM
+/// `Inbox.prove` batches destined for Solana at or below
+/// `MAX_INTENTS_PER_PROVE` (24), symmetric with the outbound cap; an oversized
+/// event is not lost, `Inbox.prove` can be re-called with a smaller batch, but
+/// the Polymer proof already requested for it is wasted.
 fn mark_intent_hashes_proven<'info>(
     ctx: &Context<'info, Validate<'info>>,
     proof_data: ProofData,
@@ -103,6 +113,13 @@ fn mark_intent_hash_proven<'info>(
         intent_hash,
         claimant,
     } = intent_hash_claimant;
+    // The 32-byte claimant is an opaque pubkey by construction: a solver that
+    // fulfills a Solana-source intent on EVM must supply a real Solana pubkey,
+    // an obligation enforced off-chain before it calls EVM `fulfill`. Any other
+    // 32 bytes still record a Proof (blocking `refund`) for an address nobody
+    // can spend from. PolymerProver.sol's `claimantBytes >> 160 != 0` skip is
+    // bytes32->address narrowing for its own leg, not a validation this side
+    // lacks; hyper-prover and local-prover behave the same way.
     let claimant = Pubkey::new_from_array(claimant.into());
 
     let (proof_pda, bump) = prover::Proof::pda(&intent_hash, &crate::ID);

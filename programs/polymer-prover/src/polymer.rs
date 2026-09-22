@@ -153,7 +153,14 @@ mod tests {
         );
     }
 
+    /// Pins the PDAs under the configured Polymer program. The golden holds the
+    /// devnet derivation; under `mainnet` the constant (and so every address)
+    /// differs by design, so the test is skipped rather than failed there.
     #[test]
+    #[cfg_attr(
+        feature = "mainnet",
+        ignore = "golden pins the devnet POLYMER_PROVER_ID"
+    )]
     fn pdas_deterministic() {
         let authority = Pubkey::new_from_array([7u8; 32]);
         goldie::assert_json!((
@@ -163,16 +170,29 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn validation_result_roundtrip_ignores_trailing_padding() {
-        let expected = ValidationResult {
+    fn sample_result() -> ValidationResult {
+        ValidationResult {
             is_valid: true,
             error_message: String::new(),
             chain_id: 8453,
             emitting_contract: [0xab; 20],
             topics: vec![1u8; 64],
             unindexed_data: vec![2u8; 96],
-        };
+        }
+    }
+
+    /// `discriminator ‖ borsh(body) ‖ zero padding`, the shape of the account
+    /// Polymer allocates at `INIT_SPACE` and writes in `validate_event`.
+    fn account_data(discriminator: [u8; 8], body: &ValidationResult) -> Vec<u8> {
+        let mut data = discriminator.to_vec();
+        data.extend(borsh::to_vec(body).unwrap());
+        data.extend(std::iter::repeat_n(0u8, 512));
+        data
+    }
+
+    #[test]
+    fn validation_result_roundtrip_ignores_trailing_padding() {
+        let expected = sample_result();
         let mut body = borsh::to_vec(&expected).unwrap();
         // Polymer allocates the account at max size, so the serialized body is
         // followed by zero padding that a strict decoder would reject.
@@ -186,5 +206,72 @@ mod tests {
     fn validation_result_rejects_truncated_body() {
         let body = vec![1u8; 5];
         assert!(ValidationResult::from_body(&body).is_err());
+    }
+
+    /// The positive arm that keeps the three rejections below from passing
+    /// vacuously: a Polymer-owned account with the right discriminator decodes.
+    #[test]
+    fn try_from_account_info_decodes_polymer_owned_account() {
+        let expected = sample_result();
+        let mut data = account_data(VALIDATION_RESULT_DISCRIMINATOR, &expected);
+        let key = Pubkey::new_unique();
+        let owner = POLYMER_PROVER_ID;
+        let mut lamports = 0u64;
+        let account = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+
+        assert_eq!(
+            ValidationResult::try_from_account_info(&account).unwrap(),
+            expected
+        );
+    }
+
+    /// The owner check is what makes the result authentic: the same bytes under
+    /// any other program are a look-alike, not Polymer's verdict. Unreachable
+    /// through a transaction (the `address` constraint pins the slot to Polymer's
+    /// PDA), which is why it is pinned here.
+    #[test]
+    fn try_from_account_info_rejects_account_owned_by_another_program() {
+        let mut data = account_data(VALIDATION_RESULT_DISCRIMINATOR, &sample_result());
+        let key = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let mut lamports = 0u64;
+        let account = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+
+        assert_eq!(
+            ValidationResult::try_from_account_info(&account).unwrap_err(),
+            PolymerProverError::InvalidResultAccount.into()
+        );
+    }
+
+    #[test]
+    fn try_from_account_info_rejects_wrong_discriminator() {
+        let mut discriminator = VALIDATION_RESULT_DISCRIMINATOR;
+        discriminator[0] ^= 0xff;
+        let mut data = account_data(discriminator, &sample_result());
+        let key = Pubkey::new_unique();
+        let owner = POLYMER_PROVER_ID;
+        let mut lamports = 0u64;
+        let account = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+
+        assert_eq!(
+            ValidationResult::try_from_account_info(&account).unwrap_err(),
+            PolymerProverError::InvalidResultAccount.into()
+        );
+    }
+
+    /// Models an account shorter than the discriminator (the `split_at_checked`
+    /// exit), e.g. one that was never initialised.
+    #[test]
+    fn try_from_account_info_rejects_data_shorter_than_discriminator() {
+        let mut data = VALIDATION_RESULT_DISCRIMINATOR[..4].to_vec();
+        let key = Pubkey::new_unique();
+        let owner = POLYMER_PROVER_ID;
+        let mut lamports = 0u64;
+        let account = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+
+        assert_eq!(
+            ValidationResult::try_from_account_info(&account).unwrap_err(),
+            PolymerProverError::InvalidResultAccount.into()
+        );
     }
 }

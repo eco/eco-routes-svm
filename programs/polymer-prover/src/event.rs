@@ -78,18 +78,22 @@ fn uint64_word(word: &[u8]) -> Option<u64> {
 }
 
 /// Inverse of [`abi_encode_bytes`]: returns the payload, or `None` if the
-/// offset is not 32, or the buffer is shorter than the padded payload.
+/// offset is not 32, the length word cannot be a valid padded length, or the
+/// buffer is shorter than the padded payload.
 fn abi_decode_bytes(data: &[u8]) -> Option<Vec<u8>> {
     let offset = uint64_word(data.get(..WORD)?)?;
     if offset != WORD as u64 {
         return None;
     }
     let len = usize::try_from(uint64_word(data.get(WORD..2 * WORD)?)?).ok()?;
-    let padded_end = 2 * WORD + len.div_ceil(WORD) * WORD;
-    if data.len() < padded_end {
+    // `len` is an untrusted 32-byte ABI word: keep every derived index checked
+    // so an absurd length is `InvalidEventData`, not an overflow panic.
+    let padded_len = len.div_ceil(WORD).checked_mul(WORD)?;
+    let body = data.get(2 * WORD..)?;
+    if body.len() < padded_len {
         return None;
     }
-    Some(data[2 * WORD..2 * WORD + len].to_vec())
+    Some(body.get(..len)?.to_vec())
 }
 
 #[cfg(test)]
@@ -185,6 +189,20 @@ mod tests {
     fn parse_rejects_length_beyond_buffer() {
         let mut data = abi_encode_bytes(&[1u8; 8]);
         data[63] = 200;
+        let err = IntentFulfilledFromSource::parse(
+            &topics(INTENT_FULFILLED_FROM_SOURCE_SELECTOR, 1),
+            &data,
+        )
+        .unwrap_err();
+        assert_eq!(err, PolymerProverError::InvalidEventData.into());
+    }
+
+    #[test]
+    fn parse_rejects_absurd_length_word() {
+        // The length word must stay a valid `uint64` (bytes 32..56 zero) or
+        // `uint64_word` rejects it before the padded-length computation runs.
+        let mut data = abi_encode_bytes(&[1u8; 8]);
+        data[2 * 32 - 8..2 * 32].copy_from_slice(&u64::MAX.to_be_bytes());
         let err = IntentFulfilledFromSource::parse(
             &topics(INTENT_FULFILLED_FROM_SOURCE_SELECTOR, 1),
             &data,

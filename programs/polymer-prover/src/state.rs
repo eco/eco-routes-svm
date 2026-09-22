@@ -86,7 +86,18 @@ mod tests {
     fn config_new_too_many_emitters() {
         let emitters = vec![[0u8; 32].into(); MAX_WHITELIST_LEN + 1];
 
-        assert!(Config::new(emitters).is_err());
+        // `Config` derives no `Debug`, so unwrap the error side directly.
+        assert_eq!(
+            Config::new(emitters).err().unwrap(),
+            PolymerProverError::TooManyWhitelistedEmitters.into()
+        );
+    }
+
+    #[test]
+    fn config_new_accepts_max_emitters() {
+        let emitters = vec![[0u8; 32].into(); MAX_WHITELIST_LEN];
+
+        assert!(Config::new(emitters).is_ok());
     }
 
     #[test]
