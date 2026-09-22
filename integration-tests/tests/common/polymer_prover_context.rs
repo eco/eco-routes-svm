@@ -85,6 +85,23 @@ impl PolymerProver<'_> {
         self.send_transaction(transaction)
     }
 
+    /// The canonical fixed-account slots for `validate` under `authority`. Tests
+    /// that pin one of `Validate`'s `address =` gates take this and override a
+    /// single field.
+    pub fn validate_accounts(authority: &Pubkey) -> polymer_prover::accounts::Validate {
+        polymer_prover::accounts::Validate {
+            authority: *authority,
+            config: polymer_prover::state::Config::pda().0,
+            cache_account: polymer::cache_pda(authority).0,
+            result_account: polymer::result_pda(authority).0,
+            internal: polymer::internal_pda().0,
+            polymer_prover_program: polymer::POLYMER_PROVER_ID,
+            system_program: anchor_lang::system_program::ID,
+            event_authority: event_authority_pda(&polymer_prover::ID).0,
+            program: polymer_prover::ID,
+        }
+    }
+
     /// `validate` for the proof loaded under `authority`; `proof_accounts` are
     /// the Proof PDAs in payload order.
     pub fn validate(
@@ -92,21 +109,26 @@ impl PolymerProver<'_> {
         authority: &Keypair,
         proof_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
-        let accounts = polymer_prover::accounts::Validate {
-            authority: authority.pubkey(),
-            config: polymer_prover::state::Config::pda().0,
-            cache_account: polymer::cache_pda(&authority.pubkey()).0,
-            result_account: polymer::result_pda(&authority.pubkey()).0,
-            internal: polymer::internal_pda().0,
-            polymer_prover_program: polymer::POLYMER_PROVER_ID,
-            system_program: anchor_lang::system_program::ID,
-            event_authority: event_authority_pda(&polymer_prover::ID).0,
-            program: polymer_prover::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(proof_accounts)
-        .collect();
+        self.validate_with_accounts(
+            authority,
+            Self::validate_accounts(&authority.pubkey()),
+            proof_accounts,
+        )
+    }
+
+    /// `validate` with the fixed slots supplied verbatim, on the same
+    /// transaction shape (compute budget included) as the canonical path.
+    pub fn validate_with_accounts(
+        &mut self,
+        authority: &Keypair,
+        accounts: polymer_prover::accounts::Validate,
+        proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let accounts = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .chain(proof_accounts)
+            .collect();
         let instruction = Instruction {
             program_id: polymer_prover::ID,
             accounts,

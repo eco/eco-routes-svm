@@ -1,5 +1,6 @@
 use std::iter;
 
+use anchor_lang::Discriminator;
 use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use polymer_prover::instructions::PolymerProverError;
@@ -13,7 +14,7 @@ pub mod common;
 
 /// LiteSVM's default fee structure charges 5000 lamports per signature; the
 /// withdraw transaction carries exactly one (the payer's).
-const TRANSACTION_FEE: u64 = 5000;
+const TRANSACTION_FEE: u64 = 5_000;
 
 #[test]
 fn close_proof_invalid_portal_proof_closer_fail() {
@@ -79,5 +80,24 @@ fn withdraw_closes_polymer_proof_and_refunds_payer() {
     assert_eq!(
         ctx.balance(&payer) + marker_rent + TRANSACTION_FEE,
         payer_before + proof_rent
+    );
+}
+
+/// `Context::set_proof` fabricates every prover's Proof with hyper-prover's
+/// `ProofAccount::DISCRIMINATOR`. That stands in for a Proof polymer-prover
+/// (or local-prover) actually wrote only because Anchor derives the
+/// discriminator from the struct *name* and all three crates call theirs
+/// `ProofAccount`; `close_proof`'s `Account<ProofAccount>` is what would reject
+/// a mismatch. Pin the coincidence so a rename fails here, with a message
+/// naming the cause, rather than as an opaque mismatch inside `withdraw`.
+#[test]
+fn set_proof_discriminator_matches_every_prover() {
+    assert_eq!(
+        polymer_prover::state::ProofAccount::DISCRIMINATOR,
+        hyper_prover::state::ProofAccount::DISCRIMINATOR
+    );
+    assert_eq!(
+        local_prover::state::ProofAccount::DISCRIMINATOR,
+        hyper_prover::state::ProofAccount::DISCRIMINATOR
     );
 }

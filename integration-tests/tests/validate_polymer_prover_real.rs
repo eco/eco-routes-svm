@@ -1,11 +1,17 @@
-//! Wiring check against Polymer's real program: loads their published fixture
-//! proof through the real `create_accounts` / `load_proof`, then runs our
-//! `validate`, which must get past Polymer's verification and fail on our own
-//! topic-count check (the fixture event has four topics, ours has two).
+//! Checks against Polymer's real program rather than the localnet mock.
 //!
-//! Needs `POLYMER_PROVER_SO=<path to dumped .so>`; run with `-- --ignored`.
+//! The `#[ignore]` wiring test loads their published fixture proof through the
+//! real `create_accounts` / `load_proof`, then runs our `validate`, which must
+//! get past Polymer's verification and fail on our own topic-count check (the
+//! fixture event has four topics, ours has two). Needs
+//! `POLYMER_PROVER_SO=<path to dumped .so>`; run with `-- --ignored`.
+//!
+//! The hermetic layout test decodes the `result` account bytes that real
+//! program wrote for the same proof (captured once, see
+//! `fixtures/polymer/README.md`) with our hand-rolled mirror, so it runs on
+//! every PR with no network.
 
-use anchor_lang::prelude::AccountMeta;
+use anchor_lang::prelude::{AccountInfo, AccountMeta};
 use anchor_lang::AnchorSerialize;
 use polymer_prover::event::evm_address_to_bytes32;
 use polymer_prover::instructions::PolymerProverError;
@@ -30,16 +36,21 @@ const FIXTURE_SIGNER: [u8; 20] = [
     0x8d, 0x39, 0x21, 0xb9, 0x6a, 0x38, 0x15, 0xf4, 0x03, 0xfb, 0x3a, 0x4c, 0x7f, 0xf5, 0x25, 0x96,
     0x9d, 0x16, 0xf9, 0xe0,
 ];
+/// OP Sepolia, the chain the fixture event was emitted on.
+const FIXTURE_CHAIN_ID: u32 = 11155420;
 const FIXTURE_PEPTIDE_CHAIN_ID: u64 = 901;
 const FIXTURE_CLIENT_TYPE: &str = "proof_api";
 
-fn fixture_proof() -> Vec<u8> {
-    let hex = include_str!("fixtures/polymer/op-proof-v2.hex");
+fn decode_hex(hex: &str) -> Vec<u8> {
     let hex = hex.trim().trim_start_matches("0x");
     (0..hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
         .collect()
+}
+
+fn fixture_proof() -> Vec<u8> {
+    decode_hex(include_str!("fixtures/polymer/op-proof-v2.hex"))
 }
 
 /// Polymer's `InternalAccount` body: authority, client_type, signer_addr, peptide_chain_id.
@@ -58,6 +69,32 @@ fn send(ctx: &mut common::Context, signer: &Keypair, ix: Instruction) -> common:
         ctx.latest_blockhash(),
     );
     ctx.send_transaction(tx)
+}
+
+/// `polymer::ValidationResult` is a hand-rolled mirror of Polymer's
+/// `ValidationResultAccount`, and every other test validates it against the
+/// mock's copy of the same struct. This one feeds it the bytes Polymer's real
+/// program wrote, so a field reorder or width change in the mirror fails here.
+#[test]
+fn polymer_written_result_account_decodes_with_our_mirror() {
+    let mut data = decode_hex(include_str!(
+        "fixtures/polymer/validation-result-v1.0.4.hex"
+    ));
+    let key = polymer::result_pda(&Pubkey::new_unique()).0;
+    let owner = polymer::POLYMER_PROVER_ID;
+    let mut lamports = 0u64;
+    let account = AccountInfo::new(&key, false, false, &mut lamports, &mut data, &owner, false);
+
+    let result = polymer::ValidationResult::try_from_account_info(&account).unwrap();
+    assert!(result.is_valid);
+    assert_eq!(result.error_message, "");
+    assert_eq!(result.chain_id, FIXTURE_CHAIN_ID);
+    assert_eq!(result.emitting_contract, FIXTURE_EMITTER);
+    // Four topics; our own event has two, which is why the wiring test below
+    // expects `InvalidTopicsLength`.
+    assert_eq!(result.topics.len(), 4 * 32);
+    // One ABI word of non-indexed data.
+    assert_eq!(result.unindexed_data.len(), 32);
 }
 
 #[test]
@@ -147,10 +184,21 @@ fn real_polymer_program_validates_fixture_proof_and_our_checks_run() {
     // Our `validate`: Polymer accepts the proof (is_valid), the emitter is
     // whitelisted, then our topic-count check rejects the four-topic event.
     let result = ctx.polymer_prover().validate(&authority, vec![]);
+
+    // Polymer's frame must have returned Ok: its success log is what separates
+    // "our check rejected the four-topic event" from "Polymer itself happened
+    // to return the same custom error code".
     assert!(
         result
             .clone()
-            .is_err_and(common::is_error(PolymerProverError::InvalidTopicsLength)),
+            .is_err_and(common::program_succeeded(polymer::POLYMER_PROVER_ID)),
+        "polymer program did not succeed: {result:?}"
+    );
+    assert!(
+        result.clone().is_err_and(common::is_program_error(
+            polymer_prover::ID,
+            PolymerProverError::InvalidTopicsLength
+        )),
         "{result:?}"
     );
 }

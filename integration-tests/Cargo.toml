@@ -3,6 +3,22 @@ name = "integration-tests"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Mirrors the programs' `mainnet` feature so the test crate's `CHAIN_ID`,
+# `POLYMER_PROVER_ID` and `MAILBOX_ID` match `.so` files built with
+# `--features mainnet`. Used by the Polymer upstream-drift workflow to run the
+# real-program test against Polymer's mainnet binary, which Anchor only runs at
+# the mainnet ID; the rest of the suite assumes localnet builds.
+mainnet = [
+    "eco-svm-std/mainnet",
+    "flash-fulfiller/mainnet",
+    "hyper-prover/mainnet",
+    "local-prover/mainnet",
+    "polymer-prover/mainnet",
+    "portal/mainnet",
+    "proof-helper/mainnet",
+]
+
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
