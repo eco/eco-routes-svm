@@ -70,15 +70,6 @@ pub fn vault_pda(portal: &Pubkey, intent_hash: &Bytes32) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[portal::state::VAULT_SEED, intent_hash.as_ref()], portal)
 }
 
-/// Intent2's withdrawn marker, derived under the order's portal. Same reasoning as
-/// [`vault_pda`].
-pub fn withdrawn_marker_pda(portal: &Pubkey, intent_hash: &Bytes32) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[portal::state::CLAIMED_MARKER_SEED, intent_hash.as_ref()],
-        portal,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

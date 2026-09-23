@@ -200,7 +200,11 @@ order hash and `escrow_authority_pda(order_hash)`.
   native amount zero. The runtime measured Input fills that token amount.
 - Callers may strengthen publication, never weaken it:
   `effective_publish = order.require_publish || call.publish`.
-- Local account checks and the WithdrawnMarker check apply regardless of publication.
+- Local account checks apply regardless of publication. The child's `WithdrawnMarker`
+  is deliberately **not** consulted: portal's refund accepts a marked vault immediately
+  (no deadline wait, no proof check), so a push into a settled child is recoverable by
+  `reward.creator`, whereas refusing it would strand an escrow that has no other exit.
+  A settled child is therefore a builder concern, not a handler check.
   Existing vault balances of any size are allowed. `PushShortfall` requires the vault's
   balance increase to equal the measured input; existing funds cannot mask a transfer
   fee. A short transfer rolls back the escrow debit, vault credit, withheld fees and
@@ -234,8 +238,8 @@ emitted. `PushShortfall` checks the current transfer independently of existing f
 Portal's refund does not write a terminal marker. A delayed proof for a refunded hash
 still refers to that exact child; re-funding the same hash can pay its original claimant.
 Builders must not treat a refund as permission to recycle a child salt. A fresh salt
-derives a different vault and proof PDA. The chainer keeps the WithdrawnMarker check,
-but adds no consumption registry or settlement nonce. Repeating `chain` after draining
+derives a different vault and proof PDA. The chainer inspects no settlement state at
+all — no marker check, no consumption registry, no settlement nonce. Repeating `chain` after draining
 the escrow fails with `ZeroAmount`; putting new tokens into that escrow is a separate
 funding action, not replay of the parent's fulfillment.
 
@@ -336,7 +340,7 @@ Closing cannot erase the recorded announcement or the escrow's commitment.
 Buffers are reusable transport, **not single-use settlement records**. Replaying after
 a drain fails on the empty escrow. Replaying against a different order's new escrow
 fails its commitment check. Re-funding the same order still follows the existing
-measurement, transfer-delivery and WithdrawnMarker rules; staging adds no new settlement nonce.
+measurement and transfer-delivery rules; staging adds no settlement nonce.
 Every execution revalidates templates/configs/rewards, remeasures, checks local accounts,
 and applies publication strengthening. There is **no deadline gate**, including at seal.
 A stale account list or failed transfer/publication leaves both buffer and escrow intact.
