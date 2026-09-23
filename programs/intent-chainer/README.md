@@ -216,8 +216,8 @@ order hash and `escrow_authority_pda(order_hash)`.
   funding intent1. After funding, solvers should still forward to the local vault even
   near/after expiry, so Portal can refund an unproven intent or pay its proven claimant.
   A valid proof blocks refund until withdrawal. All other chainer checks still apply.
-- Invalid amount widths, an unmet minimum, an unusable remote template or an existing
-  withdrawn child are not repaired by an announcement. There is no generic
+- Invalid amount widths, an unmet minimum or an unusable remote template are not
+  repaired by an announcement. There is no generic
   chainer refund or arbitrary sweep. Keeping the preimage is necessary, not a guarantee
   that every permanently invalid funded order can recover.
 
@@ -239,8 +239,8 @@ Portal's refund does not write a terminal marker. A delayed proof for a refunded
 still refers to that exact child; re-funding the same hash can pay its original claimant.
 Builders must not treat a refund as permission to recycle a child salt. A fresh salt
 derives a different vault and proof PDA. The chainer inspects no settlement state at
-all — no marker check, no consumption registry, no settlement nonce. Repeating `chain` after draining
-the escrow fails with `ZeroAmount`; putting new tokens into that escrow is a separate
+all — no marker check, no consumption registry, no settlement nonce. Repeating `chain`
+after draining the escrow fails with `ZeroAmount`; putting new tokens into that escrow is a separate
 funding action, not replay of the parent's fulfillment.
 
 A live escrow balance can change before execution; custody/account checks remain
@@ -355,18 +355,19 @@ submit these legacy packets with a blockhash, CU limit **and CU price**, no ALT:
 | Transaction | Wire bytes |
 | --- | ---: |
 | Inline announce + escrow ATA (not submitted) | 1247 — too large |
-| Inline chain (not submitted) | 1376 — too large |
+| Inline chain (not submitted) | 1343 — too large |
 | Prepare 1: init + all 781 Order bytes | **1150** |
 | Prepare 2: seal/announce + idempotent escrow ATA creation | **499** |
-| Execute: chain_from_account | **627** |
+| Execute: chain_from_account | **594** |
 | Close separately | 263 |
 
-Prepare is explicitly **two transactions**, not one. The small differences from a
-solver's 1254/1383-byte envelopes depend on framing; clients must still size their own
-final signed transactions. No stage packet carries an authority signature into execution.
+Prepare is explicitly **two transactions**, not one. A solver independently measured
+1254/1383-byte envelopes for the same two inline shapes; those differ by framing, and the
+chain figure predates dropping the child `WithdrawnMarker` account (33 bytes). Clients
+must still size their own final signed transactions. No stage packet carries an authority signature into execution.
 For a 4096-byte Order, upload is init with 800 bytes plus five append transactions;
 then seal/announce and execute. Init at 800 bytes is 1169 bytes, each full append
-1072 bytes, standalone seal 297 bytes, execution still 627 bytes. Every submitted
+1072 bytes, standalone seal 297 bytes, execution still 594 bytes. Every submitted
 native-path test packet is checked against 1232 bytes.
 
 Client changes (solver implementation remains out of scope):
