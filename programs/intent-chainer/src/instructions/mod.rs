@@ -49,11 +49,12 @@ pub enum ChainerError {
     InvalidVault,
     /// The `vault_ata` is not the vault's derived ATA for `base_mint`.
     InvalidVaultAta,
-    /// The `withdrawn_marker` address is not
-    /// `portal::state::WithdrawnMarker::pda(intent_hash)`.
+    /// Reserved legacy code, no longer emitted. Keep subsequent error codes stable.
     InvalidWithdrawnMarker,
-    /// Intent2's reward has already been withdrawn. Pushing more into a settled
-    /// vault would be unrecoverable by the claimant.
+    /// Reserved legacy code, no longer emitted. `chain` does not consult intent2's
+    /// `WithdrawnMarker`: a push into a settled vault is refundable by
+    /// `reward.creator`, while refusing it would strand the escrow for good. See
+    /// [`chain`]. Keep subsequent error codes stable.
     IntentAlreadySettled,
     /// The vault's balance increase differs from the measured transfer amount.
     PushShortfall,

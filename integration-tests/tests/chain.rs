@@ -14,12 +14,14 @@ use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use common::intent_chainer_context::IDENTITY_SCALE;
 use common::{contains_cpi_event, contains_event, is_error, Context};
 use eco_svm_std::prover::Proof;
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::CHAIN_ID;
 use intent_chainer::events::IntentChained;
 use intent_chainer::instructions::ChainerError;
-use intent_chainer::state::{vault_pda, withdrawn_marker_pda};
+use intent_chainer::state::vault_pda;
 use intent_chainer::types::{MAX_ROUTE_LEN, WAD};
-use portal::state::{dispatcher_pda, executor_pda, proof_closer_pda, FulfillMarker};
+use portal::state::{
+    dispatcher_pda, executor_pda, proof_closer_pda, FulfillMarker, WithdrawnMarker,
+};
 use portal::types::{intent_hash, TokenAmount};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
@@ -204,7 +206,7 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
             chained.route.hash(),
             claimant.pubkey(),
             proof.0,
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
+            WithdrawnMarker::pda(&chained.intent_hash).0,
             proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
@@ -444,11 +446,6 @@ fn a_foreign_order_cannot_reach_another_orders_escrow() {
         victim.escrow_ata,
         attacker_chained.vault,
         attacker_chained.vault_ata,
-        withdrawn_marker_pda(
-            &attacker_chained.order.portal,
-            &attacker_chained.intent_hash,
-        )
-        .0,
         base_mint,
     );
 
@@ -691,7 +688,7 @@ fn chain_late_transfer_preserves_portal_refund_deadline() {
             chained.vault,
             chained.route.hash(),
             Proof::pda(&chained.intent_hash, &order.reward.prover).0,
-            withdrawn_marker_pda(&order.portal, &chained.intent_hash).0,
+            WithdrawnMarker::pda(&chained.intent_hash).0,
             creator,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
@@ -799,7 +796,7 @@ fn chain_late_transfer_preserves_proven_claim() {
     ctx.airdrop_token_ata(&base_mint, &creator, 0);
     let creator_ata =
         get_associated_token_address_with_program_id(&creator, &base_mint, &ctx.token_program);
-    let withdrawn_marker = withdrawn_marker_pda(&order.portal, &chained.intent_hash).0;
+    let withdrawn_marker = WithdrawnMarker::pda(&chained.intent_hash).0;
     assert!(ctx
         .portal()
         .refund_intent(
@@ -932,8 +929,17 @@ fn chain_rejects_an_amount_that_overflows_a_solana_slot() {
 /// Portal has no funded flag, so a push after withdrawal would be unrecoverable
 /// by the claimant. This is the SVM stand-in for the EVM `publish`'s
 /// already-settled rejection, which portal's stateless `publish` cannot give.
+/// A settled child is pushed into anyway, and the creator gets it straight back.
+///
+/// `withdraw` pays `min(reward_amount, vault_ata.amount)` and marks regardless, so
+/// anyone may mark an empty vault for zero — the marker is not under the chainer's
+/// or the builder's control. Refusing the push would therefore strand an
+/// order-scoped escrow that has no other exit. Portal's refund accepts a marked
+/// vault immediately (`refund.rs:82`), with no deadline wait and no proof check,
+/// which is what makes the permissive choice the recoverable one. Note this
+/// refund needs no `warp_to_timestamp`, unlike the unmarked case.
 #[test]
-fn chain_refuses_to_push_into_an_already_withdrawn_intent() {
+fn chain_pushes_into_a_settled_intent_and_the_creator_refunds_it() {
     let (mut ctx, base_mint, recipient_ata) = setup();
     let order = ctx.intent_chainer().svm_order(
         base_mint,
@@ -947,13 +953,37 @@ fn chain_refuses_to_push_into_an_already_withdrawn_intent() {
         .resolve(&order, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    ctx.set_withdrawn_marker(withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0);
+    let withdrawn_marker = WithdrawnMarker::pda(&chained.intent_hash).0;
+    ctx.set_withdrawn_marker(withdrawn_marker);
 
-    assert!(ctx
-        .intent_chainer()
-        .chain(&chained, false)
-        .is_err_and(is_error(ChainerError::IntentAlreadySettled)));
-    assert_eq!(ctx.token_balance(&chained.escrow_ata), DELIVERED);
+    ctx.intent_chainer().chain(&chained, false).unwrap();
+    assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+
+    let creator = order.reward.creator;
+    ctx.airdrop_token_ata(&base_mint, &creator, 0);
+    let creator_ata =
+        get_associated_token_address_with_program_id(&creator, &base_mint, &ctx.token_program);
+    ctx.portal()
+        .refund_intent(
+            order.destination,
+            chained.reward.clone(),
+            chained.vault,
+            chained.route.hash(),
+            Proof::pda(&chained.intent_hash, &local_prover::ID).0,
+            withdrawn_marker,
+            creator,
+            vec![
+                AccountMeta::new(chained.vault_ata, false),
+                AccountMeta::new(creator_ata, false),
+                AccountMeta::new_readonly(base_mint, false),
+            ],
+        )
+        .expect("a marked vault refunds immediately, with no deadline wait");
+    assert_eq!(ctx.token_balance(&creator_ata), DELIVERED);
+    assert!(ctx.get_account(&chained.vault_ata).is_none());
+    // Refund reads the marker, never writes or clears one.
+    assert!(ctx.get_account(&withdrawn_marker).is_some());
 }
 
 #[test]
@@ -986,7 +1016,6 @@ fn chain_rejects_a_wrong_vault_ata() {
             chained.escrow_ata,
             chained.vault,
             hijacked,
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             base_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidVaultAta)));
@@ -1023,40 +1052,9 @@ fn chain_rejects_a_wrong_escrow_ata() {
             foreign,
             chained.vault,
             chained.vault_ata,
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             base_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidEscrowAta)));
-}
-
-#[test]
-fn chain_rejects_a_mismatched_withdrawn_marker() {
-    let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
-        base_mint,
-        recipient_ata,
-        local_prover::ID,
-        IDENTITY_SCALE,
-        1,
-    );
-    let chained = ctx
-        .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
-    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
-
-    assert!(ctx
-        .intent_chainer()
-        .chain_with_accounts(
-            &chained,
-            false,
-            chained.escrow_authority,
-            chained.escrow_ata,
-            chained.vault,
-            chained.vault_ata,
-            withdrawn_marker_pda(&portal::ID, &Bytes32::from([9u8; 32])).0,
-            base_mint,
-        )
-        .is_err_and(is_error(ChainerError::InvalidWithdrawnMarker)));
 }
 
 #[test]
@@ -1086,7 +1084,6 @@ fn chain_rejects_a_mint_that_is_not_the_orders() {
             chained.escrow_ata,
             chained.vault,
             chained.vault_ata,
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             other_mint,
         )
         .is_err_and(is_error(ChainerError::InvalidMint)));
@@ -1227,10 +1224,6 @@ fn chain_cannot_publish_from_inside_a_route_call() {
         AccountMeta::new_readonly(base_mint, false),
         AccountMeta::new(chained.vault, false),
         AccountMeta::new(chained.vault_ata, false),
-        AccountMeta::new_readonly(
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
-            false,
-        ),
         AccountMeta::new_readonly(portal::ID, false),
         AccountMeta::new_readonly(anchor_spl::token::ID, false),
         AccountMeta::new_readonly(anchor_spl::token_2022::ID, false),
@@ -1448,7 +1441,7 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
     let creator_ata =
         get_associated_token_address_with_program_id(&creator, &base_mint, &ctx.token_program);
     let old_proof = Proof::pda(&old.intent_hash, &local_prover::ID).0;
-    let old_withdrawn = withdrawn_marker_pda(&order.portal, &old.intent_hash).0;
+    let old_withdrawn = WithdrawnMarker::pda(&old.intent_hash).0;
     ctx.warp_to_timestamp(old.reward.deadline as i64 + 1);
     ctx.portal()
         .refund_intent(
@@ -1501,7 +1494,7 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
     );
     ctx.intent_chainer().seed_escrow(&fresh, DELIVERED);
     ctx.intent_chainer().chain(&fresh, true).unwrap();
-    let fresh_withdrawn = withdrawn_marker_pda(&order.portal, &fresh.intent_hash).0;
+    let fresh_withdrawn = WithdrawnMarker::pda(&fresh.intent_hash).0;
     let claimant_ata =
         get_associated_token_address_with_program_id(&claimant, &base_mint, &ctx.token_program);
     assert!(ctx

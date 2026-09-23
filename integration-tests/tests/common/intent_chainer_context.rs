@@ -3,7 +3,7 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{Bytes32, CHAIN_ID};
-use intent_chainer::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda};
+use intent_chainer::state::{escrow_authority_pda, vault_pda};
 use intent_chainer::types::{Amount, Item, Order, Template, TemplateProgram, WAD};
 use portal::types::{Call, Calldata, CalldataWithAccounts, Reward, Route, TokenAmount};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -387,7 +387,6 @@ impl IntentChainer<'_> {
             chained.escrow_ata,
             chained.vault,
             chained.vault_ata,
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             chained.order.base_mint,
             portal_program,
         )
@@ -402,7 +401,6 @@ impl IntentChainer<'_> {
             chained.escrow_ata,
             chained.vault,
             chained.vault_ata,
-            withdrawn_marker_pda(&chained.order.portal, &chained.intent_hash).0,
             chained.order.base_mint,
         )
     }
@@ -418,7 +416,6 @@ impl IntentChainer<'_> {
         escrow_ata: Pubkey,
         vault: Pubkey,
         vault_ata: Pubkey,
-        withdrawn_marker: Pubkey,
         base_mint: Pubkey,
     ) -> TransactionResult {
         self.chain_full(
@@ -428,7 +425,6 @@ impl IntentChainer<'_> {
             escrow_ata,
             vault,
             vault_ata,
-            withdrawn_marker,
             base_mint,
             chained.order.portal,
         )
@@ -444,7 +440,6 @@ impl IntentChainer<'_> {
         escrow_ata: Pubkey,
         vault: Pubkey,
         vault_ata: Pubkey,
-        withdrawn_marker: Pubkey,
         base_mint: Pubkey,
         portal_program: Pubkey,
     ) -> TransactionResult {
@@ -459,7 +454,6 @@ impl IntentChainer<'_> {
             base_mint,
             vault,
             vault_ata,
-            withdrawn_marker,
             portal_program,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,

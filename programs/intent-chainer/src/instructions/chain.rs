@@ -10,7 +10,7 @@ use tiny_keccak::{Hasher, Keccak};
 
 use crate::events::IntentChained;
 use crate::instructions::ChainerError;
-use crate::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda, ESCROW_SEED};
+use crate::state::{escrow_authority_pda, vault_pda, ESCROW_SEED};
 use crate::types::{scale_amount, AmountContext, Order};
 
 /// Args for [`chain_intent`].
@@ -60,8 +60,6 @@ pub struct Chain<'info> {
     /// CHECK: address is validated as the vault's derived ATA
     #[account(mut)]
     pub vault_ata: UncheckedAccount<'info>,
-    /// CHECK: address is validated as `WithdrawnMarker::pda(intent_hash)`
-    pub withdrawn_marker: UncheckedAccount<'info>,
     /// CHECK: address is validated to equal the order's committed `portal`
     ///
     /// Deliberately not pinned to a linked-in `portal::ID`. One chainer serves any
@@ -276,31 +274,26 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
         ChainerError::InvalidVaultAta
     );
 
-    // Portal decides a reward's fate from live vault balances and a one-shot
-    // `WithdrawnMarker`, never from a funded flag — which is exactly why pushing
-    // directly into the vault works at all. The flip side is that a push after
-    // withdrawal is unrecoverable by the claimant, so refuse it.
+    // Deliberately NOT gated on intent2's `WithdrawnMarker`, unlike the EVM
+    // chainer's unconditional Portal status check. The two portals differ where it
+    // matters: EVM's `_validateRefund` reverts while a proof stands and
+    // `recoverToken` refuses reward tokens, so a post-settlement push there really
+    // is stuck. Solana's `portal::refund` opens with `if !withdrawn_marker
+    // .data_is_empty() { return Ok(()) }` (`refund.rs:82`) — a marker makes the
+    // vault refundable *immediately*, with no deadline wait and no proof check.
     //
-    // This corresponds to the EVM chainer's unconditional Portal status check,
-    // independent of publication — but it is **narrower**, and
-    // the difference is worth being precise about. `portal::refund` never creates
-    // a marker; it only reads one, to permit the post-withdrawal sweep
-    // (`refund.rs:82`). So a *refunded* intent leaves no marker and passes this
-    // check, where on EVM `Status.Refunded` is terminal.
+    // So a push into a settled vault is recoverable by `reward.creator`, and
+    // rejecting it is not. `chain` is the only exit from an order-scoped escrow:
+    // custody is `keccak(borsh(order))`, there is no sweep, and no later call can
+    // clear a marker. Refusing here would convert a recoverable state into a
+    // permanently stranded balance — and the marker is not in the caller's
+    // control, since `withdraw` pays `min(reward_amount, vault_ata.amount)` and
+    // still marks, so an empty vault can be "withdrawn" for zero at any time.
     //
-    // A fresh child route salt is the builder's responsibility. Reusing every
+    // A fresh child route salt remains the builder's responsibility. Reusing every
     // hashed field and the measured amount funds the SAME child intent, including
-    // any delayed proof for it; a different parent or order does not create a new
-    // claim. Neither a vault balance nor this marker proves child-hash uniqueness.
-    // Portal's refund/late-proof semantics are unchanged here.
-    require!(
-        ctx.accounts.withdrawn_marker.key() == withdrawn_marker_pda(&order.portal, intent_hash).0,
-        ChainerError::InvalidWithdrawnMarker
-    );
-    require!(
-        ctx.accounts.withdrawn_marker.data_is_empty(),
-        ChainerError::IntentAlreadySettled
-    );
+    // any delayed proof for it; neither a vault balance nor a marker proves child-
+    // hash uniqueness. Portal's refund/late-proof semantics are unchanged here.
 
     Ok(())
 }

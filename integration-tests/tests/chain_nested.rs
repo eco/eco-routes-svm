@@ -13,9 +13,10 @@ use common::{
 use eco_svm_std::prover::Proof;
 use intent_chainer::events::{IntentChained, OrderAnnounced};
 use intent_chainer::instructions::ChainerError;
-use intent_chainer::state::{escrow_authority_pda, vault_pda, withdrawn_marker_pda, OrderBuffer};
+use intent_chainer::state::{escrow_authority_pda, vault_pda, OrderBuffer};
 use intent_chainer::types::*;
 use portal::events::IntentPublished;
+use portal::state::WithdrawnMarker;
 use portal::types::intent_hash;
 use serde_json::Value;
 use solana_sdk::instruction::Instruction;
@@ -78,7 +79,6 @@ fn chain_instruction(ctx: &Context, c: &ChainedIntent) -> Instruction {
             base_mint: c.order.base_mint,
             vault: c.vault,
             vault_ata: c.vault_ata,
-            withdrawn_marker: withdrawn_marker_pda(&c.order.portal, &c.intent_hash).0,
             portal_program: c.order.portal,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,
@@ -419,7 +419,7 @@ fn nested_stale_accounts_fail_atomically_then_the_same_order_retries_after_expir
             current.vault,
             keccak(&new_route),
             Proof::pda(&current.intent_hash, &order.reward.prover).0,
-            withdrawn_marker_pda(&order.portal, &current.intent_hash).0,
+            WithdrawnMarker::pda(&current.intent_hash).0,
             creator,
             [
                 AccountMeta::new(current.vault_ata, false),
@@ -478,9 +478,9 @@ fn nested_order_mutation_cannot_use_foreign_escrow() {
 }
 
 #[test]
-fn nested_settlement_transfer_and_publish_failures_preserve_custody() {
+fn nested_transfer_and_publish_failures_preserve_custody() {
     let data = fixtures::nested();
-    for failure in [0, 2, 3] {
+    for failure in [2, 3] {
         let (mut ctx, mut order, input, route) = setup(&data["cases"][0]);
         if failure == 3 {
             // An executable, committed target that has no Portal publish handler.
@@ -489,21 +489,16 @@ fn nested_settlement_transfer_and_publish_failures_preserve_custody() {
         }
         let c = resolve(&mut ctx, &order, input, &route);
         ctx.intent_chainer().seed_escrow(&c, input);
-        match failure {
-            0 => ctx.set_withdrawn_marker(withdrawn_marker_pda(&order.portal, &c.intent_hash).0),
-            2 => {
-                // A frozen source is a real token-program rejection after local
-                // account validation. ATA creation must roll back with transfer.
-                use solana_sdk::program_pack::Pack;
-                let mut account = ctx.get_account(&c.escrow_ata).unwrap();
-                let mut token =
-                    anchor_spl::token::spl_token::state::Account::unpack(&account.data).unwrap();
-                token.state = anchor_spl::token::spl_token::state::AccountState::Frozen;
-                anchor_spl::token::spl_token::state::Account::pack(token, &mut account.data)
-                    .unwrap();
-                ctx.set_account(c.escrow_ata, account).unwrap();
-            }
-            _ => {}
+        if failure == 2 {
+            // A frozen source is a real token-program rejection after local
+            // account validation. ATA creation must roll back with transfer.
+            use solana_sdk::program_pack::Pack;
+            let mut account = ctx.get_account(&c.escrow_ata).unwrap();
+            let mut token =
+                anchor_spl::token::spl_token::state::Account::unpack(&account.data).unwrap();
+            token.state = anchor_spl::token::spl_token::state::AccountState::Frozen;
+            anchor_spl::token::spl_token::state::Account::pack(token, &mut account.data).unwrap();
+            ctx.set_account(c.escrow_ata, account).unwrap();
         }
         let vault_before = ctx.get_account(&c.vault_ata);
         let err = ctx.intent_chainer().chain(&c, false).unwrap_err();
@@ -531,9 +526,7 @@ fn nested_settlement_transfer_and_publish_failures_preserve_custody() {
             errors => panic!("unexpected failures {errors:?}"),
         }
         assert_eq!(ctx.get_account(&buffer).unwrap(), buffer_before);
-        if failure == 0 {
-            assert!(is_error(ChainerError::IntentAlreadySettled)(err));
-        } else if failure == 3 {
+        if failure == 3 {
             let mut transfer_checked = vec![12];
             transfer_checked.extend_from_slice(&input.to_le_bytes());
             transfer_checked.push(6); // fixture mint decimals
@@ -983,7 +976,7 @@ fn native_staging_781_byte_order_fits_both_prepare_phases_and_chain() {
     assert!(contains_event(published(&c, route))(executed.unwrap()));
     assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
     assert_eq!(ctx.token_balance(&c.vault_ata), input);
-    assert_eq!((first_size, second_size, chain_size), (1150, 499, 627));
+    assert_eq!((first_size, second_size, chain_size), (1150, 499, 594));
     println!("781-byte Order: old prepare={old_prepare_size}, old chain={old_chain_size}; init={first_size}, seal+ATA={second_size}, chain_from_account={chain_size}");
 }
 
