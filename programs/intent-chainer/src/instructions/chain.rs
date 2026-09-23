@@ -274,21 +274,32 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
         ChainerError::InvalidVaultAta
     );
 
-    // Deliberately NOT gated on intent2's `WithdrawnMarker`, unlike the EVM
-    // chainer's unconditional Portal status check. The two portals differ where it
-    // matters: EVM's `_validateRefund` reverts while a proof stands and
-    // `recoverToken` refuses reward tokens, so a post-settlement push there really
-    // is stuck. Solana's `portal::refund` opens with `if !withdrawn_marker
-    // .data_is_empty() { return Ok(()) }` (`refund.rs:82`) — a marker makes the
-    // vault refundable *immediately*, with no deadline wait and no proof check.
+    // Deliberately NOT gated on intent2's `WithdrawnMarker`. The EVM chainer does
+    // check Portal status here; do not port that check back. The difference is
+    // WHERE THE BALANCE SITS WHEN THE CHECK RUNS, not the two portals' refund
+    // rules — those are in fact the same shape, and assuming otherwise is what put
+    // this check here originally.
     //
-    // So a push into a settled vault is recoverable by `reward.creator`, and
-    // rejecting it is not. `chain` is the only exit from an order-scoped escrow:
-    // custody is `keccak(borsh(order))`, there is no sweep, and no later call can
-    // clear a marker. Refusing here would convert a recoverable state into a
-    // permanently stranded balance — and the marker is not in the caller's
-    // control, since `withdraw` pays `min(reward_amount, vault_ata.amount)` and
-    // still marks, so an empty vault can be "withdrawn" for zero at any time.
+    // On EVM `chain()` is intent1's last route call, so a revert unwinds the swap
+    // that produced the balance: nothing is ever at rest, nothing is bound to an
+    // order, and refusing costs only that fulfillment. There the check is a
+    // cheap fail-fast.
+    //
+    // Here `chain` is necessarily its own transaction, so the balance IS at rest,
+    // and it is at rest in `escrow_authority_pda(keccak(borsh(order)))` — bound to
+    // exactly one order. This instruction is that escrow's only exit: there is no
+    // sweep, no recovery instruction, and no later call can clear a marker. A
+    // refusal is therefore permanent for that balance, so any check able to reject
+    // a state that is otherwise fundable converts a recoverable state into an
+    // unrecoverable one. That asymmetry is the whole argument.
+    //
+    // Nor is the marker anyone's to avoid: `withdraw` pays
+    // `min(reward_amount, vault_ata.amount)` and marks even when it pays zero, so
+    // an empty vault can be "withdrawn" by anyone at any time. And the push does
+    // land somewhere recoverable — `portal::refund` opens with
+    // `if !withdrawn_marker.data_is_empty() { return Ok(()) }` (`refund.rs:82`),
+    // paying live vault balances to `reward.creator` with no deadline wait and no
+    // proof check.
     //
     // A fresh child route salt remains the builder's responsibility. Reusing every
     // hashed field and the measured amount funds the SAME child intent, including
