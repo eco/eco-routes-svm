@@ -201,10 +201,16 @@ order hash and `escrow_authority_pda(order_hash)`.
 - Callers may strengthen publication, never weaken it:
   `effective_publish = order.require_publish || call.publish`.
 - Local account checks apply regardless of publication. The child's `WithdrawnMarker`
-  is deliberately **not** consulted: portal's refund accepts a marked vault immediately
-  (no deadline wait, no proof check), so a push into a settled child is recoverable by
-  `reward.creator`, whereas refusing it would strand an escrow that has no other exit.
-  A settled child is therefore a builder concern, not a handler check.
+  is deliberately **not** consulted, though the EVM chainer does check Portal status.
+  The difference is where the balance sits when the check runs, not the two portals'
+  refund rules. On EVM `chain()` is the parent's last route call, so a revert unwinds
+  the swap and refusing costs only that fulfillment. Here the balance is already at
+  rest in an order-scoped escrow whose only exit is this instruction, so a refusal is
+  permanent: any check able to reject an otherwise-fundable state turns a recoverable
+  balance into an unrecoverable one. The push also lands somewhere recoverable —
+  portal's refund accepts a marked vault immediately, with no deadline wait and no
+  proof check, paying live balances to `reward.creator`. A settled child is therefore
+  a builder concern, not a handler check.
   Existing vault balances of any size are allowed. `PushShortfall` requires the vault's
   balance increase to equal the measured input; existing funds cannot mask a transfer
   fee. A short transfer rolls back the escrow debit, vault credit, withheld fees and
