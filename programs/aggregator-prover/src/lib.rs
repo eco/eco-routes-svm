@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::prover::ProveArgs;
 
 declare_id!("Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE");
 
@@ -16,8 +15,11 @@ pub mod aggregator_prover {
         instructions::init(ctx, members)
     }
 
-    pub fn prove<'info>(ctx: Context<'info, Prove<'info>>, args: ProveArgs) -> Result<()> {
-        instructions::prove(ctx, args)
+    pub fn aggregate<'info>(
+        ctx: Context<'info, Aggregate<'info>>,
+        args: AggregateArgs,
+    ) -> Result<()> {
+        instructions::aggregate(ctx, args)
     }
 
     pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {

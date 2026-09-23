@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
 
+mod aggregate;
 mod close_proof;
 mod init;
-mod prove;
 
+pub use aggregate::*;
 pub use close_proof::*;
 pub use init::*;
-pub use prove::*;
 
 #[error_code]
 pub enum AggregatorProverError {
@@ -15,7 +15,6 @@ pub enum AggregatorProverError {
     InvalidMemberSet,
     InvalidMember,
     DuplicateMember,
-    InvalidDomainId,
     InvalidData,
     InvalidProof,
     InvalidIntentHash,

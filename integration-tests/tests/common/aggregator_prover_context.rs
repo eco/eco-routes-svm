@@ -1,8 +1,9 @@
+use aggregator_prover::instructions::AggregateArgs;
 use aggregator_prover::state::Config;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::event_authority_pda;
-use eco_svm_std::prover::{Proof, ProveArgs};
+use eco_svm_std::prover::Proof;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
@@ -76,9 +77,12 @@ impl AggregatorProver<'_> {
         self.send_transaction(transaction)
     }
 
-    pub fn build_prove_instruction(&self, args: ProveArgs, members: &[Pubkey]) -> Instruction {
-        let accounts = aggregator_prover::accounts::Prove {
-            caller: self.payer.pubkey(),
+    pub fn build_aggregate_instruction(
+        &self,
+        args: AggregateArgs,
+        members: &[Pubkey],
+    ) -> Instruction {
+        let accounts = aggregator_prover::accounts::Aggregate {
             payer: self.payer.pubkey(),
             config: Config::pda().0,
             system_program: anchor_lang::system_program::ID,
@@ -106,12 +110,12 @@ impl AggregatorProver<'_> {
         Instruction {
             program_id: aggregator_prover::ID,
             accounts,
-            data: aggregator_prover::instruction::Prove { args }.data(),
+            data: aggregator_prover::instruction::Aggregate { args }.data(),
         }
     }
 
-    pub fn prove(&mut self, args: ProveArgs, members: &[Pubkey]) -> TransactionResult {
-        let instruction = self.build_prove_instruction(args, members);
+    pub fn aggregate(&mut self, args: AggregateArgs, members: &[Pubkey]) -> TransactionResult {
+        let instruction = self.build_aggregate_instruction(args, members);
 
         self.send_instruction(instruction)
     }
