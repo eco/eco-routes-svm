@@ -7,11 +7,13 @@ edition = "2021"
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 base64 = "0.23.1"
+borsh = "1.8.0"
 derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
 dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
+intent-chainer = { workspace = true, features = ["no-entrypoint"] }
 litesvm = "0.16.0"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
 malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }
@@ -20,6 +22,7 @@ mock-igp = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }
 rand = "0.10.2"
+serde_json = "1"
 solana-compute-budget-interface = "3.0.0"
 solana-sdk = "4.0.1"
 # solana-sdk 3.x's `system_instruction` module no longer re-exports `SystemError`;

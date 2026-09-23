@@ -1,3 +1,9 @@
+// Cargo compiles this module separately into every integration-test binary, so an
+// item used by only some of them reads as dead code in the others. The members
+// here are all live somewhere; suppressing per-binary rather than per-item keeps
+// the list from growing every time a test file is added.
+#![allow(dead_code)]
+
 use std::ops::Deref;
 
 use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
@@ -29,9 +35,12 @@ use solana_sdk::transaction::{Transaction, TransactionError};
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
+pub mod intent_chainer_context;
 mod local_prover_context;
+pub mod order_buffer_context;
 mod portal_context;
 pub mod proof_helper_context;
+pub mod template_transport;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
@@ -39,6 +48,7 @@ const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
 const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_fulfiller.so");
+const INTENT_CHAINER_BIN: &[u8] = include_bytes!("../../../target/deploy/intent_chainer.so");
 const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
@@ -65,6 +75,9 @@ pub struct Context {
     pub funder: Keypair,
     pub solver: Keypair,
     pub sender: Keypair,
+    /// Compute-unit limit prepended by builders that set one. Mutable so a test can
+    /// measure how an instruction's cost scales.
+    pub compute_limit: u32,
 }
 
 impl Default for Context {
@@ -75,6 +88,8 @@ impl Default for Context {
         svm.add_program(hyper_prover::ID, HYPER_PROVER_BIN).unwrap();
         svm.add_program(local_prover::ID, LOCAL_PROVER_BIN).unwrap();
         svm.add_program(flash_fulfiller::ID, FLASH_FULFILLER_BIN)
+            .unwrap();
+        svm.add_program(intent_chainer::ID, INTENT_CHAINER_BIN)
             .unwrap();
         svm.add_program(malicious_prover::ID, MALICIOUS_PROVER_BIN)
             .unwrap();
@@ -106,6 +121,7 @@ impl Default for Context {
             funder,
             solver,
             sender,
+            compute_limit: COMPUTE_UNIT_LIMIT,
         }
     }
 }
@@ -259,6 +275,54 @@ impl Context {
         };
 
         self.set_account(*mint, mint_account).unwrap();
+    }
+
+    /// Initializes an actual Token-2022 transfer-fee mint through its instructions.
+    /// ATA creation and transfers therefore exercise the real extension processor.
+    pub fn create_transfer_fee_mint(&mut self, basis_points: u16, maximum_fee: u64) -> Pubkey {
+        use spl_token_2022::extension::transfer_fee::instruction;
+        use spl_token_2022::extension::ExtensionType;
+
+        assert_eq!(self.token_program, token_2022::ID);
+        let mint = Keypair::new();
+        let size = ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[
+            ExtensionType::TransferFeeConfig,
+        ])
+        .unwrap();
+        let authority = self.mint_authority.pubkey();
+        let instructions = [
+            solana_system_interface::instruction::create_account(
+                &authority,
+                &mint.pubkey(),
+                self.get_sysvar::<Rent>().minimum_balance(size),
+                size as u64,
+                &self.token_program,
+            ),
+            instruction::initialize_transfer_fee_config(
+                &self.token_program,
+                &mint.pubkey(),
+                None,
+                None,
+                basis_points,
+                maximum_fee,
+            )
+            .unwrap(),
+            spl_token_2022::instruction::initialize_mint2(
+                &self.token_program,
+                &mint.pubkey(),
+                &authority,
+                None,
+                6,
+            )
+            .unwrap(),
+        ];
+        let transaction = Transaction::new(
+            &[&self.mint_authority, &mint],
+            Message::new(&instructions, Some(&authority)),
+            self.latest_blockhash(),
+        );
+        self.send_transaction(transaction).unwrap();
+        mint.pubkey()
     }
 
     pub fn airdrop_token_ata(&mut self, mint: &Pubkey, recipient: &Pubkey, amount: u64) {
