@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+aggregator-prover = { workspace = true, features = ["no-entrypoint"] }
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 base64 = "0.23.1"
+bincode = "1.3"
 derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
 dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
@@ -21,6 +23,7 @@ portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }
 rand = "0.10.2"
 solana-compute-budget-interface = "3.0.0"
+solana-loader-v3-interface = { version = "8.0.1", features = ["serde"] }
 solana-sdk = "4.0.1"
 # solana-sdk 3.x's `system_instruction` module no longer re-exports `SystemError`;
 # take the granular crate directly.

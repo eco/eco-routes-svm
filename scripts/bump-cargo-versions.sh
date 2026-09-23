@@ -9,6 +9,7 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 released_crates=(
+    programs/aggregator-prover/Cargo.toml
     programs/flash-fulfiller/Cargo.toml
     programs/hyper-prover/Cargo.toml
     programs/local-prover/Cargo.toml

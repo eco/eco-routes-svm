@@ -6,6 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
+aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 malicious-proof-closer = "3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp"
 malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"
@@ -16,6 +17,7 @@ portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.devnet]
+aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
@@ -23,6 +25,7 @@ local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
+aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
@@ -38,8 +41,8 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 build-localnet = "anchor build"
-build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper"
-build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet"
-deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name flash-fulfiller && anchor deploy --provider.cluster devnet --program-name proof-helper"
-deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name flash-fulfiller && anchor deploy --provider.cluster mainnet --program-name proof-helper"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper && anchor build --program-name aggregator-prover"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet && anchor build --program-name aggregator-prover -- --features mainnet"
+deploy-devnet = "anchor deploy --provider.cluster devnet --program-name portal && anchor deploy --provider.cluster devnet --program-name hyper-prover && anchor deploy --provider.cluster devnet --program-name local-prover && anchor deploy --provider.cluster devnet --program-name flash-fulfiller && anchor deploy --provider.cluster devnet --program-name proof-helper && anchor deploy --provider.cluster devnet --program-name aggregator-prover"
+deploy-mainnet = "anchor deploy --provider.cluster mainnet --program-name portal && anchor deploy --provider.cluster mainnet --program-name hyper-prover && anchor deploy --provider.cluster mainnet --program-name local-prover && anchor deploy --provider.cluster mainnet --program-name flash-fulfiller && anchor deploy --provider.cluster mainnet --program-name proof-helper && anchor deploy --provider.cluster mainnet --program-name aggregator-prover"
 test = "cargo test --no-fail-fast"

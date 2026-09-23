@@ -26,6 +26,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError};
 
+mod aggregator_prover_context;
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
