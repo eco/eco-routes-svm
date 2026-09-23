@@ -416,6 +416,11 @@ LiteSVM 0.16.0; instrumented heap peaks before the metrics log):
 
 PDA bumps make CU vary; these are measurements, not an upper bound for every possible
 configuration. Request up to 1.4M CU for dense cases and simulate the exact submission.
+Dropping the child `WithdrawnMarker` account removed one `find_program_address`, worth a
+directly measured 3,387 CU on every `chain` / `chain_from_account` invocation (281,045 ->
+277,658 on the 781-byte staging case). The rows above predate that removal, have not been
+re-measured under the original instrumented conditions, and are conservative by about
+that much.
 The tests also cover root-only 2048-byte publication and deliberately exhausted logs
 before a full 4096-byte announcement.
 
