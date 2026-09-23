@@ -26,7 +26,7 @@ pub struct AnnounceOrder {}
 ///
 /// Permissionless and custody-free. An announcement does not prove that all
 /// future measurements fit the template, attest opaque remote route semantics,
-/// or bypass local account/withdrawal checks. See the README for retry limits.
+/// or bypass local account checks. See the README for retry limits.
 /// Indexers must consume inner instructions, not just ordinary logs.
 pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> Result<()> {
     let AnnounceOrderArgs { order } = args;
