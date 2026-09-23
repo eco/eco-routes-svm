@@ -3,10 +3,12 @@ use anchor_lang::prelude::*;
 mod announce_order;
 mod chain;
 mod order_buffer;
+mod refund_escrow;
 
 pub use announce_order::*;
 pub use chain::*;
 pub use order_buffer::*;
+pub use refund_escrow::*;
 
 /// Errors emitted by the intent-chainer program.
 #[error_code]
@@ -83,4 +85,14 @@ pub enum ChainerError {
     /// Must decode exactly one canonical bounded Order, without trailing bytes.
     InvalidBufferedOrder,
     OrderCommitmentMismatch,
+    /// The committed reward deadline has not passed.
+    RefundNotAvailable,
+    /// The destination token account is not owned by the committed reward creator.
+    InvalidRefundRecipient,
+    /// The canonical escrow token account is not controlled by the escrow PDA.
+    InvalidEscrowTokenOwner,
+    /// A refund did not drain the source or produced an inconsistent recipient delta.
+    RefundBalanceMismatch,
+    /// Selecting a non-ATA refund recipient requires the committed creator's signature.
+    CreatorSignatureRequired,
 }

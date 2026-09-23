@@ -2,8 +2,9 @@ use anchor_lang::prelude::*;
 use eco_svm_std::{account, Bytes32};
 
 use crate::instructions::announce_order::emit_order_announcement;
-// Anchor's composite account derive also needs Chain's generated account modules.
+// Anchor's composite derives also need the generated nested account modules.
 use crate::instructions::chain::*;
+use crate::instructions::refund_escrow::*;
 use crate::instructions::ChainerError;
 use crate::state::{OrderBuffer, ORDER_BUFFER_SEED};
 use crate::types::{Order, MAX_ORDER_BYTES};
@@ -68,6 +69,16 @@ pub struct ChainFromAccount<'info> {
     pub order_buffer: Account<'info, OrderBuffer>,
     /// Exactly the existing chain accounts and constraints, including its rent payer.
     pub chain: Chain<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RefundEscrowFromAccount<'info> {
+    /// Complete bytes are sufficient: a continuation that cannot seal must still
+    /// be refundable. The actual canonical order hash is checked by the handler.
+    #[account(seeds = [ORDER_BUFFER_SEED, order_buffer.authority.as_ref(), &order_buffer.seed],
+        bump = order_buffer.bump)]
+    pub order_buffer: Account<'info, OrderBuffer>,
+    pub refund: RefundEscrow<'info>,
 }
 
 #[derive(Accounts)]
@@ -200,6 +211,27 @@ pub fn chain_from_account<'info>(
         ),
         ChainArgs { order, publish },
         Some(ctx.accounts.order_buffer.order_commitment),
+    )
+}
+
+/// Refund from complete bounded transport bytes, with no writer signature or
+/// sealing requirement. Every custody check is shared with the inline entrypoint.
+pub fn refund_escrow_from_account<'info>(
+    ctx: Context<'info, RefundEscrowFromAccount<'info>>,
+) -> Result<()> {
+    let order = read_order(&ctx.accounts.order_buffer)?;
+    require!(
+        order.hash() == ctx.accounts.order_buffer.order_commitment,
+        ChainerError::OrderCommitmentMismatch
+    );
+    refund_escrow(
+        Context::new(
+            ctx.program_id,
+            &mut ctx.accounts.refund,
+            ctx.remaining_accounts,
+            ctx.bumps.refund,
+        ),
+        RefundEscrowArgs { order },
     )
 }
 

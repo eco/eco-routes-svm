@@ -2,6 +2,20 @@ use anchor_lang::prelude::*;
 use derive_new::new;
 use eco_svm_std::Bytes32;
 
+/// Only funds still held by an expired order's escrow were returned. Child vault
+/// settlement is separate. Token-2022 transfer fees can reduce amount_received.
+#[event]
+pub struct EscrowRefunded {
+    pub order_commitment: Bytes32,
+    pub escrow_authority: Pubkey,
+    pub base_mint: Pubkey,
+    pub creator: Pubkey,
+    /// Debited from the escrow, before any token-program transfer fee.
+    pub amount: u64,
+    /// Spendable increase in the creator-owned token account.
+    pub amount_received: u64,
+}
+
 /// A follow-on intent was resolved from a measured balance and funded.
 ///
 /// Route bytes are reconstructed from the complete Order and BOTH initial amounts.

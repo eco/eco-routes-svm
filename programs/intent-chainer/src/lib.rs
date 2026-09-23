@@ -136,6 +136,19 @@ pub mod intent_chainer {
         chain_intent(ctx, args)
     }
 
+    /// Return an expired order's remaining escrow tokens to its committed creator,
+    /// independently of whether the child can be rendered or funded.
+    pub fn refund_escrow(ctx: Context<RefundEscrow>, args: RefundEscrowArgs) -> Result<()> {
+        instructions::refund_escrow(ctx, args)
+    }
+
+    /// The same refund using complete order-buffer bytes; sealing is not required.
+    pub fn refund_escrow_from_account<'info>(
+        ctx: Context<'info, RefundEscrowFromAccount<'info>>,
+    ) -> Result<()> {
+        instructions::refund_escrow_from_account(ctx)
+    }
+
     /// Allocate a per-(authority, random seed) transport PDA and write its first chunk.
     pub fn init_order_buffer(
         ctx: Context<InitOrderBuffer>,

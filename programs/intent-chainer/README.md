@@ -213,9 +213,74 @@ order hash and `escrow_authority_pda(order_hash)`.
   near/after expiry, so Portal can refund an unproven intent or pay its proven claimant.
   A valid proof blocks refund until withdrawal. All other chainer checks still apply.
 - Invalid amount widths, an unmet minimum, an unusable remote template or an existing
-  withdrawn child are not repaired by an announcement. There is no generic
-  chainer refund or arbitrary sweep. Keeping the preimage is necessary, not a guarantee
-  that every permanently invalid funded order can recover.
+  withdrawn child are not repaired by an announcement. After the committed reward
+  deadline, `refund_escrow` can instead return the remaining base-mint escrow balance
+  to the committed creator without constructing a child (see below).
+
+### Expired escrow recovery
+
+`refund_escrow(RefundEscrowArgs { order })` authenticates the complete canonical Order
+against the escrow PDA and transfers its current base-mint balance after
+`Clock.unix_timestamp >= order.reward.deadline`. Anyone can pay for the transaction;
+permissionless refunds must go to the creator's canonical ATA. The committed creator
+may sign to choose another same-mint token account they own, for example when the ATA
+is frozen. The recipient account must exist before the refund instruction; a client
+can prepend idempotent ATA creation.
+
+Recovery does not run chain admission, render amounts, enforce `min_amount_in`,
+require an executable Portal, or publish a child. Token-program restrictions still
+apply: a frozen source or unsupported transfer hook is not bypassed. Transfer-fee
+Token-2022 mints are accepted by recovery even when exact-credit chaining rejects
+them; `EscrowRefunded.amount` is the gross escrow debit and `amount_received` is the
+recipient's net credit.
+
+For large Orders, use the existing `init_order_buffer` / `write_order_buffer`
+transport followed by `refund_escrow_from_account`. This entrypoint requires complete,
+exact, bounded Order bytes and checks their hash against the buffer header. It does
+not require sealing or the original writer's signature: sealing validates chaining,
+and that must not prevent recovering an invalid continuation. Another gas payer can
+recreate the transport from the Order preimage if an old buffer has been closed.
+Size the compute budget as well as the packet: regression fixtures use about 556k
+CU for a 2,285-byte Order and 995k CU for a 4,096-byte Order, with a 493-byte final
+refund transaction and the stock heap. These are measured fixtures, not a universal
+compute estimate; simulate the concrete transaction and set an adequate CU limit.
+
+The escrow ATA stays open. Repeated refunds of an empty escrow transfer zero; later
+deposits are still recoverable. `EscrowRefunded` records a balance movement, not a
+permanent terminal state. It includes the Order commitment, escrow authority, mint,
+creator and both amounts. Consumers must inspect balances and must not permanently
+exclude an escrow after its first refund event.
+
+This entrypoint touches only funds remaining in this escrow. Once `chain` transfers
+them to a child Portal vault, existing Portal proof, withdrawal and refund rules own
+that balance. It cannot reverse a bridge burn or refund destination custody. A
+claimant must require confirmed child funding before fulfilling; a rendered template
+alone is not a funded reward or a claim on this escrow.
+
+Both chain and refund lock the same writable escrow ATA. If chain executes first,
+refund cannot recover the transferred amount from that escrow; Portal handles it.
+If refund executes first, chain cannot transfer that refunded amount. Existing late
+chaining behavior is retained, so callers can still use chain followed by Portal
+refund when continuation succeeds.
+
+### Discovery and refund-service integration
+
+The contract entrypoint alone does not enable automatic recovery. A refund worker
+needs the complete Order bytes and original chainer program ID, not only an escrow
+address or parent intent hash. Guarantee their availability before a source swap can
+commit: either require confirmed publication before exposing the source intent, or
+include `announce_order` in its hash-committed route. The source-composition test
+demonstrates the latter through the real buffered flash-fulfiller and Portal path,
+with a token transfer standing in for the swap; it does not establish the size or
+compute budget of arbitrary Jupiter quotes.
+
+Existing Portal refund workers continue to process concrete funded children. An
+escrow recovery worker needs a separate candidate kind, keyed by chainer program and
+Order commitment, and checks the escrow's deadline and actual token balance. Do not
+apply the fulfilled-parent exclusion to this candidate: the parent swap has already
+executed. Preserve fulfillment/proof checks for normal child Portal refunds. Public
+announcements must be indexed or otherwise retrievable independently of solver DB
+state, and transaction confirmation must be reconciled with actual token movement.
 
 ### Child identity belongs to the builder
 

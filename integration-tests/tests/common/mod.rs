@@ -40,6 +40,7 @@ mod local_prover_context;
 pub mod order_buffer_context;
 mod portal_context;
 pub mod proof_helper_context;
+pub mod refund_escrow_context;
 pub mod template_transport;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
