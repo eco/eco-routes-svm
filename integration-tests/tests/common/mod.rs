@@ -170,6 +170,21 @@ impl Context {
         )
     }
 
+    /// A random intent with no route tokens, calls, or native amount — the
+    /// smallest shape `fulfill`/`cancel` will accept — targeting `prover`.
+    /// Returns the same `(intent_hash, route, reward)` a caller would otherwise
+    /// derive by hand from [`Context::rand_intent`].
+    pub fn rand_minimal_intent(&mut self, prover: Pubkey) -> (Bytes32, Route, Reward) {
+        let (_, mut route, mut reward) = self.rand_intent();
+        route.tokens.clear();
+        route.calls.clear();
+        route.native_amount = 0;
+        reward.prover = prover;
+        let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+        (intent_hash, route, reward)
+    }
+
     /// Fulfills `intent_count` minimal intents — no route tokens, calls, or
     /// native amount — against `prover`.
     pub fn fulfill_rand_intents(
@@ -179,13 +194,8 @@ impl Context {
     ) -> Vec<FulfilledIntent> {
         (0..intent_count)
             .map(|_| {
-                let (_, mut route, mut reward) = self.rand_intent();
-                route.tokens.clear();
-                route.calls.clear();
-                route.native_amount = 0;
-                reward.prover = prover;
+                let (intent_hash, route, reward) = self.rand_minimal_intent(prover);
                 let reward_hash = reward.hash();
-                let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
 
                 self.portal()
                     .fulfill_intent(

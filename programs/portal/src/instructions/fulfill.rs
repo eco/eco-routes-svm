@@ -10,7 +10,7 @@ use anchor_spl::token_2022::spl_token_2022::extension::StateWithExtensions;
 use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
 use solana_keccak_hasher::hashv;
 
 use crate::events::IntentFulfilled;
@@ -69,6 +69,7 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
     require!(route.deadline >= now()?, PortalError::RouteExpired);
+    require!(claimant != CANCELLED, PortalError::ReservedClaimant);
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;

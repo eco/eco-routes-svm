@@ -61,4 +61,8 @@ pub enum PortalError {
     ClaimantSignatureRequired,
     ExecutorCorrupted,
     ExecutorAtaCorrupted,
+    /// `claimant` is the reserved `CANCELLED` sentinel, which only `cancel` may write.
+    ReservedClaimant,
+    /// The intent's proof records a cancellation, which never pays a claimant.
+    IntentCancelled,
 }
