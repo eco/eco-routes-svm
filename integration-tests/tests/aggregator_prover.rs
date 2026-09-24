@@ -288,7 +288,7 @@ fn aggregate_rejects_proof_from_another_prover_or_intent() {
 }
 
 #[test]
-fn aggregate_repeated_proof_is_idempotent_but_cannot_change_claimant() {
+fn aggregate_rejects_existing_proof_for_identical_and_conflicting_claimants() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     set_prover_proof(
@@ -306,7 +306,7 @@ fn aggregate_repeated_proof_is_idempotent_but_cannot_change_claimant() {
     assert!(context
         .aggregator_prover()
         .aggregate(test_intent_hash(), PROVERS[0])
-        .is_ok());
+        .is_err_and(common::is_error(ErrorCode::ConstraintZero)));
     let other_claimant = Pubkey::new_unique();
     set_prover_proof(
         &mut context,
@@ -319,7 +319,7 @@ fn aggregate_repeated_proof_is_idempotent_but_cannot_change_claimant() {
     assert!(context
         .aggregator_prover()
         .aggregate(test_intent_hash(), PROVERS[0])
-        .is_err_and(common::is_error(AggregatorProverError::IntentAlreadyProven)));
+        .is_err_and(common::is_error(ErrorCode::ConstraintZero)));
 }
 
 #[test]
@@ -569,7 +569,7 @@ fn different_prover_cannot_overwrite_recorded_claimant() {
     assert!(context
         .aggregator_prover()
         .aggregate(later, PROVERS[0])
-        .is_err_and(common::is_error(AggregatorProverError::IntentAlreadyProven)));
+        .is_err_and(common::is_error(ErrorCode::ConstraintZero)));
     assert_eq!(
         context
             .account::<ProofAccount>(&address)
