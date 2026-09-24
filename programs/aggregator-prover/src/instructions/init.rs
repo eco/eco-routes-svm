@@ -27,6 +27,7 @@ pub fn init<'info>(ctx: Context<'info, Init<'info>>) -> Result<()> {
         !provers.is_empty() && provers.len() <= MAX_PROVERS,
         AggregatorProverError::InvalidProverSet
     );
+
     let mut seen = HashSet::with_capacity(provers.len());
     provers.iter().try_for_each(|prover| {
         require!(
@@ -41,10 +42,9 @@ pub fn init<'info>(ctx: Context<'info, Init<'info>>) -> Result<()> {
         Ok(())
     })?;
 
-    Config {
-        provers: provers.iter().map(|prover| prover.key()).collect(),
-    }
-    .init(
+    let provers = provers.iter().map(|prover| prover.key()).collect();
+
+    Config { provers }.init(
         &ctx.accounts.config,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,

@@ -1,22 +1,18 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::{IntentHashClaimant, IntentProven, Proof, ProofData, PROOF_SEED};
+use eco_svm_std::prover::{IntentProven, Proof, PROOF_SEED};
 use eco_svm_std::Bytes32;
 
 use crate::instructions::AggregatorProverError;
 use crate::state::{Config, ProofAccount};
 
-/// One destination-bound preimage per intent, in proof_data order.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
-pub struct IntentPreimage {
-    pub route_hash: Bytes32,
-    pub reward_hash: Bytes32,
-}
-
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct AggregateArgs {
-    pub proof_data: ProofData,
-    pub preimages: Vec<IntentPreimage>,
+    pub destination: u64,
+    pub intent_hash: Bytes32,
+    pub claimant: Bytes32,
+    pub route_hash: Bytes32,
+    pub reward_hash: Bytes32,
 }
 
 #[event_cpi]
@@ -31,44 +27,17 @@ pub struct Aggregate<'info> {
 
 pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, args: AggregateArgs) -> Result<()> {
     let AggregateArgs {
-        proof_data,
-        preimages,
-    } = args;
-    let intents = proof_data.intent_hashes_claimants;
-    require!(
-        !intents.is_empty() && preimages.len() == intents.len(),
-        AggregatorProverError::InvalidData
-    );
-    let chunk_size = 1 + ctx.accounts.config.provers.len();
-    require!(
-        ctx.remaining_accounts.len() == intents.len() * chunk_size,
-        AggregatorProverError::InvalidProof
-    );
-
-    intents
-        .into_iter()
-        .zip(preimages)
-        .zip(ctx.remaining_accounts.chunks_exact(chunk_size))
-        .try_for_each(|((intent, preimage), accounts)| {
-            record_proof(&ctx, proof_data.destination, intent, preimage, accounts)
-        })
-}
-
-fn record_proof<'info>(
-    ctx: &Context<'info, Aggregate<'info>>,
-    destination: u64,
-    intent: IntentHashClaimant,
-    preimage: IntentPreimage,
-    accounts: &[AccountInfo<'info>],
-) -> Result<()> {
-    let IntentHashClaimant {
+        destination,
         intent_hash,
         claimant,
-    } = intent;
-    let IntentPreimage {
         route_hash,
         reward_hash,
-    } = preimage;
+    } = args;
+    let accounts = ctx.remaining_accounts;
+    require!(
+        accounts.len() == 1 + ctx.accounts.config.provers.len(),
+        AggregatorProverError::InvalidProof
+    );
     require!(
         portal::types::intent_hash(destination, &route_hash, &reward_hash) == intent_hash,
         AggregatorProverError::InvalidIntentHash

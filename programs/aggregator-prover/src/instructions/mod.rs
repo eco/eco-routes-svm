@@ -15,7 +15,6 @@ pub enum AggregatorProverError {
     InvalidProverSet,
     InvalidProver,
     DuplicateProver,
-    InvalidData,
     InvalidProof,
     InvalidIntentHash,
     NoMatchingProof,

@@ -1,6 +1,6 @@
 use std::iter;
 
-use aggregator_prover::instructions::{AggregateArgs, AggregatorProverError, IntentPreimage};
+use aggregator_prover::instructions::{AggregateArgs, AggregatorProverError};
 use aggregator_prover::state::{Config, ProofAccount, MAX_PROVERS};
 use anchor_lang::error::ErrorCode;
 use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
@@ -42,18 +42,15 @@ fn initialized() -> common::Context {
 }
 
 fn args(claimant: Pubkey) -> AggregateArgs {
-    let preimage = IntentPreimage {
-        route_hash: [42; 32].into(),
-        reward_hash: [43; 32].into(),
-    };
-    let hash = intent_hash(DESTINATION, &preimage.route_hash, &preimage.reward_hash);
+    let route_hash = [42; 32].into();
+    let reward_hash = [43; 32].into();
 
     AggregateArgs {
-        proof_data: ProofData::new(
-            DESTINATION,
-            vec![IntentHashClaimant::new(hash, claimant.to_bytes().into())],
-        ),
-        preimages: vec![preimage],
+        destination: DESTINATION,
+        intent_hash: intent_hash(DESTINATION, &route_hash, &reward_hash),
+        claimant: claimant.to_bytes().into(),
+        route_hash,
+        reward_hash,
     }
 }
 
@@ -64,7 +61,7 @@ fn set_prover_proof(
     destination: u64,
     claimant: Pubkey,
 ) {
-    let hash = args.proof_data.intent_hashes_claimants[0].intent_hash;
+    let hash = args.intent_hash;
     context.set_proof(
         Proof::pda(&hash, &prover).0,
         Proof::new(destination, claimant),
@@ -73,11 +70,7 @@ fn set_prover_proof(
 }
 
 fn aggregate_address(args: &AggregateArgs) -> Pubkey {
-    Proof::pda(
-        &args.proof_data.intent_hashes_claimants[0].intent_hash,
-        &aggregator_prover::ID,
-    )
-    .0
+    Proof::pda(&args.intent_hash, &aggregator_prover::ID).0
 }
 
 #[test]
@@ -141,7 +134,7 @@ fn aggregate_selects_first_prover_and_emits_standard_event() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
-    let hash = args.proof_data.intent_hashes_claimants[0].intent_hash;
+    let hash = args.intent_hash;
     let proof_address = aggregate_address(&args);
     context.airdrop(&proof_address, 1_000_000).unwrap();
     set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
@@ -209,11 +202,7 @@ fn aggregate_skips_zero_claimants_malformed_data_and_wrong_owners() {
             DESTINATION,
             Pubkey::default(),
         );
-        let address = Proof::pda(
-            &args.proof_data.intent_hashes_claimants[0].intent_hash,
-            &PROVERS[0],
-        )
-        .0;
+        let address = Proof::pda(&args.intent_hash, &PROVERS[0]).0;
         let mut account = context.get_account(&address).unwrap();
         match variant {
             0 => (),
@@ -237,6 +226,7 @@ fn aggregate_cannot_omit_reorder_or_substitute_provers() {
         vec![PROVERS[1]],
         vec![PROVERS[1], PROVERS[0]],
         vec![PROVERS[0], Pubkey::new_unique()],
+        PROVERS.repeat(2),
     ] {
         let mut context = initialized();
         let claimant = Pubkey::new_unique();
@@ -274,15 +264,15 @@ fn aggregate_rejects_forged_destination_preimage_and_claimant() {
         set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
         let expected_error = match variant {
             0 => {
-                args.proof_data.destination += 1;
+                args.destination += 1;
                 AggregatorProverError::InvalidIntentHash
             }
             1 => {
-                args.preimages[0].route_hash = [99; 32].into();
+                args.route_hash = [99; 32].into();
                 AggregatorProverError::InvalidIntentHash
             }
             2 => {
-                args.proof_data.intent_hashes_claimants[0].claimant = [99; 32].into();
+                args.claimant = [99; 32].into();
                 AggregatorProverError::ClaimantMismatch
             }
             _ => unreachable!(),
@@ -291,19 +281,6 @@ fn aggregate_rejects_forged_destination_preimage_and_claimant() {
             .aggregator_prover()
             .aggregate(args, &PROVERS)
             .is_err_and(common::is_error(expected_error)));
-    }
-}
-
-#[test]
-fn aggregate_rejects_mismatched_preimage_count() {
-    for count in [0, 2] {
-        let mut context = initialized();
-        let mut args = args(Pubkey::new_unique());
-        args.preimages = vec![args.preimages[0].clone(); count];
-        assert!(context
-            .aggregator_prover()
-            .aggregate(args, &PROVERS)
-            .is_err_and(common::is_error(AggregatorProverError::InvalidData)));
     }
 }
 
@@ -339,33 +316,6 @@ fn aggregate_repeated_proof_is_idempotent_but_cannot_change_claimant() {
         .aggregator_prover()
         .aggregate(args(other_claimant), &PROVERS)
         .is_err_and(common::is_error(AggregatorProverError::IntentAlreadyProven)));
-}
-
-#[test]
-fn aggregate_batches_are_atomic() {
-    let mut context = initialized();
-    let claimant = Pubkey::new_unique();
-    let mut args = args(claimant);
-    let proof_address = aggregate_address(&args);
-    set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
-    let mut preimages = args.preimages.clone();
-    let second = IntentPreimage {
-        route_hash: [44; 32].into(),
-        reward_hash: [45; 32].into(),
-    };
-    args.proof_data
-        .intent_hashes_claimants
-        .push(IntentHashClaimant::new(
-            intent_hash(DESTINATION, &second.route_hash, &second.reward_hash),
-            claimant.to_bytes().into(),
-        ));
-    preimages.push(second);
-    args.preimages = preimages;
-    assert!(context
-        .aggregator_prover()
-        .aggregate(args, &PROVERS)
-        .is_err_and(common::is_error(AggregatorProverError::NoMatchingProof)));
-    assert!(context.get_account(&proof_address).is_none());
 }
 
 #[test]
@@ -460,14 +410,11 @@ fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof()
         let (reward, route_hash, hash) = funded(&mut context);
         let claimant = Pubkey::new_unique();
         let args = AggregateArgs {
-            proof_data: ProofData::new(
-                DESTINATION,
-                vec![IntentHashClaimant::new(hash, claimant.to_bytes().into())],
-            ),
-            preimages: vec![IntentPreimage {
-                route_hash,
-                reward_hash: reward.hash(),
-            }],
+            destination: DESTINATION,
+            intent_hash: hash,
+            claimant: claimant.to_bytes().into(),
+            route_hash,
+            reward_hash: reward.hash(),
         };
         set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
         context
@@ -632,55 +579,6 @@ fn later_higher_priority_proof_cannot_overwrite_recorded_claimant() {
             .0
             .claimant,
         claimant
-    );
-}
-
-#[test]
-fn aggregate_batch_resolves_provers_independently() {
-    let mut context = initialized();
-    let claimant = Pubkey::new_unique();
-    let other_claimant = Pubkey::new_unique();
-    let mut args = args(claimant);
-    let first_address = aggregate_address(&args);
-    set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
-    let mut preimages = args.preimages.clone();
-    let second = IntentPreimage {
-        route_hash: [44; 32].into(),
-        reward_hash: [45; 32].into(),
-    };
-    let second_hash = intent_hash(DESTINATION, &second.route_hash, &second.reward_hash);
-    context.set_proof(
-        Proof::pda(&second_hash, &PROVERS[0]).0,
-        Proof::new(DESTINATION, other_claimant),
-        PROVERS[0],
-    );
-    args.proof_data
-        .intent_hashes_claimants
-        .push(IntentHashClaimant::new(
-            second_hash,
-            other_claimant.to_bytes().into(),
-        ));
-    preimages.push(second);
-    args.preimages = preimages;
-    context
-        .aggregator_prover()
-        .aggregate(args, &PROVERS)
-        .unwrap();
-    assert_eq!(
-        context
-            .account::<ProofAccount>(&first_address)
-            .unwrap()
-            .0
-            .claimant,
-        claimant
-    );
-    assert_eq!(
-        context
-            .account::<ProofAccount>(&Proof::pda(&second_hash, &aggregator_prover::ID).0)
-            .unwrap()
-            .0
-            .claimant,
-        other_claimant
     );
 }
 
@@ -878,11 +776,11 @@ fn hyper_prover_relays_then_source_aggregates_delivered_proof() {
     assert!(source.get_account(&aggregate_address).is_none());
     let result = source.aggregator_prover().aggregate(
         AggregateArgs {
-            proof_data,
-            preimages: vec![IntentPreimage {
-                route_hash: intent.route.hash(),
-                reward_hash: intent.reward_hash,
-            }],
+            destination: proof_data.destination,
+            intent_hash: proof_data.intent_hashes_claimants[0].intent_hash,
+            claimant: proof_data.intent_hashes_claimants[0].claimant,
+            route_hash: intent.route.hash(),
+            reward_hash: intent.reward_hash,
         },
         &PROVERS,
     );

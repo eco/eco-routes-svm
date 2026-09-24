@@ -91,20 +91,13 @@ impl AggregatorProver<'_> {
         }
         .to_account_metas(None)
         .into_iter()
-        .chain(
-            args.proof_data
-                .intent_hashes_claimants
-                .iter()
-                .flat_map(|intent| {
-                    std::iter::once(AccountMeta::new(
-                        Proof::pda(&intent.intent_hash, &aggregator_prover::ID).0,
-                        false,
-                    ))
-                    .chain(provers.iter().map(|prover| {
-                        AccountMeta::new_readonly(Proof::pda(&intent.intent_hash, prover).0, false)
-                    }))
-                }),
-        )
+        .chain(std::iter::once(AccountMeta::new(
+            Proof::pda(&args.intent_hash, &aggregator_prover::ID).0,
+            false,
+        )))
+        .chain(provers.iter().map(|prover| {
+            AccountMeta::new_readonly(Proof::pda(&args.intent_hash, prover).0, false)
+        }))
         .collect();
 
         Instruction {
