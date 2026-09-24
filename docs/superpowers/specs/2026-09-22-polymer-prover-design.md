@@ -66,10 +66,11 @@ design targets.
 Polymer proves `msg!` log lines. Requirements from Polymer:
 
 - The line starts with `Prove: program: <base58 program id>, ` and is emitted by the
-  program being proven. Polymer strips the `Prove: ` prefix in what it returns. That is
-  documented but unverified against the deployed indexer, so the EVM parser accepts the
-  line with or without the prefix (and with or without the Solana runtime's
-  `Program log: ` prefix); the tolerance is confined to the head of the line.
+  program being proven. Polymer strips that whole head in what it returns: the devnet
+  probe (2026-09-24) got back only the 160-hex payload. The EVM parser accepts that bare
+  payload, and also the emitted `program: <id>, <hex>` form (with or without `Prove:` and
+  the Solana runtime's `Program log: ` prefix); the tolerance is confined to the head of
+  the line.
 - Fields are comma-delimited. Keep each line under roughly 500 bytes.
 - Several `Prove:` lines in one transaction are all proven together.
 
@@ -336,7 +337,7 @@ Outbound additions:
 - `ICrossL2ProverV2` gains
   `validateSolLogs(bytes) external view returns (uint32, bytes32, string[] memory)`.
 - Constructor gains `uint32 _solanaPolymerChainId` (Polymer's identifier for Solana,
-  documented as `2`, confirmed with Polymer per environment before deployment) and
+  `2`, confirmed on devnet by `validateSolLogs` on 2026-09-24; confirm on mainnet) and
   `uint64 _solanaChainId` (Eco's Solana chain ID). Both stored as immutables. The Solana
   program ID (raw 32 bytes) is added to the existing bytes32 whitelist. Both are rejected
   as zero (`InvalidSolanaChainConfig`). Deliberate: every argument is immutable with no
@@ -348,11 +349,13 @@ Outbound additions:
   2. `chainId == SOLANA_POLYMER_CHAIN_ID`, else `InvalidDestinationChain`.
   3. `isWhitelisted(programID)`, else `InvalidEmittingContract`-style error carrying the
      bytes32.
-  4. For each log: split at the first comma. The head must be `program: <base58>`,
-     optionally preceded by an un-stripped `Prove:` and/or the runtime's `Program log: `;
-     the shapes parse identically. Require the base58 string to equal, byte for byte, the
-     canonical base58 encoding of the authenticated `programID` (Polymer's recommended
-     defense in depth against indexer misattribution of nested CPI logs). Comparing the
+  4. For each log, after an optional runtime `Program log: ` and `Prove:`: either exactly
+     160 hex characters (the bare payload Polymer actually returns, bound to our program
+     only by the authenticated, whitelisted `programID`), or `program: <base58>, <hex>`.
+     In the second form, split at the first comma and require the base58 string to equal,
+     byte for byte, the canonical base58 encoding of the authenticated `programID`
+     (Polymer's recommended defense in depth against indexer misattribution of nested CPI
+     logs). Comparing the
      canonical string rather than decoding means a non-canonical id (leading `1`
      padding), a non-alphabet character or an over-long field all fail closed with the
      contract's own `SolanaLogProgramMismatch` and no library error escapes. The tail must
@@ -466,14 +469,15 @@ non-EVM claimant skipped, already-proven emits `IntentAlreadyProven`.
 
 ### Devnet
 
-1. **CPI attribution check, first.** Emit a real `prove` log through Portal on devnet and
-   request a proof from Polymer's API. Polymer's docs say logs must come "directly from the
-   program you want to validate, not from a CPI". Our program emits its own log but is
-   itself invoked by Portal via CPI. If Polymer does not index it, the fallback is a
-   permissionless top-level `prove` on `polymer-prover` that reads Portal's `FulfillMarker`
-   PDAs directly (they are Portal-owned and readable by anyone).
-2. One full round trip in each direction against a devnet `PolymerProver` on an EVM
-   testnet.
+1. **CPI attribution check — passed 2026-09-24.** Polymer's docs say logs must come
+   "directly from the program you want to validate, not from a CPI". A real `prove` log
+   emitted through Portal's CPI on devnet came back from `validateSolLogs` with
+   `programID` equal to polymer-prover's ID and `chainId` 2, so no top-level fallback
+   `prove` is needed. The same probe showed Polymer returns the bare payload (section
+   2.2), which eco-routes #442 now accepts.
+2. **Round trips — passed 2026-09-24** against Base Sepolia, single intent and a batch of
+   24 in each direction, with the devnet harness on branch `cfebres/par-670-devnet-e2e`
+   (`scripts/devnet-e2e/`).
 
 ## 7. Rollout
 
