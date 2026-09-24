@@ -1232,3 +1232,39 @@ fn withdraw_intent_cancelled_fail() {
     assert_eq!(ctx.balance(&vault), vault_balance);
     assert!(ctx.get_account(&proof).is_some());
 }
+
+/// The cancellation guard precedes the destination match: a cancelled proof
+/// recorded for another destination is still refused as a cancellation.
+#[test]
+fn withdraw_intent_cancelled_on_wrong_destination_fail() {
+    let (mut ctx, (destination, _, reward), route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let cancelled = Pubkey::new_from_array(CANCELLED.into());
+    let vault_balance = ctx.balance(&vault);
+
+    ctx.set_proof(
+        proof,
+        Proof::new(destination + 1, cancelled),
+        hyper_prover::ID,
+    );
+
+    let result = ctx.portal().withdraw_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        cancelled,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        proof_closer_pda(&reward.prover).0,
+        vec![],
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+
+    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert_eq!(ctx.balance(&cancelled), 0);
+    assert_eq!(ctx.balance(&vault), vault_balance);
+    assert!(ctx.get_account(&proof).is_some());
+}

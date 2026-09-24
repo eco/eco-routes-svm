@@ -3,12 +3,12 @@ use std::iter;
 use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::AccountMeta;
 use eco_svm_std::prover::{self, IntentHashClaimant, Proof, ProofData};
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
 use hyper_prover::state::{pda_payer_pda, Config, ProofAccount};
-use portal::events::IntentWithdrawn;
+use portal::events::{IntentRefunded, IntentWithdrawn};
 use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
-use portal::types::intent_hash;
+use portal::types::{intent_hash, Reward};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
@@ -775,4 +775,77 @@ fn handle_account_proof_mismatch_fail() {
             .handle_account_metas(destination, sender.to_bytes(), invalid_payload);
     let result = ctx.hyperlane().inbox_process(message, handle_account_metas);
     assert!(result.is_err_and(common::is_error(HyperProverError::InvalidProof)))
+}
+
+/// A cancellation arriving over Hyperlane is recorded verbatim (no prover
+/// change) and unlocks refund before `reward.deadline`, returning the proof's
+/// rent to `pda_payer`.
+#[test]
+fn handle_cancellation_enables_refund_success() {
+    let mut ctx = setup();
+    let destination: u32 = random();
+    let (_, _, mut reward): (u64, _, Reward) = ctx.rand_intent();
+    reward.tokens.clear();
+    let route_hash: Bytes32 = random::<[u8; 32]>().into();
+    let intent_hash = intent_hash(destination.into(), &route_hash, &reward.hash());
+    let vault = vault_pda(&intent_hash).0;
+    let funder = ctx.funder.pubkey();
+
+    ctx.airdrop(&funder, reward.native_amount).unwrap();
+    ctx.portal()
+        .fund_intent(
+            destination.into(),
+            reward.clone(),
+            vault,
+            route_hash,
+            false,
+            vec![],
+        )
+        .unwrap();
+
+    let payload = ProofData::new(
+        destination.into(),
+        vec![IntentHashClaimant::new(intent_hash, CANCELLED)],
+    )
+    .to_bytes();
+    let message = create_hyperlane_message(
+        ctx.sender.pubkey().to_bytes().into(),
+        destination,
+        CHAIN_ID.try_into().unwrap(),
+        hyper_prover::ID.to_bytes().into(),
+        payload.clone(),
+    );
+    let pda_payer = pda_payer_pda().0;
+    let pda_payer_balance = ctx.balance(&pda_payer);
+    let sender = ctx.sender.pubkey();
+    let handle_account_metas =
+        ctx.hyper_prover()
+            .handle_account_metas(destination, sender.to_bytes(), payload);
+    ctx.hyperlane()
+        .inbox_process(message, handle_account_metas)
+        .unwrap();
+
+    let proof = Proof::pda(&intent_hash, &hyper_prover::ID).0;
+    assert!(CANCELLED == ctx.account::<ProofAccount>(&proof).unwrap().0.claimant);
+    assert!(ctx.now() < reward.deadline);
+
+    let result = ctx.portal().refund_intent_with_close_proof(
+        destination.into(),
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+        vec![AccountMeta::new(pda_payer, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&proof).is_none());
+    assert_eq!(ctx.balance(&pda_payer), pda_payer_balance);
 }
