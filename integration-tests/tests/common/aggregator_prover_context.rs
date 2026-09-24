@@ -1,9 +1,8 @@
-use aggregator_prover::instructions::AggregateArgs;
 use aggregator_prover::state::Config;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::event_authority_pda;
 use eco_svm_std::prover::Proof;
+use eco_svm_std::{event_authority_pda, Bytes32};
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
@@ -79,7 +78,7 @@ impl AggregatorProver<'_> {
 
     pub fn build_aggregate_instruction(
         &self,
-        args: AggregateArgs,
+        intent_hash: Bytes32,
         provers: &[Pubkey],
     ) -> Instruction {
         let accounts = aggregator_prover::accounts::Aggregate {
@@ -92,23 +91,25 @@ impl AggregatorProver<'_> {
         .to_account_metas(None)
         .into_iter()
         .chain(std::iter::once(AccountMeta::new(
-            Proof::pda(&args.intent_hash, &aggregator_prover::ID).0,
+            Proof::pda(&intent_hash, &aggregator_prover::ID).0,
             false,
         )))
-        .chain(provers.iter().map(|prover| {
-            AccountMeta::new_readonly(Proof::pda(&args.intent_hash, prover).0, false)
-        }))
+        .chain(
+            provers
+                .iter()
+                .map(|prover| AccountMeta::new_readonly(Proof::pda(&intent_hash, prover).0, false)),
+        )
         .collect();
 
         Instruction {
             program_id: aggregator_prover::ID,
             accounts,
-            data: aggregator_prover::instruction::Aggregate { args }.data(),
+            data: aggregator_prover::instruction::Aggregate { intent_hash }.data(),
         }
     }
 
-    pub fn aggregate(&mut self, args: AggregateArgs, provers: &[Pubkey]) -> TransactionResult {
-        let instruction = self.build_aggregate_instruction(args, provers);
+    pub fn aggregate(&mut self, intent_hash: Bytes32, provers: &[Pubkey]) -> TransactionResult {
+        let instruction = self.build_aggregate_instruction(intent_hash, provers);
 
         self.send_instruction(instruction)
     }

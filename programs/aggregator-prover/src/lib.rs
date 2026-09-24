@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use eco_svm_std::Bytes32;
 
 declare_id!("Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE");
 
@@ -17,9 +18,9 @@ pub mod aggregator_prover {
 
     pub fn aggregate<'info>(
         ctx: Context<'info, Aggregate<'info>>,
-        args: AggregateArgs,
+        intent_hash: Bytes32,
     ) -> Result<()> {
-        instructions::aggregate(ctx, args)
+        instructions::aggregate(ctx, intent_hash)
     }
 
     pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {

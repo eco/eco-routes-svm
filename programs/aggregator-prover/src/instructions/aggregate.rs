@@ -6,15 +6,6 @@ use eco_svm_std::Bytes32;
 use crate::instructions::AggregatorProverError;
 use crate::state::{Config, ProofAccount};
 
-#[derive(AnchorSerialize, AnchorDeserialize)]
-pub struct AggregateArgs {
-    pub destination: u64,
-    pub intent_hash: Bytes32,
-    pub claimant: Bytes32,
-    pub route_hash: Bytes32,
-    pub reward_hash: Bytes32,
-}
-
 #[event_cpi]
 #[derive(Accounts)]
 pub struct Aggregate<'info> {
@@ -25,33 +16,15 @@ pub struct Aggregate<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, args: AggregateArgs) -> Result<()> {
-    let AggregateArgs {
-        destination,
-        intent_hash,
-        claimant,
-        route_hash,
-        reward_hash,
-    } = args;
+pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, intent_hash: Bytes32) -> Result<()> {
     let accounts = ctx.remaining_accounts;
     require!(
         accounts.len() == 1 + ctx.accounts.config.provers.len(),
         AggregatorProverError::InvalidProof
     );
-    require!(
-        portal::types::intent_hash(destination, &route_hash, &reward_hash) == intent_hash,
-        AggregatorProverError::InvalidIntentHash
-    );
-    let selected = select_proof(
-        &ctx.accounts.config.provers,
-        &accounts[1..],
-        &intent_hash,
-        destination,
-    )?;
-    require!(
-        claimant == selected.claimant,
-        AggregatorProverError::ClaimantMismatch
-    );
+    let selected = select_proof(&ctx.accounts.config.provers, &accounts[1..], &intent_hash)?;
+    let destination = selected.destination;
+    let claimant = selected.claimant;
     let (proof_address, bump) = Proof::pda(&intent_hash, &crate::ID);
     let proof_account = &accounts[0];
     require_keys_eq!(
@@ -75,11 +48,7 @@ pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, args: AggregateAr
             &[&[PROOF_SEED, intent_hash.as_ref(), &[bump]]],
         )?;
     }
-    emit_cpi!(IntentProven::new(
-        intent_hash,
-        Pubkey::new_from_array(claimant.into()),
-        destination
-    ));
+    emit_cpi!(IntentProven::new(intent_hash, claimant, destination));
 
     Ok(())
 }
@@ -88,7 +57,6 @@ fn select_proof(
     provers: &[Pubkey],
     accounts: &[AccountInfo],
     intent_hash: &Bytes32,
-    destination: u64,
 ) -> Result<Proof> {
     // Validate the whole list before selecting: callers cannot hide a higher-priority proof.
     provers
@@ -116,8 +84,7 @@ fn select_proof(
                 return None;
             }
             let proof = Proof::try_from_account_info(account).ok()??;
-            (proof.destination == destination && proof.claimant != Pubkey::default())
-                .then_some(proof)
+            (proof.claimant != Pubkey::default()).then_some(proof)
         })
         .ok_or_else(|| AggregatorProverError::NoMatchingProof.into())
 }
