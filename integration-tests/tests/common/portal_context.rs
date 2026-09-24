@@ -387,6 +387,44 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
+    pub fn cancel_intent(
+        &mut self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+    ) -> TransactionResult {
+        let args = portal::instructions::CancelArgs {
+            intent_hash,
+            route: route.clone(),
+            reward_hash,
+        };
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts: portal::accounts::Cancel {
+                payer: self.payer.pubkey(),
+                fulfill_marker,
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None),
+            data: portal::instruction::Cancel { args }.data(),
+        };
+
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
     pub fn close_fulfill_marker(
         &mut self,
         intent_hash: Bytes32,

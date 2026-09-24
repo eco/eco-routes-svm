@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+mod cancel;
 mod close_fulfill_marker;
 mod fulfill;
 mod fund;
@@ -9,6 +10,7 @@ mod publish;
 mod refund;
 mod withdraw;
 
+pub use cancel::*;
 pub use close_fulfill_marker::*;
 pub use fulfill::*;
 pub use fund::*;

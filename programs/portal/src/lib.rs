@@ -44,6 +44,10 @@ pub mod portal {
     ) -> Result<()> {
         instructions::close_fulfill_marker(ctx, args)
     }
+
+    pub fn cancel(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
+        cancel_intent(ctx, args)
+    }
 }
 
 #[cfg(test)]

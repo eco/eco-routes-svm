@@ -87,7 +87,14 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    mark_fulfilled(&ctx, &intent_hash, &claimant, route.deadline)?;
+    create_fulfill_marker(
+        &ctx.accounts.fulfill_marker,
+        &ctx.accounts.payer,
+        &ctx.accounts.system_program,
+        &intent_hash,
+        claimant,
+        route.deadline,
+    )?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
 
@@ -255,26 +262,26 @@ fn executor_atas_digest(executor: &Pubkey, call_accounts: &[AccountInfo]) -> Res
     })
 }
 
-fn mark_fulfilled(
-    ctx: &Context<Fulfill>,
+/// Writes the intent's `FulfillMarker`, the one record both `fulfill` and
+/// `cancel` claim: whichever creates it first owns the intent, and every later
+/// attempt fails with `IntentAlreadyFulfilled`.
+pub(crate) fn create_fulfill_marker<'info>(
+    fulfill_marker: &UncheckedAccount<'info>,
+    payer: &Signer<'info>,
+    system_program: &Program<'info, System>,
     intent_hash: &Bytes32,
-    claimant: &Bytes32,
+    claimant: Bytes32,
     deadline: u64,
 ) -> Result<()> {
-    let (fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
+    let (expected_fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
     require!(
-        ctx.accounts.fulfill_marker.key() == fulfill_marker,
+        fulfill_marker.key() == expected_fulfill_marker,
         PortalError::InvalidFulfillMarker
     );
     let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
 
-    FulfillMarker::new(*claimant, ctx.accounts.payer.key(), deadline, bump)
-        .init(
-            &ctx.accounts.fulfill_marker,
-            &ctx.accounts.payer,
-            &ctx.accounts.system_program,
-            &[&signer_seeds],
-        )
+    FulfillMarker::new(claimant, payer.key(), deadline, bump)
+        .init(fulfill_marker, payer, system_program, &[&signer_seeds])
         .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
 }
 

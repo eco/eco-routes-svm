@@ -60,3 +60,9 @@ pub struct FulfillMarkerClosed {
     claimant: Bytes32,
     lamports: u64,
 }
+
+#[event]
+#[derive(new)]
+pub struct IntentCancelled {
+    intent_hash: Bytes32,
+}
