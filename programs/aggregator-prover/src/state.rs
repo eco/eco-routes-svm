@@ -3,13 +3,13 @@ use eco_svm_std::account::AccountExt;
 use eco_svm_std::prover::Proof;
 
 pub const CONFIG_SEED: &[u8] = b"config";
-pub const MAX_MEMBERS: usize = 8;
+pub const MAX_PROVERS: usize = 8;
 
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
-    #[max_len(MAX_MEMBERS)]
-    pub members: Vec<Pubkey>,
+    #[max_len(MAX_PROVERS)]
+    pub provers: Vec<Pubkey>,
 }
 
 impl Config {

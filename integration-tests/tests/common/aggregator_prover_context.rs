@@ -43,7 +43,7 @@ impl AggregatorProver<'_> {
             .unwrap();
     }
 
-    pub fn init(&mut self, authority: &Keypair, members: Vec<Pubkey>) -> TransactionResult {
+    pub fn init(&mut self, authority: &Keypair, provers: Vec<Pubkey>) -> TransactionResult {
         let program = self.get_account(&aggregator_prover::ID).unwrap();
         let program_data =
             Pubkey::find_program_address(&[aggregator_prover::ID.as_ref()], &program.owner).0;
@@ -58,15 +58,15 @@ impl AggregatorProver<'_> {
         .to_account_metas(None)
         .into_iter()
         .chain(
-            members
+            provers
                 .iter()
-                .map(|member| AccountMeta::new_readonly(*member, false)),
+                .map(|prover| AccountMeta::new_readonly(*prover, false)),
         )
         .collect();
         let instruction = Instruction {
             program_id: aggregator_prover::ID,
             accounts,
-            data: aggregator_prover::instruction::Init { members }.data(),
+            data: aggregator_prover::instruction::Init { provers }.data(),
         };
         let transaction = Transaction::new(
             &[&self.payer, authority],
@@ -80,7 +80,7 @@ impl AggregatorProver<'_> {
     pub fn build_aggregate_instruction(
         &self,
         args: AggregateArgs,
-        members: &[Pubkey],
+        provers: &[Pubkey],
     ) -> Instruction {
         let accounts = aggregator_prover::accounts::Aggregate {
             payer: self.payer.pubkey(),
@@ -100,8 +100,8 @@ impl AggregatorProver<'_> {
                         Proof::pda(&intent.intent_hash, &aggregator_prover::ID).0,
                         false,
                     ))
-                    .chain(members.iter().map(|member| {
-                        AccountMeta::new_readonly(Proof::pda(&intent.intent_hash, member).0, false)
+                    .chain(provers.iter().map(|prover| {
+                        AccountMeta::new_readonly(Proof::pda(&intent.intent_hash, prover).0, false)
                     }))
                 }),
         )
@@ -114,8 +114,8 @@ impl AggregatorProver<'_> {
         }
     }
 
-    pub fn aggregate(&mut self, args: AggregateArgs, members: &[Pubkey]) -> TransactionResult {
-        let instruction = self.build_aggregate_instruction(args, members);
+    pub fn aggregate(&mut self, args: AggregateArgs, provers: &[Pubkey]) -> TransactionResult {
+        let instruction = self.build_aggregate_instruction(args, provers);
 
         self.send_instruction(instruction)
     }

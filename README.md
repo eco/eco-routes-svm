@@ -65,7 +65,7 @@ An atomic orchestrator that lets solvers fulfill intents with zero capital — t
 
 ### How They Work Together
 
-The optional **Aggregator-Prover** (`programs/aggregator-prover/`) creates a standard proof from an immutable ordered member set. Solvers deliver through a concrete member, aggregate on the source chain, then withdraw using the aggregator program ID as `reward.prover`. Portal needs no changes.
+The optional **Aggregator-Prover** (`programs/aggregator-prover/`) creates a standard proof from an immutable ordered prover set. Solvers deliver through a concrete prover, aggregate on the source chain, then withdraw using the aggregator program ID as `reward.prover`. Portal needs no changes.
 
 ```mermaid
 sequenceDiagram
@@ -313,19 +313,19 @@ A helper program used by Hyperlane message construction in tests and off-chain t
 
 ### Aggregator-Prover Program
 
-- `init(members)` — the program's upgrade authority initializes the singleton `Config` PDA once. Membership is ordered, nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no membership setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
+- `init(provers)` — the program's upgrade authority initializes the singleton `Config` PDA once. Prover configuration is ordered, nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
 - `aggregate(AggregateArgs)` — permissionless source-chain aggregation. `proof_data` supplies the destination and intent/claimant pairs; `preimages` contains one `IntentPreimage { route_hash, reward_hash }` per intent, in the same order. The preimage binds the destination to the intent hash.
-- `close_proof()` — accepts Portal's `proof_closer_pda(aggregator_program_id)` signer, the aggregate proof, and a writable signer receiving rent. It leaves member proofs untouched.
+- `close_proof()` — accepts Portal's `proof_closer_pda(aggregator_program_id)` signer, the aggregate proof, and a writable signer receiving rent. It leaves underlying proofs untouched.
 
-`aggregate` accounts, in order: payer writable signer, Config, system program, event authority, aggregator program. For each intent, append its writable aggregate proof PDA followed by **all** member proof PDAs in configuration order, including absent accounts. Missing, reordered, or substituted PDAs are rejected. Accounts with the wrong owner, discriminator, data shape, zero claimant, or wrong destination are skipped. The first matching proof wins, and its claimant must match the request.
+`aggregate` accounts, in order: payer writable signer, Config, system program, event authority, aggregator program. For each intent, append its writable aggregate proof PDA followed by **all** prover proof PDAs in configuration order, including absent accounts. Missing, reordered, or substituted PDAs are rejected. Accounts with the wrong owner, discriminator, data shape, zero claimant, or wrong destination are skipped. The first matching proof wins, and its claimant must match the request.
 
-There is no `prove` instruction. Relay through a concrete member: for Hyperlane, destination `Portal.prove → HyperProver.prove` dispatches the message, source `HyperProver.handle` records the member proof, then `AggregatorProver.aggregate` creates the proof used by `Portal.withdraw`. Portal and member provers are unchanged.
+There is no `prove` instruction. Relay through a concrete prover: for Hyperlane, destination `Portal.prove → HyperProver.prove` dispatches the message, source `HyperProver.handle` records the underlying proof, then `AggregatorProver.aggregate` creates the proof used by `Portal.withdraw`. Portal and provers are unchanged.
 
-The aggregate proof uses the existing `Proof` layout and PDA seeds and emits the standard `IntentProven` CPI event. Identical retries succeed while the selected member proof remains available; conflicting proofs cannot overwrite a recorded claimant. Priority is evaluated when the aggregate proof is first created, not again during withdrawal. No challenge interface is needed because the intent preimage excludes wrong-destination proofs during aggregation.
+The aggregate proof uses the existing `Proof` layout and PDA seeds and emits the standard `IntentProven` CPI event. Identical retries succeed while the selected prover’s proof remains available; conflicting proofs cannot overwrite a recorded claimant. Priority is evaluated when the aggregate proof is first created, not again during withdrawal. No challenge interface is needed because the intent preimage excludes wrong-destination proofs during aggregation.
 
-**Solver integration is required before enabling these routes.** Portal sees only the aggregate proof. A proof delivered to a member does not block an expired refund until aggregation succeeds. Aggregate before `reward.deadline`, ideally in the same transaction as member delivery, then withdraw. Merely combining aggregation with withdrawal does not remove the earlier refund race. This source-chain aggregation step differs from EVM's read-only union. The aggregator sends no bridge messages; destination-chain dispatch and source-chain delivery must use a concrete member. Listeners should track the aggregator's `IntentProven` event for settlement readiness.
+**Solver integration is required before enabling these routes.** Portal sees only the aggregate proof. A proof delivered to a prover does not block an expired refund until aggregation succeeds. Aggregate before `reward.deadline`, ideally in the same transaction as proof delivery, then withdraw. Merely combining aggregation with withdrawal does not remove the earlier refund race. This source-chain aggregation step differs from EVM's read-only union. The aggregator sends no bridge messages; destination-chain dispatch and source-chain delivery must use a concrete prover. Listeners should track the aggregator's `IntentProven` event for settlement readiness.
 
-The trust floor is the weakest member. Deployment must review the exact ordered list and each member's proof semantics; executable-account validation does not establish trust. Program upgrade authorities retain the usual ability to replace code until revoked. Member proof rent is not reclaimed by aggregate withdrawal.
+The trust floor is the weakest prover. Deployment must review the exact ordered list and each prover's proof semantics; executable-account validation does not establish trust. Program upgrade authorities retain the usual ability to replace code until revoked. Underlying proof rent is not reclaimed by aggregate withdrawal.
 
 ### Dummy ISM Program
 
@@ -353,7 +353,7 @@ A simplified ISM implementation used as the mailbox's default ISM in local test 
 - `close_proof_hyper_prover.rs` - HyperProver proof cleanup
 - `close_proof_local_prover.rs` - LocalProver proof cleanup
 - `init_hyper_prover.rs` - HyperProver initialization
-- `aggregator_prover.rs` - Membership, authenticated aggregation, and existing Portal settlement
+- `aggregator_prover.rs` - Prover configuration, authenticated aggregation, and existing Portal settlement
 - `flash_fulfill.rs` - Atomic flash-fulfillment flows
 - `set_flash_fulfill_intent.rs` - Flash-fulfillment intent buffer writes
 - `pay_for_gas.rs` - Hyperlane gas payment via proof-helper

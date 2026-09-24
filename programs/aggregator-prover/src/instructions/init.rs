@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
 
 use crate::instructions::AggregatorProverError;
-use crate::state::{Config, CONFIG_SEED, MAX_MEMBERS};
+use crate::state::{Config, CONFIG_SEED, MAX_PROVERS};
 
 #[derive(Accounts)]
 pub struct Init<'info> {
@@ -19,32 +19,32 @@ pub struct Init<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn init<'info>(ctx: Context<'info, Init<'info>>, members: Vec<Pubkey>) -> Result<()> {
+pub fn init<'info>(ctx: Context<'info, Init<'info>>, provers: Vec<Pubkey>) -> Result<()> {
     require!(
-        !members.is_empty() && members.len() <= MAX_MEMBERS,
-        AggregatorProverError::InvalidMemberSet
+        !provers.is_empty() && provers.len() <= MAX_PROVERS,
+        AggregatorProverError::InvalidProverSet
     );
     require!(
-        ctx.remaining_accounts.len() == members.len(),
-        AggregatorProverError::InvalidMemberSet
+        ctx.remaining_accounts.len() == provers.len(),
+        AggregatorProverError::InvalidProverSet
     );
-    members.iter().enumerate().try_for_each(|(index, member)| {
+    provers.iter().enumerate().try_for_each(|(index, prover)| {
         require!(
-            *member != Pubkey::default()
-                && *member != crate::ID
-                && ctx.remaining_accounts[index].key() == *member
+            *prover != Pubkey::default()
+                && *prover != crate::ID
+                && ctx.remaining_accounts[index].key() == *prover
                 && ctx.remaining_accounts[index].executable,
-            AggregatorProverError::InvalidMember
+            AggregatorProverError::InvalidProver
         );
         require!(
-            !members[..index].contains(member),
-            AggregatorProverError::DuplicateMember
+            !provers[..index].contains(prover),
+            AggregatorProverError::DuplicateProver
         );
 
         Ok(())
     })?;
 
-    Config { members }.init(
+    Config { provers }.init(
         &ctx.accounts.config,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,

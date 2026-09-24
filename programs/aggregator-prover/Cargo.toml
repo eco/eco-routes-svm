@@ -1,5 +1,5 @@
 [package]
-description = "A Portal-compatible union of immutable member provers"
+description = "A Portal-compatible union of an immutable prover set"
 edition = "2021"
 name = "aggregator-prover"
 version = "0.1.0"

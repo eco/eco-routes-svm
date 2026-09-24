@@ -1,7 +1,7 @@
 use std::iter;
 
 use aggregator_prover::instructions::{AggregateArgs, AggregatorProverError, IntentPreimage};
-use aggregator_prover::state::{Config, ProofAccount, MAX_MEMBERS};
+use aggregator_prover::state::{Config, ProofAccount, MAX_PROVERS};
 use anchor_lang::error::ErrorCode;
 use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
@@ -20,7 +20,7 @@ use solana_sdk::signer::Signer;
 
 pub mod common;
 
-const MEMBERS: [Pubkey; 2] = [hyper_prover::ID, local_prover::ID];
+const PROVERS: [Pubkey; 2] = [hyper_prover::ID, local_prover::ID];
 const DESTINATION: u64 = 10;
 
 fn setup() -> (common::Context, Keypair) {
@@ -35,7 +35,7 @@ fn initialized() -> common::Context {
     let (mut context, authority) = setup();
     context
         .aggregator_prover()
-        .init(&authority, MEMBERS.to_vec())
+        .init(&authority, PROVERS.to_vec())
         .unwrap();
 
     context
@@ -57,18 +57,18 @@ fn args(claimant: Pubkey) -> AggregateArgs {
     }
 }
 
-fn set_member_proof(
+fn set_prover_proof(
     context: &mut common::Context,
     args: &AggregateArgs,
-    member: Pubkey,
+    prover: Pubkey,
     destination: u64,
     claimant: Pubkey,
 ) {
     let hash = args.proof_data.intent_hashes_claimants[0].intent_hash;
     context.set_proof(
-        Proof::pda(&hash, &member).0,
+        Proof::pda(&hash, &prover).0,
         Proof::new(destination, claimant),
-        member,
+        prover,
     );
 }
 
@@ -86,13 +86,13 @@ fn init_preserves_order_and_cannot_be_reinitialized() {
     context.airdrop(&Config::pda().0, 1_000_000).unwrap();
     context
         .aggregator_prover()
-        .init(&authority, MEMBERS.to_vec())
+        .init(&authority, PROVERS.to_vec())
         .unwrap();
     let config: Config = context.account(&Config::pda().0).unwrap();
-    assert_eq!(config.members, MEMBERS);
+    assert_eq!(config.provers, PROVERS);
     let result = context
         .aggregator_prover()
-        .init(&authority, MEMBERS.into_iter().rev().collect());
+        .init(&authority, PROVERS.into_iter().rev().collect());
     assert!(result.is_err_and(common::is_error(ErrorCode::ConstraintZero)));
 }
 
@@ -101,58 +101,58 @@ fn init_rejects_wrong_authority() {
     let (mut context, _) = setup();
     let result = context
         .aggregator_prover()
-        .init(&Keypair::new(), MEMBERS.to_vec());
+        .init(&Keypair::new(), PROVERS.to_vec());
     assert!(result.is_err_and(common::is_error(AggregatorProverError::InvalidAuthority)));
 }
 
 #[test]
-fn init_rejects_invalid_member_sets() {
-    for members in [vec![], vec![MEMBERS[0]; MAX_MEMBERS + 1]] {
+fn init_rejects_invalid_prover_sets() {
+    for provers in [vec![], vec![PROVERS[0]; MAX_PROVERS + 1]] {
         let (mut context, authority) = setup();
-        let result = context.aggregator_prover().init(&authority, members);
-        assert!(result.is_err_and(common::is_error(AggregatorProverError::InvalidMemberSet)));
+        let result = context.aggregator_prover().init(&authority, provers);
+        assert!(result.is_err_and(common::is_error(AggregatorProverError::InvalidProverSet)));
     }
 }
 
 #[test]
-fn init_rejects_duplicate_members() {
+fn init_rejects_duplicate_provers() {
     let (mut context, authority) = setup();
     let result = context
         .aggregator_prover()
-        .init(&authority, vec![MEMBERS[0]; 2]);
-    assert!(result.is_err_and(common::is_error(AggregatorProverError::DuplicateMember)));
+        .init(&authority, vec![PROVERS[0]; 2]);
+    assert!(result.is_err_and(common::is_error(AggregatorProverError::DuplicateProver)));
 }
 
 #[test]
-fn init_rejects_non_executable_zero_and_self_members() {
-    for member in [
+fn init_rejects_non_executable_zero_and_self_provers() {
+    for prover in [
         Pubkey::new_unique(),
         Pubkey::default(),
         aggregator_prover::ID,
     ] {
         let (mut context, authority) = setup();
-        let result = context.aggregator_prover().init(&authority, vec![member]);
-        assert!(result.is_err_and(common::is_error(AggregatorProverError::InvalidMember)));
+        let result = context.aggregator_prover().init(&authority, vec![prover]);
+        assert!(result.is_err_and(common::is_error(AggregatorProverError::InvalidProver)));
     }
 }
 
 #[test]
-fn aggregate_selects_first_member_and_emits_standard_event() {
+fn aggregate_selects_first_prover_and_emits_standard_event() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
     let hash = args.proof_data.intent_hashes_claimants[0].intent_hash;
     let proof_address = aggregate_address(&args);
     context.airdrop(&proof_address, 1_000_000).unwrap();
-    set_member_proof(&mut context, &args, MEMBERS[0], DESTINATION, claimant);
-    set_member_proof(
+    set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
+    set_prover_proof(
         &mut context,
         &args,
-        MEMBERS[1],
+        PROVERS[1],
         DESTINATION,
         Pubkey::new_unique(),
     );
-    let result = context.aggregator_prover().aggregate(args, &MEMBERS);
+    let result = context.aggregator_prover().aggregate(args, &PROVERS);
     assert!(
         result.is_ok_and(common::contains_cpi_event(IntentProven::new(
             hash,
@@ -166,33 +166,33 @@ fn aggregate_selects_first_member_and_emits_standard_event() {
 }
 
 #[test]
-fn aggregate_falls_back_to_second_member() {
+fn aggregate_falls_back_to_second_prover() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
-    set_member_proof(&mut context, &args, MEMBERS[1], DESTINATION, claimant);
+    set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
     assert!(context
         .aggregator_prover()
-        .aggregate(args, &MEMBERS)
+        .aggregate(args, &PROVERS)
         .is_ok());
 }
 
 #[test]
-fn aggregate_wrong_destination_does_not_shadow_valid_member() {
+fn aggregate_wrong_destination_does_not_shadow_valid_prover() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
-    set_member_proof(
+    set_prover_proof(
         &mut context,
         &args,
-        MEMBERS[0],
+        PROVERS[0],
         DESTINATION + 1,
         Pubkey::new_unique(),
     );
-    set_member_proof(&mut context, &args, MEMBERS[1], DESTINATION, claimant);
+    set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
     assert!(context
         .aggregator_prover()
-        .aggregate(args, &MEMBERS)
+        .aggregate(args, &PROVERS)
         .is_ok());
 }
 
@@ -202,16 +202,16 @@ fn aggregate_skips_zero_claimants_malformed_data_and_wrong_owners() {
         let mut context = initialized();
         let claimant = Pubkey::new_unique();
         let args = args(claimant);
-        set_member_proof(
+        set_prover_proof(
             &mut context,
             &args,
-            MEMBERS[0],
+            PROVERS[0],
             DESTINATION,
             Pubkey::default(),
         );
         let address = Proof::pda(
             &args.proof_data.intent_hashes_claimants[0].intent_hash,
-            &MEMBERS[0],
+            &PROVERS[0],
         )
         .0;
         let mut account = context.get_account(&address).unwrap();
@@ -223,28 +223,28 @@ fn aggregate_skips_zero_claimants_malformed_data_and_wrong_owners() {
             _ => unreachable!(),
         }
         context.set_account(address, account).unwrap();
-        set_member_proof(&mut context, &args, MEMBERS[1], DESTINATION, claimant);
+        set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
         assert!(context
             .aggregator_prover()
-            .aggregate(args, &MEMBERS)
+            .aggregate(args, &PROVERS)
             .is_ok());
     }
 }
 
 #[test]
-fn aggregate_cannot_omit_reorder_or_substitute_members() {
-    for members in [
-        vec![MEMBERS[1]],
-        vec![MEMBERS[1], MEMBERS[0]],
-        vec![MEMBERS[0], Pubkey::new_unique()],
+fn aggregate_cannot_omit_reorder_or_substitute_provers() {
+    for provers in [
+        vec![PROVERS[1]],
+        vec![PROVERS[1], PROVERS[0]],
+        vec![PROVERS[0], Pubkey::new_unique()],
     ] {
         let mut context = initialized();
         let claimant = Pubkey::new_unique();
         let args = args(claimant);
-        set_member_proof(&mut context, &args, MEMBERS[1], DESTINATION, claimant);
+        set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
         assert!(context
             .aggregator_prover()
-            .aggregate(args, &members)
+            .aggregate(args, &provers)
             .is_err_and(common::is_error(AggregatorProverError::InvalidProof)));
     }
 }
@@ -256,11 +256,11 @@ fn aggregate_rejects_unproven_and_wrong_destination_only() {
         let claimant = Pubkey::new_unique();
         let args = args(claimant);
         if wrong_destination {
-            set_member_proof(&mut context, &args, MEMBERS[0], DESTINATION + 1, claimant);
+            set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION + 1, claimant);
         }
         assert!(context
             .aggregator_prover()
-            .aggregate(args, &MEMBERS)
+            .aggregate(args, &PROVERS)
             .is_err_and(common::is_error(AggregatorProverError::NoMatchingProof)));
     }
 }
@@ -271,7 +271,7 @@ fn aggregate_rejects_forged_destination_preimage_and_claimant() {
         let mut context = initialized();
         let claimant = Pubkey::new_unique();
         let mut args = args(claimant);
-        set_member_proof(&mut context, &args, MEMBERS[0], DESTINATION, claimant);
+        set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
         let expected_error = match variant {
             0 => {
                 args.proof_data.destination += 1;
@@ -289,7 +289,7 @@ fn aggregate_rejects_forged_destination_preimage_and_claimant() {
         };
         assert!(context
             .aggregator_prover()
-            .aggregate(args, &MEMBERS)
+            .aggregate(args, &PROVERS)
             .is_err_and(common::is_error(expected_error)));
     }
 }
@@ -302,7 +302,7 @@ fn aggregate_rejects_mismatched_preimage_count() {
         args.preimages = vec![args.preimages[0].clone(); count];
         assert!(context
             .aggregator_prover()
-            .aggregate(args, &MEMBERS)
+            .aggregate(args, &PROVERS)
             .is_err_and(common::is_error(AggregatorProverError::InvalidData)));
     }
 }
@@ -311,33 +311,33 @@ fn aggregate_rejects_mismatched_preimage_count() {
 fn aggregate_repeated_proof_is_idempotent_but_cannot_change_claimant() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
-    set_member_proof(
+    set_prover_proof(
         &mut context,
         &args(claimant),
-        MEMBERS[0],
+        PROVERS[0],
         DESTINATION,
         claimant,
     );
     context
         .aggregator_prover()
-        .aggregate(args(claimant), &MEMBERS)
+        .aggregate(args(claimant), &PROVERS)
         .unwrap();
     context.expire_blockhash();
     assert!(context
         .aggregator_prover()
-        .aggregate(args(claimant), &MEMBERS)
+        .aggregate(args(claimant), &PROVERS)
         .is_ok());
     let other_claimant = Pubkey::new_unique();
-    set_member_proof(
+    set_prover_proof(
         &mut context,
         &args(other_claimant),
-        MEMBERS[0],
+        PROVERS[0],
         DESTINATION,
         other_claimant,
     );
     assert!(context
         .aggregator_prover()
-        .aggregate(args(other_claimant), &MEMBERS)
+        .aggregate(args(other_claimant), &PROVERS)
         .is_err_and(common::is_error(AggregatorProverError::IntentAlreadyProven)));
 }
 
@@ -347,7 +347,7 @@ fn aggregate_batches_are_atomic() {
     let claimant = Pubkey::new_unique();
     let mut args = args(claimant);
     let proof_address = aggregate_address(&args);
-    set_member_proof(&mut context, &args, MEMBERS[0], DESTINATION, claimant);
+    set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
     let mut preimages = args.preimages.clone();
     let second = IntentPreimage {
         route_hash: [44; 32].into(),
@@ -363,7 +363,7 @@ fn aggregate_batches_are_atomic() {
     args.preimages = preimages;
     assert!(context
         .aggregator_prover()
-        .aggregate(args, &MEMBERS)
+        .aggregate(args, &PROVERS)
         .is_err_and(common::is_error(AggregatorProverError::NoMatchingProof)));
     assert!(context.get_account(&proof_address).is_none());
 }
@@ -374,10 +374,10 @@ fn close_proof_rejects_unscoped_signer() {
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
     let proof_address = aggregate_address(&args);
-    set_member_proof(&mut context, &args, MEMBERS[0], DESTINATION, claimant);
+    set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
     context
         .aggregator_prover()
-        .aggregate(args, &MEMBERS)
+        .aggregate(args, &PROVERS)
         .unwrap();
     let instruction = Instruction {
         program_id: aggregator_prover::ID,
@@ -455,7 +455,7 @@ fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof()
         }
         context
             .aggregator_prover()
-            .init(&authority, MEMBERS.to_vec())
+            .init(&authority, PROVERS.to_vec())
             .unwrap();
         let (reward, route_hash, hash) = funded(&mut context);
         let claimant = Pubkey::new_unique();
@@ -469,10 +469,10 @@ fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof()
                 reward_hash: reward.hash(),
             }],
         };
-        set_member_proof(&mut context, &args, MEMBERS[1], DESTINATION, claimant);
+        set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
         context
             .aggregator_prover()
-            .aggregate(args, &MEMBERS)
+            .aggregate(args, &PROVERS)
             .unwrap();
         context.warp_to_timestamp((reward.deadline + 1).try_into().unwrap());
         let vault = vault_pda(&hash).0;
@@ -546,41 +546,41 @@ fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof()
         });
         assert!(context.get_account(&proof_address).is_none());
         assert!(context
-            .get_account(&Proof::pda(&hash, &MEMBERS[1]).0)
+            .get_account(&Proof::pda(&hash, &PROVERS[1]).0)
             .is_some());
         assert!(context.get_account(&marker).is_some());
     }
 }
 
 #[test]
-fn max_members_can_resolve_last_proof() {
+fn max_provers_can_resolve_last_proof() {
     let (mut context, authority) = setup();
-    let members: Vec<_> = (0..MAX_MEMBERS).map(|_| Pubkey::new_unique()).collect();
-    members.iter().for_each(|member| {
+    let provers: Vec<_> = (0..MAX_PROVERS).map(|_| Pubkey::new_unique()).collect();
+    provers.iter().for_each(|prover| {
         context
-            .add_program(*member, include_bytes!("../../target/deploy/dummy_ism.so"))
+            .add_program(*prover, include_bytes!("../../target/deploy/dummy_ism.so"))
             .unwrap();
     });
     context
         .aggregator_prover()
-        .init(&authority, members.clone())
+        .init(&authority, provers.clone())
         .unwrap();
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
-    set_member_proof(
+    set_prover_proof(
         &mut context,
         &args,
-        members[MAX_MEMBERS - 1],
+        provers[MAX_PROVERS - 1],
         DESTINATION,
         claimant,
     );
     let result = context
         .aggregator_prover()
-        .aggregate(args, &members)
+        .aggregate(args, &provers)
         .unwrap();
     assert!(result.compute_units_consumed < 100_000);
     println!(
-        "eight-member aggregation: {} CU",
+        "eight-prover aggregation: {} CU",
         result.compute_units_consumed
     );
 }
@@ -590,10 +590,10 @@ fn aggregate_rejects_substituted_aggregate_pda() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     let args = args(claimant);
-    set_member_proof(&mut context, &args, MEMBERS[0], DESTINATION, claimant);
+    set_prover_proof(&mut context, &args, PROVERS[0], DESTINATION, claimant);
     let mut instruction = context
         .aggregator_prover()
-        .build_aggregate_instruction(args, &MEMBERS);
+        .build_aggregate_instruction(args, &PROVERS);
     instruction.accounts[5].pubkey = Pubkey::new_unique();
     assert!(context
         .aggregator_prover()
@@ -607,23 +607,23 @@ fn later_higher_priority_proof_cannot_overwrite_recorded_claimant() {
     let claimant = Pubkey::new_unique();
     let original = args(claimant);
     let address = aggregate_address(&original);
-    set_member_proof(&mut context, &original, MEMBERS[1], DESTINATION, claimant);
+    set_prover_proof(&mut context, &original, PROVERS[1], DESTINATION, claimant);
     context
         .aggregator_prover()
-        .aggregate(original, &MEMBERS)
+        .aggregate(original, &PROVERS)
         .unwrap();
     let other_claimant = Pubkey::new_unique();
     let later = args(other_claimant);
-    set_member_proof(
+    set_prover_proof(
         &mut context,
         &later,
-        MEMBERS[0],
+        PROVERS[0],
         DESTINATION,
         other_claimant,
     );
     assert!(context
         .aggregator_prover()
-        .aggregate(later, &MEMBERS)
+        .aggregate(later, &PROVERS)
         .is_err_and(common::is_error(AggregatorProverError::IntentAlreadyProven)));
     assert_eq!(
         context
@@ -636,13 +636,13 @@ fn later_higher_priority_proof_cannot_overwrite_recorded_claimant() {
 }
 
 #[test]
-fn aggregate_batch_resolves_members_independently() {
+fn aggregate_batch_resolves_provers_independently() {
     let mut context = initialized();
     let claimant = Pubkey::new_unique();
     let other_claimant = Pubkey::new_unique();
     let mut args = args(claimant);
     let first_address = aggregate_address(&args);
-    set_member_proof(&mut context, &args, MEMBERS[1], DESTINATION, claimant);
+    set_prover_proof(&mut context, &args, PROVERS[1], DESTINATION, claimant);
     let mut preimages = args.preimages.clone();
     let second = IntentPreimage {
         route_hash: [44; 32].into(),
@@ -650,9 +650,9 @@ fn aggregate_batch_resolves_members_independently() {
     };
     let second_hash = intent_hash(DESTINATION, &second.route_hash, &second.reward_hash);
     context.set_proof(
-        Proof::pda(&second_hash, &MEMBERS[0]).0,
+        Proof::pda(&second_hash, &PROVERS[0]).0,
         Proof::new(DESTINATION, other_claimant),
-        MEMBERS[0],
+        PROVERS[0],
     );
     args.proof_data
         .intent_hashes_claimants
@@ -664,7 +664,7 @@ fn aggregate_batch_resolves_members_independently() {
     args.preimages = preimages;
     context
         .aggregator_prover()
-        .aggregate(args, &MEMBERS)
+        .aggregate(args, &PROVERS)
         .unwrap();
     assert_eq!(
         context
@@ -689,11 +689,11 @@ fn existing_portal_refunds_unaggregated_intent_after_deadline() {
     let mut context = initialized();
     let (reward, route_hash, hash) = funded(&mut context);
     let vault = vault_pda(&hash).0;
-    // This pins the integration boundary: member delivery alone is not settlement readiness.
+    // This pins the integration boundary: prover delivery alone is not settlement readiness.
     context.set_proof(
-        Proof::pda(&hash, &MEMBERS[0]).0,
+        Proof::pda(&hash, &PROVERS[0]).0,
         Proof::new(DESTINATION, Pubkey::new_unique()),
-        MEMBERS[0],
+        PROVERS[0],
     );
     context.warp_to_timestamp((reward.deadline + 1).try_into().unwrap());
     let token_program = context.token_program;
@@ -884,7 +884,7 @@ fn hyper_prover_relays_then_source_aggregates_delivered_proof() {
                 reward_hash: intent.reward_hash,
             }],
         },
-        &MEMBERS,
+        &PROVERS,
     );
     assert!(
         result.is_ok_and(common::contains_cpi_event(IntentProven::new(

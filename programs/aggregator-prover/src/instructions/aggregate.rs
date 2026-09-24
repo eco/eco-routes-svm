@@ -39,7 +39,7 @@ pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, args: AggregateAr
         !intents.is_empty() && preimages.len() == intents.len(),
         AggregatorProverError::InvalidData
     );
-    let chunk_size = 1 + ctx.accounts.config.members.len();
+    let chunk_size = 1 + ctx.accounts.config.provers.len();
     require!(
         ctx.remaining_accounts.len() == intents.len() * chunk_size,
         AggregatorProverError::InvalidProof
@@ -74,7 +74,7 @@ fn record_proof<'info>(
         AggregatorProverError::InvalidIntentHash
     );
     let selected = select_proof(
-        &ctx.accounts.config.members,
+        &ctx.accounts.config.provers,
         &accounts[1..],
         &intent_hash,
         destination,
@@ -116,30 +116,30 @@ fn record_proof<'info>(
 }
 
 fn select_proof(
-    members: &[Pubkey],
+    provers: &[Pubkey],
     accounts: &[AccountInfo],
     intent_hash: &Bytes32,
     destination: u64,
 ) -> Result<Proof> {
     // Validate the whole list before selecting: callers cannot hide a higher-priority proof.
-    members
+    provers
         .iter()
         .zip(accounts)
-        .try_for_each(|(member, account)| {
+        .try_for_each(|(prover, account)| {
             require_keys_eq!(
                 account.key(),
-                Proof::pda(intent_hash, member).0,
+                Proof::pda(intent_hash, prover).0,
                 AggregatorProverError::InvalidProof
             );
 
             Ok(())
         })?;
 
-    members
+    provers
         .iter()
         .zip(accounts)
-        .find_map(|(member, account)| {
-            if account.owner != member {
+        .find_map(|(prover, account)| {
+            if account.owner != prover {
                 return None;
             }
             let data = account.try_borrow_data().ok()?;

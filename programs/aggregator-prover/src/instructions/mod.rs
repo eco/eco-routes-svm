@@ -12,9 +12,9 @@ pub use init::*;
 pub enum AggregatorProverError {
     InvalidConfig,
     InvalidAuthority,
-    InvalidMemberSet,
-    InvalidMember,
-    DuplicateMember,
+    InvalidProverSet,
+    InvalidProver,
+    DuplicateProver,
     InvalidData,
     InvalidProof,
     InvalidIntentHash,
