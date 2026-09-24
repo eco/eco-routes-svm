@@ -8,41 +8,41 @@ use crate::state::{Config, ProofAccount};
 
 #[event_cpi]
 #[derive(Accounts)]
+#[instruction(intent_hash: Bytes32)]
 pub struct Aggregate<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
     #[account(address = Config::pda().0 @ AggregatorProverError::InvalidConfig)]
     pub config: Account<'info, Config>,
+    /// CHECK: the executable program must belong to the configured prover set.
+    #[account(executable, constraint = config.provers.contains(&prover.key()) @ AggregatorProverError::InvalidProver)]
+    pub prover: UncheckedAccount<'info>,
+    /// CHECK: canonical prover-owned PDA; its proof data is validated in the handler.
+    #[account(address = Proof::pda(&intent_hash, &prover.key()).0 @ AggregatorProverError::InvalidProof, owner = prover.key() @ AggregatorProverError::InvalidProof)]
+    pub prover_proof: UncheckedAccount<'info>,
+    /// CHECK: canonical aggregate PDA, created or checked in the handler.
+    #[account(mut, address = Proof::pda(&intent_hash, &crate::ID).0 @ AggregatorProverError::InvalidProof)]
+    pub proof: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
 }
 
 pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, intent_hash: Bytes32) -> Result<()> {
-    let accounts = ctx.remaining_accounts;
-    require!(
-        accounts.len() == 1 + ctx.accounts.config.provers.len(),
-        AggregatorProverError::InvalidProof
-    );
-    let selected = select_proof(&ctx.accounts.config.provers, &accounts[1..], &intent_hash)?;
-    let destination = selected.destination;
-    let claimant = selected.claimant;
-    let (proof_address, bump) = Proof::pda(&intent_hash, &crate::ID);
-    let proof_account = &accounts[0];
-    require_keys_eq!(
-        proof_account.key(),
-        proof_address,
-        AggregatorProverError::InvalidProof
-    );
+    let prover_proof = read_proof(&ctx.accounts.prover_proof)?;
+    let destination = prover_proof.destination;
+    let claimant = prover_proof.claimant;
+    let (_, bump) = Proof::pda(&intent_hash, &crate::ID);
+    let proof = &ctx.accounts.proof;
 
-    if proof_account.owner == &crate::ID {
-        let recorded = ProofAccount::try_deserialize(&mut &proof_account.try_borrow_data()?[..])?;
+    if proof.owner == &crate::ID {
+        let recorded = ProofAccount::try_deserialize(&mut &proof.try_borrow_data()?[..])?;
         require!(
-            recorded.0.destination == selected.destination
-                && recorded.0.claimant == selected.claimant,
+            recorded.0.destination == prover_proof.destination
+                && recorded.0.claimant == prover_proof.claimant,
             AggregatorProverError::IntentAlreadyProven
         );
     } else {
-        ProofAccount(selected).init(
-            proof_account,
+        ProofAccount(prover_proof).init(
+            proof,
             &ctx.accounts.payer,
             &ctx.accounts.system_program,
             &[&[PROOF_SEED, intent_hash.as_ref(), &[bump]]],
@@ -53,38 +53,20 @@ pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, intent_hash: Byte
     Ok(())
 }
 
-fn select_proof(
-    provers: &[Pubkey],
-    accounts: &[AccountInfo],
-    intent_hash: &Bytes32,
-) -> Result<Proof> {
-    // Validate the whole list before selecting: callers cannot hide a higher-priority proof.
-    provers
-        .iter()
-        .zip(accounts)
-        .try_for_each(|(prover, account)| {
-            require_keys_eq!(
-                account.key(),
-                Proof::pda(intent_hash, prover).0,
-                AggregatorProverError::InvalidProof
-            );
+fn read_proof(account: &AccountInfo) -> Result<Proof> {
+    require!(
+        account
+            .try_borrow_data()?
+            .starts_with(ProofAccount::DISCRIMINATOR),
+        AggregatorProverError::InvalidProof
+    );
+    let proof = Proof::try_from_account_info(account)
+        .map_err(|_| AggregatorProverError::InvalidProof)?
+        .ok_or(AggregatorProverError::InvalidProof)?;
+    require!(
+        proof.claimant != Pubkey::default(),
+        AggregatorProverError::InvalidProof
+    );
 
-            Ok(())
-        })?;
-
-    provers
-        .iter()
-        .zip(accounts)
-        .find_map(|(prover, account)| {
-            if account.owner != prover {
-                return None;
-            }
-            let data = account.try_borrow_data().ok()?;
-            if !data.starts_with(ProofAccount::DISCRIMINATOR) {
-                return None;
-            }
-            let proof = Proof::try_from_account_info(account).ok()??;
-            (proof.claimant != Pubkey::default()).then_some(proof)
-        })
-        .ok_or_else(|| AggregatorProverError::NoMatchingProof.into())
+    Ok(proof)
 }

@@ -65,7 +65,7 @@ An atomic orchestrator that lets solvers fulfill intents with zero capital — t
 
 ### How They Work Together
 
-The optional **Aggregator-Prover** (`programs/aggregator-prover/`) creates a standard proof from an immutable ordered prover set. Solvers deliver through a concrete prover, aggregate on the source chain, then withdraw using the aggregator program ID as `reward.prover`. Portal needs no changes.
+The optional **Aggregator-Prover** (`programs/aggregator-prover/`) creates a standard proof from an immutable prover set. Solvers deliver through a concrete prover, aggregate on the source chain, then withdraw using the aggregator program ID as `reward.prover`. Portal needs no changes.
 
 ```mermaid
 sequenceDiagram
@@ -313,19 +313,19 @@ A helper program used by Hyperlane message construction in tests and off-chain t
 
 ### Aggregator-Prover Program
 
-- `init()` — the program's upgrade authority initializes the singleton `Config` PDA once. The ordered prover list comes directly from `remaining_accounts`; it must be nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
-- `aggregate(intent_hash)` — permissionless source-chain aggregation for one intent. The only argument is the intent hash. The destination and claimant are copied from the first valid configured prover’s proof.
+- `init()` — the program's upgrade authority initializes the singleton `Config` PDA once. The prover list comes directly from `remaining_accounts`; it must be nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
+- `aggregate(intent_hash)` — permissionless source-chain aggregation for one intent. The only argument is the intent hash. The destination and claimant are copied from the caller-selected configured prover’s proof.
 - `close_proof()` — accepts Portal's `proof_closer_pda(aggregator_program_id)` signer, the aggregate proof, and a writable signer receiving rent. It leaves underlying proofs untouched.
 
-`aggregate` accounts, in order: payer writable signer, Config, system program, event authority, aggregator program. Append the intent’s writable aggregate proof PDA followed by **all** prover proof PDAs in configuration order, including absent accounts. Missing, reordered, or substituted PDAs are rejected. Accounts with the wrong owner, discriminator, data shape, or zero claimant are skipped. The first valid proof wins; its destination and claimant are copied unchanged.
+`aggregate` accounts, in order: payer writable signer, Config, selected prover program, selected prover’s proof PDA, writable aggregate proof PDA, system program, event authority, aggregator program. The caller chooses a prover off-chain. The program checks that it is configured and executable, and that its proof has the canonical PDA, correct owner, discriminator, data shape, and nonzero claimant. The proof’s destination and claimant are copied unchanged; no other prover accounts are required.
 
 There is no `prove` instruction. Relay through a concrete prover: for Hyperlane, destination `Portal.prove → HyperProver.prove` dispatches the message, source `HyperProver.handle` records the underlying proof, then `AggregatorProver.aggregate` creates the proof used by `Portal.withdraw`. Portal and provers are unchanged.
 
-The aggregate proof uses the existing `Proof` layout and PDA seeds and emits the standard `IntentProven` CPI event. Identical retries succeed while the selected prover’s proof remains available; conflicting proofs cannot overwrite a recorded claimant. Priority is evaluated when the aggregate proof is first created, not again during withdrawal. There is no challenge interface or destination-preimage validation. The aggregator trusts configured provers for destination correctness; an incorrect destination copied into the aggregate proof cannot be replaced by a later proof.
+The aggregate proof uses the existing `Proof` layout and PDA seeds and emits the standard `IntentProven` CPI event. Identical retries succeed while the selected prover’s proof remains available; conflicting proofs cannot overwrite a recorded claimant. Prover order has no priority semantics; the first successfully aggregated proof is retained. There is no challenge interface or destination-preimage validation. The aggregator trusts configured provers for destination correctness; an incorrect destination copied into the aggregate proof cannot be replaced by a later proof.
 
 **Solver integration is required before enabling these routes.** Portal sees only the aggregate proof. A proof delivered to a prover does not block an expired refund until aggregation succeeds. Aggregate before `reward.deadline`, ideally in the same transaction as proof delivery, then withdraw. Merely combining aggregation with withdrawal does not remove the earlier refund race. This source-chain aggregation step differs from EVM's read-only union. The aggregator sends no bridge messages; destination-chain dispatch and source-chain delivery must use a concrete prover. Listeners should track the aggregator's `IntentProven` event for settlement readiness.
 
-The trust floor is the weakest prover. Deployment must review the exact ordered list and each prover's proof semantics; executable-account validation does not establish trust. Program upgrade authorities retain the usual ability to replace code until revoked. Underlying proof rent is not reclaimed by aggregate withdrawal.
+The trust floor is the weakest prover. Deployment must review the exact prover list and each prover's proof semantics; executable-account validation does not establish trust. Program upgrade authorities retain the usual ability to replace code until revoked. Underlying proof rent is not reclaimed by aggregate withdrawal.
 
 ### Dummy ISM Program
 

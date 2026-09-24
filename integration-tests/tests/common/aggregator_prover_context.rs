@@ -76,30 +76,18 @@ impl AggregatorProver<'_> {
         self.send_transaction(transaction)
     }
 
-    pub fn build_aggregate_instruction(
-        &self,
-        intent_hash: Bytes32,
-        provers: &[Pubkey],
-    ) -> Instruction {
+    pub fn build_aggregate_instruction(&self, intent_hash: Bytes32, prover: Pubkey) -> Instruction {
         let accounts = aggregator_prover::accounts::Aggregate {
             payer: self.payer.pubkey(),
             config: Config::pda().0,
+            prover,
+            prover_proof: Proof::pda(&intent_hash, &prover).0,
+            proof: Proof::pda(&intent_hash, &aggregator_prover::ID).0,
             system_program: anchor_lang::system_program::ID,
             event_authority: event_authority_pda(&aggregator_prover::ID).0,
             program: aggregator_prover::ID,
         }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(std::iter::once(AccountMeta::new(
-            Proof::pda(&intent_hash, &aggregator_prover::ID).0,
-            false,
-        )))
-        .chain(
-            provers
-                .iter()
-                .map(|prover| AccountMeta::new_readonly(Proof::pda(&intent_hash, prover).0, false)),
-        )
-        .collect();
+        .to_account_metas(None);
 
         Instruction {
             program_id: aggregator_prover::ID,
@@ -108,8 +96,8 @@ impl AggregatorProver<'_> {
         }
     }
 
-    pub fn aggregate(&mut self, intent_hash: Bytes32, provers: &[Pubkey]) -> TransactionResult {
-        let instruction = self.build_aggregate_instruction(intent_hash, provers);
+    pub fn aggregate(&mut self, intent_hash: Bytes32, prover: Pubkey) -> TransactionResult {
+        let instruction = self.build_aggregate_instruction(intent_hash, prover);
 
         self.send_instruction(instruction)
     }
