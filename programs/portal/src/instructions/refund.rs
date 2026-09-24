@@ -4,11 +4,12 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
 use eco_svm_std::prover::Proof;
-use eco_svm_std::Bytes32;
+use eco_svm_std::{Bytes32, CANCELLED};
 
 use crate::events::IntentRefunded;
+use crate::instructions::close_proof::close_proof;
 use crate::instructions::{now, PortalError};
-use crate::state::{vault_pda, WithdrawnMarker, VAULT_SEED};
+use crate::state::{proof_closer_pda, vault_pda, WithdrawnMarker, VAULT_SEED};
 use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -16,6 +17,10 @@ pub struct RefundArgs {
     pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
+    /// Number of trailing remaining accounts forwarded to the prover's
+    /// `close_proof` when refunding a proven cancellation. The token chunks
+    /// before them are caller-chosen, so the split cannot be derived.
+    pub close_proof_account_count: u8,
 }
 
 #[derive(Accounts)]
@@ -30,7 +35,16 @@ pub struct Refund<'info> {
     #[account(mut)]
     pub vault: UncheckedAccount<'info>,
     /// CHECK: address is validated
+    #[account(mut)]
     pub proof: UncheckedAccount<'info>,
+    /// CHECK: address is validated, scoped to the intent's prover
+    #[account(address = proof_closer_pda(&args.reward.prover).0 @ PortalError::InvalidProofCloser)]
+    pub proof_closer: UncheckedAccount<'info>,
+    /// CHECK: address is validated. Deliberately not `executable`: a timeout
+    /// refund must work for an intent whose `reward.prover` is not a deployed
+    /// program; executability is checked on the cancellation path only.
+    #[account(address = args.reward.prover @ PortalError::InvalidProver)]
+    pub prover: UncheckedAccount<'info>,
     /// CHECK: address is validated
     #[account(mut)]
     pub withdrawn_marker: UncheckedAccount<'info>,
@@ -39,11 +53,20 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 
+/// Why a refund is allowed. Only `Cancelled` closes the proof.
+#[derive(PartialEq, Eq)]
+enum RefundPath {
+    Withdrawn,
+    Cancelled,
+    Expired,
+}
+
 pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs) -> Result<()> {
     let RefundArgs {
         destination,
         route_hash,
         reward,
+        close_proof_account_count,
     } = args;
     let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
@@ -62,10 +85,22 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
         PortalError::InvalidWithdrawnMarker
     );
 
-    validate_intent_status(&ctx, &reward, destination)?;
+    let refund_path = validate_intent_status(&ctx, &reward, destination)?;
+    let (token_transfer_accounts, close_proof_accounts) =
+        token_transfer_and_close_proof_accounts(&ctx, close_proof_account_count)?;
 
     refund_native(&ctx, &signer_seeds)?;
-    refund_tokens(&ctx, &signer_seeds)?;
+    refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
+
+    if refund_path == RefundPath::Cancelled {
+        require!(ctx.accounts.prover.executable, PortalError::InvalidProver);
+        close_proof(
+            &ctx.accounts.prover,
+            &ctx.accounts.proof_closer,
+            &ctx.accounts.proof,
+            close_proof_accounts,
+        )?;
+    }
 
     emit!(IntentRefunded::new(intent_hash, reward.creator));
 
@@ -77,28 +112,42 @@ fn validate_intent_status<'info>(
     ctx: &Context<'info, Refund<'info>>,
     reward: &Reward,
     destination: u64,
-) -> Result<()> {
-    // already withdrawn
+) -> Result<RefundPath> {
     if !ctx.accounts.withdrawn_marker.data_is_empty() {
-        return Ok(());
+        return Ok(RefundPath::Withdrawn);
     }
 
-    // fulfilled but not withdrawn
-    require!(
-        !is_fulfilled(&ctx.accounts.proof.to_account_info(), destination)?,
-        PortalError::IntentFulfilledAndNotWithdrawn
-    );
+    match Proof::try_from_account_info(&ctx.accounts.proof.to_account_info())? {
+        // proven cancellation for this destination: refundable immediately
+        Some(proof) if proof.destination == destination && CANCELLED == proof.claimant => {
+            return Ok(RefundPath::Cancelled);
+        }
+        // fulfilled but not withdrawn
+        Some(proof) if proof.destination == destination => {
+            return Err(PortalError::IntentFulfilledAndNotWithdrawn.into());
+        }
+        // no proof, or a proof for another destination
+        _ => {}
+    }
 
-    // not fulfilled and not expired
     require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
 
-    Ok(())
+    Ok(RefundPath::Expired)
 }
 
-fn is_fulfilled(proof: &AccountInfo, destination: u64) -> Result<bool> {
-    Ok(Proof::try_from_account_info(proof)?
-        .map(|proof| proof.destination == destination)
-        .unwrap_or_default())
+type RefundRemainingAccounts<'info> = (&'info [AccountInfo<'info>], &'info [AccountInfo<'info>]);
+
+fn token_transfer_and_close_proof_accounts<'info>(
+    ctx: &Context<'info, Refund<'info>>,
+    close_proof_account_count: u8,
+) -> Result<RefundRemainingAccounts<'info>> {
+    let split_index = ctx
+        .remaining_accounts
+        .len()
+        .checked_sub(close_proof_account_count.into())
+        .ok_or(Error::from(PortalError::InvalidTokenTransferAccounts))?;
+
+    Ok(ctx.remaining_accounts.split_at(split_index))
 }
 
 fn refund_native(ctx: &Context<Refund>, signer_seeds: &[&[u8]]) -> Result<()> {
@@ -121,8 +170,12 @@ fn refund_native(ctx: &Context<Refund>, signer_seeds: &[&[u8]]) -> Result<()> {
     }
 }
 
-fn refund_tokens<'info>(ctx: &Context<'info, Refund<'info>>, signer_seeds: &[&[u8]]) -> Result<()> {
-    let accounts: VecTokenTransferAccounts<'info> = ctx.remaining_accounts.try_into()?;
+fn refund_tokens<'info>(
+    ctx: &Context<'info, Refund<'info>>,
+    signer_seeds: &[&[u8]],
+    token_transfer_accounts: &'info [AccountInfo<'info>],
+) -> Result<()> {
+    let accounts: VecTokenTransferAccounts<'info> = token_transfer_accounts.try_into()?;
 
     accounts
         .into_inner()
