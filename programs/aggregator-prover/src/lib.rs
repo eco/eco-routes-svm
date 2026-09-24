@@ -11,8 +11,8 @@ use instructions::*;
 pub mod aggregator_prover {
     use super::*;
 
-    pub fn init<'info>(ctx: Context<'info, Init<'info>>, provers: Vec<Pubkey>) -> Result<()> {
-        instructions::init(ctx, provers)
+    pub fn init<'info>(ctx: Context<'info, Init<'info>>) -> Result<()> {
+        instructions::init(ctx)
     }
 
     pub fn aggregate<'info>(

@@ -66,7 +66,7 @@ impl AggregatorProver<'_> {
         let instruction = Instruction {
             program_id: aggregator_prover::ID,
             accounts,
-            data: aggregator_prover::instruction::Init { provers }.data(),
+            data: aggregator_prover::instruction::Init {}.data(),
         };
         let transaction = Transaction::new(
             &[&self.payer, authority],

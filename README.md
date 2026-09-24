@@ -313,7 +313,7 @@ A helper program used by Hyperlane message construction in tests and off-chain t
 
 ### Aggregator-Prover Program
 
-- `init(provers)` — the program's upgrade authority initializes the singleton `Config` PDA once. Prover configuration is ordered, nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
+- `init()` — the program's upgrade authority initializes the singleton `Config` PDA once. The ordered prover list comes directly from `remaining_accounts`; it must be nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
 - `aggregate(AggregateArgs)` — permissionless source-chain aggregation. `proof_data` supplies the destination and intent/claimant pairs; `preimages` contains one `IntentPreimage { route_hash, reward_hash }` per intent, in the same order. The preimage binds the destination to the intent hash.
 - `close_proof()` — accepts Portal's `proof_closer_pda(aggregator_program_id)` signer, the aggregate proof, and a writable signer receiving rent. It leaves underlying proofs untouched.
 

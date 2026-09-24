@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
 
@@ -19,32 +21,30 @@ pub struct Init<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn init<'info>(ctx: Context<'info, Init<'info>>, provers: Vec<Pubkey>) -> Result<()> {
+pub fn init<'info>(ctx: Context<'info, Init<'info>>) -> Result<()> {
+    let provers = ctx.remaining_accounts;
     require!(
         !provers.is_empty() && provers.len() <= MAX_PROVERS,
         AggregatorProverError::InvalidProverSet
     );
-    require!(
-        ctx.remaining_accounts.len() == provers.len(),
-        AggregatorProverError::InvalidProverSet
-    );
-    provers.iter().enumerate().try_for_each(|(index, prover)| {
+    let mut seen = HashSet::with_capacity(provers.len());
+    provers.iter().try_for_each(|prover| {
         require!(
-            *prover != Pubkey::default()
-                && *prover != crate::ID
-                && ctx.remaining_accounts[index].key() == *prover
-                && ctx.remaining_accounts[index].executable,
+            prover.key() != Pubkey::default() && prover.key() != crate::ID && prover.executable,
             AggregatorProverError::InvalidProver
         );
         require!(
-            !provers[..index].contains(prover),
+            seen.insert(prover.key()),
             AggregatorProverError::DuplicateProver
         );
 
         Ok(())
     })?;
 
-    Config { provers }.init(
+    Config {
+        provers: provers.iter().map(|prover| prover.key()).collect(),
+    }
+    .init(
         &ctx.accounts.config,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
