@@ -49,9 +49,9 @@ pub struct IntentProven {
     claimant: Bytes32,
 }
 
-/// Closing a marker destroys the `claimant` that `prove` reads, so it is
-/// recorded here: the event stream is the audit record for an action the
-/// on-chain rules cannot make safe on their own.
+/// Emitted when a marker is shrunk to its tombstone. `lamports` is what was
+/// returned to `payer`; the tombstone keeps `claimant`, recorded here too so
+/// the event stream is a complete audit record.
 #[event]
 #[derive(new)]
 pub struct FulfillMarkerClosed {

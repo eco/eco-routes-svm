@@ -9,7 +9,7 @@ use itertools::Itertools;
 
 use crate::events::IntentProven;
 use crate::instructions::PortalError;
-use crate::state::{dispatcher_pda, FulfillMarker, DISPATCHER_SEED};
+use crate::state::{dispatcher_pda, fulfillment_claimant, FulfillMarker, DISPATCHER_SEED};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ProveArgs {
@@ -40,19 +40,19 @@ pub fn prove_intent<'info>(ctx: Context<'info, Prove<'info>>, args: ProveArgs) -
 
     require!(!intent_hashes.is_empty(), PortalError::EmptyIntentHashes);
 
-    let (intent_hashes_fulfill_markers, prove_accounts) =
-        fulfill_marker_and_prove_accounts(&ctx, intent_hashes)?;
+    let (intent_hash_claimants, prove_accounts) =
+        intent_hash_claimants_and_prove_accounts(&ctx, intent_hashes)?;
 
-    intent_hashes_fulfill_markers
+    intent_hash_claimants
         .iter()
-        .for_each(|(intent_hash, fulfill_marker)| {
-            emit!(IntentProven::new(*intent_hash, fulfill_marker.claimant));
+        .for_each(|(intent_hash, claimant)| {
+            emit!(IntentProven::new(*intent_hash, *claimant));
         });
 
     invoke_prover_prove(
         &ctx,
         source_chain_domain_id,
-        intent_hashes_fulfill_markers,
+        intent_hash_claimants,
         prove_accounts,
         data,
     )?;
@@ -60,19 +60,19 @@ pub fn prove_intent<'info>(ctx: Context<'info, Prove<'info>>, args: ProveArgs) -
     Ok(())
 }
 
-type IntentHashAndFulfillMarker = (Bytes32, FulfillMarker);
+type IntentHashAndClaimant = (Bytes32, Bytes32);
 
-fn fulfill_marker_and_prove_accounts<'info>(
+fn intent_hash_claimants_and_prove_accounts<'info>(
     ctx: &Context<'info, Prove<'info>>,
     intent_hashes: Vec<Bytes32>,
-) -> Result<(Vec<IntentHashAndFulfillMarker>, &'info [AccountInfo<'info>])> {
+) -> Result<(Vec<IntentHashAndClaimant>, &'info [AccountInfo<'info>])> {
     require!(
         intent_hashes.len() <= ctx.remaining_accounts.len(),
         PortalError::InvalidFulfillMarker
     );
     let (fulfill_markers, prove_accounts) = ctx.remaining_accounts.split_at(intent_hashes.len());
 
-    let intent_hashes_fulfill_markers = fulfill_markers
+    let intent_hash_claimants = fulfill_markers
         .iter()
         .zip(intent_hashes)
         .map(|(fulfill_marker, intent_hash)| {
@@ -81,29 +81,23 @@ fn fulfill_marker_and_prove_accounts<'info>(
                 PortalError::InvalidFulfillMarker
             );
 
-            Ok((
-                intent_hash,
-                FulfillMarker::try_deserialize(&mut &fulfill_marker.try_borrow_data()?[..])
-                    .map_err(|_| PortalError::InvalidFulfillMarker)?,
-            ))
+            Ok((intent_hash, fulfillment_claimant(fulfill_marker)?))
         })
         .try_collect()?;
 
-    Ok((intent_hashes_fulfill_markers, prove_accounts))
+    Ok((intent_hash_claimants, prove_accounts))
 }
 
 fn invoke_prover_prove<'info>(
     ctx: &Context<'info, Prove<'info>>,
     source_chain_domain_id: u64,
-    intent_hashes_fulfill_markers: Vec<(Bytes32, FulfillMarker)>,
+    intent_hash_claimants: Vec<IntentHashAndClaimant>,
     prove_accounts: &[AccountInfo<'info>],
     data: Vec<u8>,
 ) -> Result<()> {
-    let intent_hashes_claimants = intent_hashes_fulfill_markers
+    let intent_hashes_claimants = intent_hash_claimants
         .into_iter()
-        .map(|(intent_hash, fulfill_marker)| {
-            IntentHashClaimant::new(intent_hash, fulfill_marker.claimant)
-        })
+        .map(|(intent_hash, claimant)| IntentHashClaimant::new(intent_hash, claimant))
         .collect::<Vec<_>>();
     let proof_data = ProofData::new(CHAIN_ID, intent_hashes_claimants);
     let args = prover::ProveArgs::new(source_chain_domain_id, proof_data, data);
