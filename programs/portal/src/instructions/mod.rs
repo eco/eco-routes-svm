@@ -6,6 +6,7 @@ use crate::state::{FulfillMarker, FULFILL_MARKER_SEED};
 
 mod cancel;
 mod close_fulfill_marker;
+mod close_proof;
 mod fulfill;
 mod fund;
 mod fund_context;
