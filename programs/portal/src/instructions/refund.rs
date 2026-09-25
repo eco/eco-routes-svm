@@ -45,8 +45,7 @@ pub struct Refund<'info> {
     pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: address is validated. Deliberately not `executable`: a timeout
     /// refund must work for an intent whose `reward.prover` is not a deployed
-    /// program; executability only decides whether a proven cancellation can
-    /// take the early path.
+    /// program; executability is checked only when a proof is closed.
     #[account(address = args.reward.prover @ PortalError::InvalidProver)]
     pub prover: UncheckedAccount<'info>,
     /// CHECK: address is validated
@@ -57,11 +56,18 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Why a refund is allowed. Only `Cancelled` closes the proof.
+/// Why a refund is allowed. `reward.deadline` decides how a proven
+/// cancellation is refunded: before it, only by the strict `Cancelled` fast
+/// path; from it, like any timed-out intent. The fallback keeps a cancelled
+/// intent refundable when its prover can no longer close proofs or a reward
+/// mint can no longer be swept.
 #[derive(PartialEq, Eq)]
 enum RefundPath {
     Withdrawn,
+    /// Before `reward.deadline`: sweeps every reward mint and closes the proof.
     Cancelled,
+    /// From `reward.deadline`: closes the proof only if a tail is supplied.
+    CancelledExpired,
     Expired,
 }
 
@@ -102,7 +108,13 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
 
-    if refund_path == RefundPath::Cancelled {
+    let closes_proof = match refund_path {
+        RefundPath::Cancelled => true,
+        RefundPath::CancelledExpired => close_proof_account_count > 0,
+        RefundPath::Withdrawn | RefundPath::Expired => false,
+    };
+    if closes_proof {
+        require!(ctx.accounts.prover.executable, PortalError::InvalidProver);
         close_proof(
             &ctx.accounts.prover,
             &ctx.accounts.proof_closer,
@@ -126,14 +138,16 @@ fn validate_intent_status<'info>(
         return Ok(RefundPath::Withdrawn);
     }
 
+    let expired = reward.deadline <= now()?;
+
     match Proof::try_from_account_info(&ctx.accounts.proof.to_account_info())? {
-        // proven cancellation for this destination: refundable immediately,
-        // unless `reward.prover` is no longer a program that can close the
-        // proof — then the deadline still refunds it, leaving the proof open
+        // proven cancellation for this destination: refundable immediately
         Some(proof) if proof.destination == destination && CANCELLED == proof.claimant => {
-            if ctx.accounts.prover.executable {
-                return Ok(RefundPath::Cancelled);
-            }
+            return Ok(if expired {
+                RefundPath::CancelledExpired
+            } else {
+                RefundPath::Cancelled
+            });
         }
         // fulfilled but not withdrawn
         Some(proof) if proof.destination == destination => {
@@ -143,16 +157,18 @@ fn validate_intent_status<'info>(
         _ => {}
     }
 
-    require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
+    require!(expired, PortalError::RewardNotExpired);
 
     Ok(RefundPath::Expired)
 }
 
-/// The cancellation path closes the proof, after which only `reward.deadline`
-/// makes the intent refundable again. `refund` is permissionless and sweeps only
+/// The early cancellation path closes the proof, after which only
+/// `reward.deadline` makes the intent refundable again. `refund` is permissionless and sweeps only
 /// the chunks it is given, so without this a caller could close the proof while
 /// leaving reward tokens in the vault until the deadline. Extra, non-reward
-/// mints remain allowed, as on the other paths.
+/// mints remain allowed, as on the other paths. A reward mint whose vault ATA
+/// cannot be swept blocks only this early path: from `reward.deadline` the
+/// refund proceeds without it.
 fn require_reward_mints_swept(
     ctx: &Context<Refund>,
     reward: &Reward,
