@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
+use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
 use eco_svm_std::prover::Proof;
@@ -88,6 +91,12 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
     let refund_path = validate_intent_status(&ctx, &reward, destination)?;
     let (token_transfer_accounts, close_proof_accounts) =
         token_transfer_and_close_proof_accounts(&ctx, close_proof_account_count)?;
+    let token_transfer_accounts: VecTokenTransferAccounts<'info> =
+        token_transfer_accounts.try_into()?;
+
+    if refund_path == RefundPath::Cancelled {
+        require_reward_mints_swept(&ctx, &reward, &token_transfer_accounts)?;
+    }
 
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
@@ -135,6 +144,40 @@ fn validate_intent_status<'info>(
     Ok(RefundPath::Expired)
 }
 
+/// The cancellation path closes the proof, after which only `reward.deadline`
+/// makes the intent refundable again. `refund` is permissionless and sweeps only
+/// the chunks it is given, so without this a caller could close the proof while
+/// leaving reward tokens in the vault until the deadline. Extra, non-reward
+/// mints remain allowed, as on the other paths.
+fn require_reward_mints_swept(
+    ctx: &Context<Refund>,
+    reward: &Reward,
+    accounts: &VecTokenTransferAccounts,
+) -> Result<()> {
+    let swept_mints = accounts
+        .iter()
+        .filter(|accounts| {
+            accounts.from.key()
+                == get_associated_token_address_with_program_id(
+                    ctx.accounts.vault.key,
+                    accounts.mint.key,
+                    accounts.token_program_id(),
+                )
+        })
+        .map(|accounts| accounts.mint.key())
+        .collect::<BTreeSet<_>>();
+
+    require!(
+        reward
+            .token_amounts()?
+            .keys()
+            .all(|mint| swept_mints.contains(mint)),
+        PortalError::InvalidMint
+    );
+
+    Ok(())
+}
+
 type RefundRemainingAccounts<'info> = (&'info [AccountInfo<'info>], &'info [AccountInfo<'info>]);
 
 fn token_transfer_and_close_proof_accounts<'info>(
@@ -173,10 +216,8 @@ fn refund_native(ctx: &Context<Refund>, signer_seeds: &[&[u8]]) -> Result<()> {
 fn refund_tokens<'info>(
     ctx: &Context<'info, Refund<'info>>,
     signer_seeds: &[&[u8]],
-    token_transfer_accounts: &'info [AccountInfo<'info>],
+    accounts: VecTokenTransferAccounts<'info>,
 ) -> Result<()> {
-    let accounts: VecTokenTransferAccounts<'info> = token_transfer_accounts.try_into()?;
-
     accounts
         .into_inner()
         .into_iter()
