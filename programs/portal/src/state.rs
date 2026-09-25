@@ -99,6 +99,10 @@ pub struct FulfillTombstone {
 /// Claimant recorded for an intent on this chain, read from its live
 /// [`FulfillMarker`] or from the [`FulfillTombstone`] it was closed to.
 pub fn fulfillment_claimant(account: &AccountInfo) -> Result<Bytes32> {
+    require!(
+        account.owner == &crate::ID,
+        PortalError::InvalidFulfillMarker
+    );
     let data = account.try_borrow_data()?;
 
     if let Ok(marker) = FulfillMarker::try_deserialize(&mut &data[..]) {
