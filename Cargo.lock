@@ -1630,12 +1630,16 @@ dependencies = [
  "malicious-proof-closer",
  "malicious-prover",
  "mock-igp",
+ "mock-polymer-prover",
+ "polymer-prover",
  "portal",
  "proof-helper",
  "rand 0.10.2",
  "solana-compute-budget-interface",
+ "solana-packet 4.1.0",
  "solana-sdk",
  "solana-system-interface 3.2.0",
+ "solana-transaction-context",
  "tiny-keccak",
 ]
 
@@ -1957,6 +1961,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock-polymer-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
 name = "num"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2178,6 +2189,19 @@ checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der",
  "spki",
+]
+
+[[package]]
+name = "polymer-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "eco-svm-std",
+ "getrandom 0.2.17",
+ "goldie",
+ "portal",
+ "solana-keccak-hasher",
+ "solana-sha256-hasher",
 ]
 
 [[package]]
