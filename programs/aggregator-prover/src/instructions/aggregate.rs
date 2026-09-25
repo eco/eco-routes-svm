@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::{IntentProven, Proof, PROOF_SEED};
+use eco_svm_std::prover::{Proof, PROOF_SEED};
 use eco_svm_std::Bytes32;
 
+use crate::events::IntentProven;
 use crate::instructions::AggregatorProverError;
 use crate::state::{Config, ProofAccount};
 
@@ -38,7 +39,11 @@ pub fn aggregate<'info>(ctx: Context<'info, Aggregate<'info>>, intent_hash: Byte
         &ctx.accounts.system_program,
         &[&[PROOF_SEED, intent_hash.as_ref(), &[bump]]],
     )?;
-    emit_cpi!(IntentProven::new(intent_hash, claimant, destination));
+    emit_cpi!(IntentProven {
+        intent_hash,
+        claimant,
+        destination
+    });
 
     Ok(())
 }

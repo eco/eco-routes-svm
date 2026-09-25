@@ -1,26 +1,36 @@
-use std::iter;
+use std::{fs, iter};
 
 use aggregator_prover::instructions::AggregatorProverError;
 use aggregator_prover::state::{Config, ProofAccount, MAX_PROVERS};
 use anchor_lang::error::ErrorCode;
-use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{AnchorDeserialize, Discriminator, Event, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use eco_svm_std::prover::{
     IntentHashClaimant, IntentProven, Proof, ProofData, ProveArgs, PROVE_DISCRIMINATOR,
 };
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use hyper_prover::hyperlane::MailboxInstruction;
+use polymer_prover::event::evm_address_to_bytes32;
+use polymer_prover::instructions::PolymerProverError;
 use portal::instructions::PortalError;
 use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
 use portal::types::{intent_hash, Reward};
+use serde_json::{json, Value};
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::{AccountMeta, Instruction};
+use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
+use solana_sdk::transaction::Transaction;
+
+use crate::common::polymer_prover_context::{intent_fulfilled_result, PolymerProver};
 
 pub mod common;
 
-const PROVERS: [Pubkey; 2] = [hyper_prover::ID, local_prover::ID];
+const PROVERS: [Pubkey; 3] = [hyper_prover::ID, local_prover::ID, polymer_prover::ID];
+const BRIDGE_PROVERS: [Pubkey; 2] = [hyper_prover::ID, polymer_prover::ID];
+const EMITTER: [u8; 20] = [0xec; 20];
 const DESTINATION: u64 = 10;
 
 fn setup() -> (common::Context, Keypair) {
@@ -61,6 +71,280 @@ fn set_prover_proof(
 
 fn aggregate_address(hash: &Bytes32) -> Pubkey {
     Proof::pda(hash, &aggregator_prover::ID).0
+}
+
+fn stage_polymer_result(
+    context: &mut common::Context,
+    result: &mock_polymer_prover::ValidationResultAccount,
+) -> Keypair {
+    context
+        .polymer_prover()
+        .init(
+            vec![evm_address_to_bytes32(EMITTER)],
+            polymer_prover::state::Config::pda().0,
+        )
+        .unwrap();
+    let authority = Keypair::new();
+    context
+        .polymer_prover()
+        .polymer_create_accounts(&authority)
+        .unwrap();
+    context
+        .polymer_prover()
+        .polymer_load_result(&authority, result)
+        .unwrap();
+
+    authority
+}
+
+fn deliver_bridge_proof(
+    context: &mut common::Context,
+    prover: Pubkey,
+    proof_data: ProofData,
+) -> common::TransactionResult {
+    if prover == polymer_prover::ID {
+        let proof_accounts = proof_data
+            .intent_hashes_claimants
+            .iter()
+            .map(|intent| AccountMeta::new(Proof::pda(&intent.intent_hash, &prover).0, false))
+            .collect();
+        let result = intent_fulfilled_result(
+            EMITTER,
+            CHAIN_ID,
+            proof_data.destination.try_into().unwrap(),
+            proof_data.to_bytes(),
+        );
+        let authority = stage_polymer_result(context, &result);
+
+        return context
+            .polymer_prover()
+            .validate(&authority, proof_accounts);
+    }
+    assert_eq!(prover, hyper_prover::ID);
+    let sender = [55; 32];
+    let origin: u32 = proof_data.destination.try_into().unwrap();
+    context
+        .hyper_prover()
+        .init(vec![sender.into()], hyper_prover::state::Config::pda().0)
+        .unwrap();
+    context
+        .airdrop(
+            &hyper_prover::state::pda_payer_pda().0,
+            common::sol_amount(1.0),
+        )
+        .unwrap();
+    let payload = proof_data.to_bytes();
+    let message = [
+        vec![3],
+        0u32.to_be_bytes().to_vec(),
+        origin.to_be_bytes().to_vec(),
+        sender.to_vec(),
+        u32::try_from(CHAIN_ID).unwrap().to_be_bytes().to_vec(),
+        hyper_prover::ID.to_bytes().to_vec(),
+        payload.clone(),
+    ]
+    .concat();
+    let accounts = context
+        .hyper_prover()
+        .handle_account_metas(origin, sender, payload);
+
+    context.hyperlane().inbox_process(message, accounts)
+}
+
+#[test]
+fn generated_idl_describes_the_emitted_intent_proven_event() {
+    let idl: Value = serde_json::from_str(
+        &fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../target/idl/aggregator_prover.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let event = idl["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["name"] == "IntentProven")
+        .unwrap();
+    assert_eq!(event["discriminator"], json!(IntentProven::DISCRIMINATOR));
+    let types = idl["types"].as_array().unwrap();
+    let event_type = types
+        .iter()
+        .find(|definition| definition["name"] == "IntentProven")
+        .unwrap();
+    assert_eq!(
+        event_type["type"],
+        json!({"kind":"struct","fields":[
+            {"name":"intent_hash","type":{"defined":{"name":"Bytes32"}}},
+            {"name":"claimant","type":"pubkey"},
+            {"name":"destination","type":"u64"}
+        ]})
+    );
+    let hash_type = types
+        .iter()
+        .find(|definition| definition["name"] == "Bytes32")
+        .unwrap();
+    assert_eq!(
+        hash_type["type"],
+        json!({"kind":"struct","fields":[{"array":["u8",32]}]})
+    );
+
+    let mut context = initialized();
+    let hash = test_intent_hash();
+    let claimant = Pubkey::new_unique();
+    set_prover_proof(&mut context, &hash, PROVERS[0], DESTINATION, claimant);
+    let transaction = context
+        .aggregator_prover()
+        .aggregate(hash, PROVERS[0])
+        .unwrap();
+    let expected = IntentProven::new(hash, claimant, DESTINATION).data();
+    assert!(common::contains_cpi_event(IntentProven::new(
+        hash,
+        claimant,
+        DESTINATION
+    ))(transaction));
+    assert_eq!(
+        aggregator_prover::events::IntentProven {
+            intent_hash: hash,
+            claimant,
+            destination: DESTINATION
+        }
+        .data(),
+        expected
+    );
+}
+
+#[test]
+fn either_delivered_bridge_proof_can_be_selected_and_the_other_cannot_replace_it() {
+    for selected in BRIDGE_PROVERS {
+        let mut context = initialized();
+        let hash = test_intent_hash();
+        let hyper_claimant = Pubkey::new_unique();
+        let polymer_claimant = Pubkey::new_unique();
+        for (prover, claimant) in [
+            (hyper_prover::ID, hyper_claimant),
+            (polymer_prover::ID, polymer_claimant),
+        ] {
+            deliver_bridge_proof(
+                &mut context,
+                prover,
+                ProofData::new(
+                    DESTINATION,
+                    vec![IntentHashClaimant::new(hash, claimant.to_bytes().into())],
+                ),
+            )
+            .unwrap();
+        }
+        context
+            .aggregator_prover()
+            .aggregate(hash, selected)
+            .unwrap();
+        let expected_claimant = if selected == hyper_prover::ID {
+            hyper_claimant
+        } else {
+            polymer_claimant
+        };
+        let proof: ProofAccount = context.account(&aggregate_address(&hash)).unwrap();
+        assert_eq!(proof.0.claimant, expected_claimant);
+        let other = if selected == hyper_prover::ID {
+            polymer_prover::ID
+        } else {
+            hyper_prover::ID
+        };
+        assert!(context
+            .aggregator_prover()
+            .aggregate(hash, other)
+            .is_err_and(common::is_error(ErrorCode::ConstraintZero)));
+        let proof: ProofAccount = context.account(&aggregate_address(&hash)).unwrap();
+        assert_eq!(proof.0.claimant, expected_claimant);
+    }
+}
+
+#[test]
+fn rejected_polymer_validation_leaves_nothing_to_aggregate() {
+    let mut context = initialized();
+    let hash = test_intent_hash();
+    let mut result = intent_fulfilled_result(
+        EMITTER,
+        CHAIN_ID,
+        DESTINATION.try_into().unwrap(),
+        ProofData::new(
+            DESTINATION,
+            vec![IntentHashClaimant::new(hash, [77; 32].into())],
+        )
+        .to_bytes(),
+    );
+    result.is_valid = false;
+    result.error_message = "rejected fixture".into();
+    let authority = stage_polymer_result(&mut context, &result);
+    let underlying = Proof::pda(&hash, &polymer_prover::ID).0;
+    assert!(context
+        .polymer_prover()
+        .validate(&authority, vec![AccountMeta::new(underlying, false)])
+        .is_err_and(common::is_error(PolymerProverError::PolymerProofInvalid)));
+    assert!(context.get_account(&underlying).is_none());
+    assert!(context
+        .aggregator_prover()
+        .aggregate(hash, polymer_prover::ID)
+        .is_err_and(common::is_error(AggregatorProverError::InvalidProof)));
+    assert!(context.get_account(&aggregate_address(&hash)).is_none());
+}
+
+#[test]
+fn polymer_validation_and_aggregation_can_share_one_transaction() {
+    let mut context = initialized();
+    let hash = test_intent_hash();
+    let claimant = Pubkey::new_unique();
+    let result = intent_fulfilled_result(
+        EMITTER,
+        CHAIN_ID,
+        DESTINATION.try_into().unwrap(),
+        ProofData::new(
+            DESTINATION,
+            vec![IntentHashClaimant::new(hash, claimant.to_bytes().into())],
+        )
+        .to_bytes(),
+    );
+    let authority = stage_polymer_result(&mut context, &result);
+    let validate = Instruction {
+        program_id: polymer_prover::ID,
+        accounts: PolymerProver::validate_accounts(&authority.pubkey())
+            .to_account_metas(None)
+            .into_iter()
+            .chain(iter::once(AccountMeta::new(
+                Proof::pda(&hash, &polymer_prover::ID).0,
+                false,
+            )))
+            .collect(),
+        data: polymer_prover::instruction::Validate {}.data(),
+    };
+    let aggregate = context
+        .aggregator_prover()
+        .build_aggregate_instruction(hash, polymer_prover::ID);
+    let transaction = Transaction::new(
+        &[&context.payer, &authority],
+        Message::new(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(
+                    PolymerProver::VALIDATE_COMPUTE_UNIT_LIMIT,
+                ),
+                validate,
+                aggregate,
+            ],
+            Some(&context.payer.pubkey()),
+        ),
+        context.latest_blockhash(),
+    );
+    assert!(bincode::serialize(&transaction).unwrap().len() <= solana_packet::PACKET_DATA_SIZE);
+    let result = context.send_transaction(transaction).unwrap();
+    assert_eq!(
+        common::count_cpi_events(IntentProven::new(hash, claimant, DESTINATION))(result),
+        2
+    );
+    let proof: ProofAccount = context.account(&aggregate_address(&hash)).unwrap();
+    assert_eq!(proof.0.claimant, claimant);
+    assert_eq!(proof.0.destination, DESTINATION);
 }
 
 #[test]
@@ -401,8 +685,11 @@ fn funded(context: &mut common::Context) -> (Reward, Bytes32, Bytes32) {
 }
 
 #[test]
-fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof() {
-    for token_2022 in [false, true] {
+fn bridge_delivery_aggregates_and_withdraws_native_spl_and_token_2022() {
+    for (prover, token_2022) in BRIDGE_PROVERS
+        .into_iter()
+        .flat_map(|prover| [false, true].map(|token_2022| (prover, token_2022)))
+    {
         let (mut context, authority) = setup();
         if token_2022 {
             context.token_program = anchor_spl::token_2022::ID;
@@ -413,11 +700,19 @@ fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof()
             .unwrap();
         let (reward, route_hash, hash) = funded(&mut context);
         let claimant = Pubkey::new_unique();
-        set_prover_proof(&mut context, &hash, PROVERS[1], DESTINATION, claimant);
-        context
-            .aggregator_prover()
-            .aggregate(hash, PROVERS[1])
-            .unwrap();
+        let proof_data = ProofData::new(
+            DESTINATION,
+            vec![IntentHashClaimant::new(hash, claimant.to_bytes().into())],
+        );
+        assert!(
+            deliver_bridge_proof(&mut context, prover, proof_data).is_ok_and(
+                common::contains_cpi_event(IntentProven::new(hash, claimant, DESTINATION))
+            )
+        );
+        let underlying_address = Proof::pda(&hash, &prover).0;
+        let underlying_before = context.get_account(&underlying_address).unwrap();
+        assert!(context.get_account(&aggregate_address(&hash)).is_none());
+        context.aggregator_prover().aggregate(hash, prover).unwrap();
         context.warp_to_timestamp((reward.deadline + 1).try_into().unwrap());
         let vault = vault_pda(&hash).0;
         let proof_address = Proof::pda(&hash, &aggregator_prover::ID).0;
@@ -489,9 +784,10 @@ fn existing_portal_withdraws_native_and_tokens_and_closes_only_aggregate_proof()
             )
         });
         assert!(context.get_account(&proof_address).is_none());
-        assert!(context
-            .get_account(&Proof::pda(&hash, &PROVERS[1]).0)
-            .is_some());
+        assert_eq!(
+            context.get_account(&underlying_address).unwrap(),
+            underlying_before
+        );
         assert!(context.get_account(&marker).is_some());
     }
 }

@@ -31,6 +31,7 @@ mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
 mod local_prover_context;
+pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
 
@@ -43,8 +44,11 @@ const FLASH_FULFILLER_BIN: &[u8] = include_bytes!("../../../target/deploy/flash_
 const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
+const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const MOCK_POLYMER_PROVER_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/mock_polymer_prover.so");
 
-type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
+pub type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
 /// An intent already put through `fulfill` by [`Context::fulfill_rand_intents`].
 /// `route` and `reward_hash` are kept so callers can replay the same `fulfill`.
@@ -81,6 +85,19 @@ impl Default for Context {
             .unwrap();
         svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN)
             .unwrap();
+        svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
+            .unwrap();
+        // The mock declares Polymer's devnet ID, which is what non-mainnet
+        // polymer-prover builds CPI into. Under `--features mainnet` this
+        // address is the mainnet one and the mock's declared ID no longer
+        // matches — only `validate_polymer_prover_real` runs in that
+        // configuration, and it replaces this program with Polymer's dumped
+        // binary.
+        svm.add_program(
+            polymer_prover::polymer::POLYMER_PROVER_ID,
+            MOCK_POLYMER_PROVER_BIN,
+        )
+        .unwrap();
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);
@@ -378,6 +395,12 @@ impl Context {
             .and_then(|account| T::try_deserialize(&mut account.data.as_slice()).ok())
     }
 
+    /// Plants a `Proof` as `owner` would have written it. The discriminator is
+    /// hyper-prover's `ProofAccount::DISCRIMINATOR` whichever prover `owner`
+    /// names; that stands in for local-prover's and polymer-prover's only because
+    /// Anchor derives it from the struct *name* and all three call theirs
+    /// `ProofAccount` (pinned by `set_proof_discriminator_matches_every_prover`
+    /// in `close_proof_polymer_prover.rs`).
     pub fn set_proof(&mut self, proof_pda: Pubkey, proof: Proof, owner: Pubkey) {
         let mut data = Vec::new();
         data.extend_from_slice(ProofAccount::DISCRIMINATOR);
@@ -547,6 +570,19 @@ where
     let marker = format!("Program {program_id} invoke");
 
     move |actual: T| actual.meta.logs.iter().any(|log| log.starts_with(&marker))
+}
+
+/// Asserts that `program_id`'s frame returned `Ok` inside a transaction that
+/// failed elsewhere — the runtime logs `Program <id> success` per frame — so a
+/// test can tell "the callee succeeded and *our* check rejected" from "the
+/// callee's own error propagated", which a bare `Custom(code)` cannot.
+pub fn program_succeeded<T>(program_id: Pubkey) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+{
+    let marker = format!("Program {program_id} success");
+
+    move |actual: T| actual.meta.logs.iter().any(|log| log == &marker)
 }
 
 pub fn is_error<T, Err>(expected: Err) -> impl Fn(T) -> bool

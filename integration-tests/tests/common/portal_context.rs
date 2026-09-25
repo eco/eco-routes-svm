@@ -466,6 +466,7 @@ impl Portal<'_> {
                 AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
                 AccountMeta::new_readonly(mailbox_program, false),
             ],
+            None,
         )
     }
 
@@ -504,6 +505,7 @@ impl Portal<'_> {
                 AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
                 AccountMeta::new_readonly(mailbox_program, false),
             ],
+            None,
         )
     }
 
@@ -535,6 +537,7 @@ impl Portal<'_> {
                     .into_iter()
                     .map(|proof| AccountMeta::new(proof, false)),
             ),
+            None,
         )
     }
 
@@ -562,6 +565,35 @@ impl Portal<'_> {
             data,
             vec![],
             remaining_accounts,
+            None,
+        )
+    }
+
+    /// Same as [`Self::prove_intent_via_program`] but prepends
+    /// `ComputeBudgetInstruction::set_compute_unit_limit(compute_unit_limit)`,
+    /// for batches too large for the default per-instruction budget.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_intent_via_program_with_compute_limit(
+        &mut self,
+        prover: Pubkey,
+        intent_hashes: Vec<Bytes32>,
+        source_chain_domain_id: u64,
+        fulfill_markers: Vec<Pubkey>,
+        dispatcher: Pubkey,
+        data: Vec<u8>,
+        remaining_accounts: Vec<AccountMeta>,
+        compute_unit_limit: u32,
+    ) -> TransactionResult {
+        self.prove_intent(
+            intent_hashes,
+            prover,
+            source_chain_domain_id,
+            fulfill_markers,
+            dispatcher,
+            data,
+            vec![],
+            remaining_accounts,
+            Some(compute_unit_limit),
         )
     }
 
@@ -576,6 +608,7 @@ impl Portal<'_> {
         data: Vec<u8>,
         remaining_key_pairs: Vec<Keypair>,
         remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        compute_unit_limit: Option<u32>,
     ) -> TransactionResult {
         let args = portal::instructions::ProveArgs {
             prover,
@@ -605,12 +638,18 @@ impl Portal<'_> {
             data: instruction.data(),
         };
 
+        let instructions: Vec<_> = compute_unit_limit
+            .map(ComputeBudgetInstruction::set_compute_unit_limit)
+            .into_iter()
+            .chain(iter::once(instruction))
+            .collect();
+
         let key_pairs = iter::once(&self.payer)
             .chain(remaining_key_pairs.iter())
             .collect::<Vec<_>>();
         let transaction = Transaction::new(
             &key_pairs,
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(&instructions, Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
         );
 

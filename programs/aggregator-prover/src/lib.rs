@@ -3,6 +3,7 @@ use eco_svm_std::Bytes32;
 
 declare_id!("Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE");
 
+pub mod events;
 pub mod instructions;
 pub mod state;
 

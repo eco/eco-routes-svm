@@ -3,6 +3,25 @@ name = "integration-tests"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# Mirrors the programs' `mainnet` feature so the test crate's `CHAIN_ID`,
+# `POLYMER_PROVER_ID` and `MAILBOX_ID` match `.so` files built with
+# `--features mainnet`. Used by the Polymer upstream-drift workflow to run the
+# real-program test against Polymer's mainnet binary, which Anchor only runs at
+# the mainnet ID. `--features mainnet` is only valid with
+# `--test validate_polymer_prover_real`: the mock-driven polymer tests are
+# devnet-only (mock-polymer-prover declares the devnet ID) and will fail under it.
+mainnet = [
+    "aggregator-prover/mainnet",
+    "eco-svm-std/mainnet",
+    "flash-fulfiller/mainnet",
+    "hyper-prover/mainnet",
+    "local-prover/mainnet",
+    "polymer-prover/mainnet",
+    "portal/mainnet",
+    "proof-helper/mainnet",
+]
+
 [dependencies]
 aggregator-prover = { workspace = true, features = ["no-entrypoint"] }
 anchor-lang = { workspace = true }
@@ -19,13 +38,20 @@ local-prover = { workspace = true, features = ["no-entrypoint"] }
 malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }
 malicious-prover = { workspace = true, features = ["no-entrypoint"] }
 mock-igp = { workspace = true, features = ["no-entrypoint"] }
+mock-polymer-prover = { workspace = true, features = ["no-entrypoint"] }
+polymer-prover = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }
 proof-helper = { workspace = true, features = ["no-entrypoint"] }
 rand = "0.10.2"
+serde_json = "1"
 solana-compute-budget-interface = "3.0.0"
 solana-loader-v3-interface = { version = "8.0.1", features = ["serde"] }
+# `PACKET_DATA_SIZE` and `MAX_INSTRUCTION_TRACE_LENGTH` are not re-exported by
+# solana-sdk 4; the batch-ceiling tests take the granular crates directly.
+solana-packet = "4.1"
 solana-sdk = "4.0.1"
 # solana-sdk 3.x's `system_instruction` module no longer re-exports `SystemError`;
 # take the granular crate directly.
 solana-system-interface = "3.1"
+solana-transaction-context = "4.2"
 tiny-keccak = { workspace = true }
