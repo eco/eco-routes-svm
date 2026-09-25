@@ -3,9 +3,10 @@ use std::iter;
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use eco_svm_std::prover::Proof;
-use eco_svm_std::Bytes32;
+use eco_svm_std::{Bytes32, CANCELLED};
 use hyper_prover::state::pda_payer_pda;
 use portal::events::IntentWithdrawn;
+use portal::instructions::PortalError;
 use portal::state::{self, proof_closer_pda};
 use portal::types::{intent_hash, Reward, Route, TokenAmount};
 use rand::random;
@@ -1198,4 +1199,72 @@ fn withdraw_intent_duplicate_reward_mints_partially_funded_success() {
 
     assert_eq!(paid, 1_800_000);
     assert_eq!(vault_left, 0);
+}
+
+/// P0: `withdraw` does not require the claimant to sign, so without this guard
+/// anyone could pay a cancelled intent's reward to the unowned `CANCELLED` key.
+#[test]
+fn withdraw_intent_cancelled_fail() {
+    let (mut ctx, (destination, _, reward), route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let cancelled = Pubkey::new_from_array(CANCELLED.into());
+    let vault_balance = ctx.balance(&vault);
+
+    ctx.set_proof(proof, Proof::new(destination, cancelled), hyper_prover::ID);
+
+    let result = ctx.portal().withdraw_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        cancelled,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        proof_closer_pda(&reward.prover).0,
+        vec![],
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+
+    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert_eq!(ctx.balance(&cancelled), 0);
+    assert_eq!(ctx.balance(&vault), vault_balance);
+    assert!(ctx.get_account(&proof).is_some());
+}
+
+/// The cancellation guard precedes the destination match: a cancelled proof
+/// recorded for another destination is still refused as a cancellation.
+#[test]
+fn withdraw_intent_cancelled_on_wrong_destination_fail() {
+    let (mut ctx, (destination, _, reward), route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let cancelled = Pubkey::new_from_array(CANCELLED.into());
+    let vault_balance = ctx.balance(&vault);
+
+    ctx.set_proof(
+        proof,
+        Proof::new(destination + 1, cancelled),
+        hyper_prover::ID,
+    );
+
+    let result = ctx.portal().withdraw_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        cancelled,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        proof_closer_pda(&reward.prover).0,
+        vec![],
+        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+    );
+
+    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert_eq!(ctx.balance(&cancelled), 0);
+    assert_eq!(ctx.balance(&vault), vault_balance);
+    assert!(ctx.get_account(&proof).is_some());
 }

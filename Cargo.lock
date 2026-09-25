@@ -1207,6 +1207,7 @@ dependencies = [
  "anchor-lang",
  "derive-new",
  "goldie",
+ "tiny-keccak",
 ]
 
 [[package]]

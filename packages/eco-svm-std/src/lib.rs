@@ -48,6 +48,20 @@ impl IntoIterator for Bytes32 {
     }
 }
 
+/// Claimant sentinel written by the destination portal's `cancel` instruction.
+///
+/// `keccak256("eco.portal.intent.cancelled")`, byte-identical to EVM
+/// `Inbox.CANCELLED`, so a cancellation travels as an ordinary
+/// `(intent_hash, claimant)` pair on every prover. Nobody holds a key for it
+/// (it is a hash output), and its upper 12 bytes are non-zero, so EVM provers
+/// never read it as an address. On the source, a `Proof` whose claimant is
+/// `CANCELLED` is a proven cancellation: `refund` accepts it before
+/// `reward.deadline`, and `withdraw` rejects it.
+pub const CANCELLED: Bytes32 = Bytes32([
+    0xa8, 0xaa, 0x89, 0x81, 0x26, 0x67, 0x9f, 0x5f, 0x17, 0x9c, 0xb3, 0xa4, 0xe6, 0x85, 0x05, 0x6a,
+    0xec, 0x77, 0x68, 0x6a, 0x83, 0xe2, 0xa6, 0xbd, 0xf3, 0x7c, 0x6f, 0x71, 0xdd, 0x2f, 0xdb, 0x5f,
+]);
+
 /// Serializable version of Solana's `AccountMeta` for cross-chain communication.
 ///
 /// Since Solana's native `AccountMeta` type doesn't implement serialization traits
@@ -99,5 +113,40 @@ mod tests {
         let program_id = Pubkey::new_from_array([123u8; 32]);
 
         goldie::assert_debug!(event_authority_pda(&program_id));
+    }
+
+    #[test]
+    fn cancelled_is_keccak_of_its_domain_tag() {
+        use tiny_keccak::{Hasher, Keccak};
+
+        let mut hasher = Keccak::v256();
+        let mut hash = [0u8; 32];
+        hasher.update(b"eco.portal.intent.cancelled");
+        hasher.finalize(&mut hash);
+
+        assert_eq!(<[u8; 32]>::from(CANCELLED), hash);
+    }
+
+    /// The same 32 bytes are `Inbox.CANCELLED` on EVM; a drift here makes one
+    /// VM's cancellation look like a real claimant to the other.
+    #[test]
+    fn cancelled_matches_the_evm_constant() {
+        let hex: String = CANCELLED.iter().map(|byte| format!("{byte:02x}")).collect();
+
+        assert_eq!(
+            hex,
+            "a8aa898126679f5f179cb3a4e685056aec77686a83e2a6bdf37c6f71dd2fdb5f"
+        );
+    }
+
+    /// Upper 12 bytes non-zero: EVM provers can never mistake it for an address.
+    #[test]
+    fn cancelled_is_not_an_evm_address() {
+        assert!(CANCELLED[..12].iter().any(|byte| *byte != 0));
+    }
+
+    #[test]
+    fn cancelled_deterministic() {
+        goldie::assert_debug!(CANCELLED);
     }
 }

@@ -12,3 +12,4 @@ derive-new = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }
+tiny-keccak = { workspace = true }

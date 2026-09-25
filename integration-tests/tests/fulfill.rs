@@ -6,7 +6,7 @@ use anchor_spl::associated_token::spl_associated_token_account::instruction::cre
 use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022;
 use eco_svm_std::prover::{IntentHashClaimant, ProofData, ProveArgs};
-use eco_svm_std::CHAIN_ID;
+use eco_svm_std::{CANCELLED, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentFulfilled;
 use portal::instructions::PortalError;
@@ -1240,4 +1240,28 @@ fn fulfill_intent_invalid_intent_hash_fail() {
         vec![],
     );
     assert!(result.is_err_and(common::is_error(PortalError::InvalidIntentHash)));
+}
+
+/// Only `cancel` may write the sentinel: a fulfill carrying it would record a
+/// fill that later proves as a cancellation.
+#[test]
+fn fulfill_reserved_claimant_fail() {
+    let mut ctx = common::Context::default();
+    let (intent_hash, route, reward) = ctx.rand_minimal_intent(hyper_prover::ID);
+    let reward_hash = reward.hash();
+    let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
+
+    let result = ctx.portal().fulfill_intent(
+        intent_hash,
+        &route,
+        reward_hash,
+        CANCELLED,
+        state::executor_pda().0,
+        fulfill_marker,
+        vec![],
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(PortalError::ReservedClaimant)));
+    assert!(ctx.get_account(&fulfill_marker).is_none());
 }

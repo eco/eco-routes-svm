@@ -264,19 +264,22 @@ anchor test --skip-deploy
 
 ### Portal Program
 
+Proven cancellation changes the `refund` account layout and several errors and events; see [Proven Cancellation: Client-Visible Changes](docs/proven-cancellation.md) before integrating.
 
 #### Key Instructions:
 - `publish` - Create and emit intent on source chain
 - `fund` - Fund an intent with reward tokens
 - `fulfill` - Execute intent operations and mark as fulfilled
 - `prove` - Submit proof of fulfillment from destination chain
-- `refund` - Refund intent if not fulfilled within timeout
+- `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven. The cancellation path always closes the proof through the prover's `close_proof` (provers must be finalized); before `reward.deadline` it must also sweep every reward mint, from `reward.deadline` it sweeps whatever token chunks it is given
 - `withdraw` - Withdraw rewards after successful proof validation
-- `close_fulfill_marker` - Reclaim a `FulfillMarker`'s rent once `route.deadline` has passed. Signed by the marker's stored `payer`, which is also the refund target. **Only close after the intent's reward is settled on the source chain** — the marker holds the claimant that `prove` reads, so closing early makes the intent permanently unprovable and the fulfillment unrecoverable. The deadline alone is not sufficient, and no deadline is: it only retires the double-fulfill guard. `route.deadline` is conventionally the earlier of the two deadlines, so it passes while the reward is still provable — and gating on the later `reward.deadline` would not help either, since that only makes the reward *refundable*, not refunded. `withdraw` is not time-gated at all, and `refund` refuses while a `Proof` exists, so a proven intent stays claimable indefinitely. The sound signal is a terminal source-chain state (withdrawn, or refunded), which is off-chain knowledge; that is why the authority is the payer.
+- `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes the `CANCELLED` sentinel into the intent's fulfill marker; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
+- `close_fulfill_marker` - Reclaim part of a `FulfillMarker`'s rent once `route.deadline` has passed, by shrinking it to a `FulfillTombstone` that keeps the claimant. Signed by the marker's stored `payer`, which is also the refund target. The tombstone keeps the intent provable and blocks both `fulfill` and `cancel`.
 
 #### Key Accounts:
 - `Vault` - Escrows reward tokens for intent funding
 - `FulfillMarker` - Tracks intent fulfillment status with claimant address, plus the payer allowed to close it and the route deadline gating that close
+- `FulfillTombstone` - What `close_fulfill_marker` leaves behind: a 40-byte shrink of `FulfillMarker` that keeps only the claimant (so `prove` still works) and blocks re-fulfillment and cancellation
 - `WithdrawnMarker` - Prevents double withdrawals of rewards
 
 ### Hyper-Prover Program
@@ -312,7 +315,7 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 #### Key Instructions:
 - `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
-- `close_proof` - Close Proof accounts after successful withdrawal (called by Portal during `withdraw`)
+- `close_proof` - Close Proof accounts after successful withdrawal or a proven-cancellation refund (called by Portal during `withdraw` and `refund`); the proof's rent goes to the signing `payer`
 
 ### Flash-Fulfiller Program
 

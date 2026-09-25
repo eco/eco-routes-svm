@@ -3,6 +3,8 @@ use derive_new::new;
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::Bytes32;
 
+use crate::instructions::PortalError;
+
 pub const VAULT_SEED: &[u8] = b"vault";
 pub const CLAIMED_MARKER_SEED: &[u8] = b"claimed_marker";
 pub const FULFILL_MARKER_SEED: &[u8] = b"fulfill_marker";
@@ -51,7 +53,7 @@ impl WithdrawnMarker {
 }
 
 /// The whole field order is on-chain ABI: `prove` deserializes the full struct
-/// (`prove.rs`), so reordering breaks it, not just moving `claimant`.
+/// (`fulfillment_claimant`), so reordering breaks it, not just moving `claimant`.
 /// `fulfill_marker_layout_deterministic` pins the encoding.
 ///
 /// Growing or reordering it is only safe because the portal is redeployed under
@@ -79,6 +81,37 @@ impl FulfillMarker {
     pub fn pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[FULFILL_MARKER_SEED, intent_hash.as_ref()], &crate::ID)
     }
+}
+
+/// What `close_fulfill_marker` leaves at a [`FulfillMarker`]'s PDA.
+///
+/// Keeping the PDA occupied is what keeps `cancel` sound: a deleted marker is
+/// indistinguishable from "never fulfilled", so `cancel` could otherwise
+/// succeed on a fulfilled intent after its solver reclaimed rent. It also
+/// keeps `fulfill` failing, and it keeps `claimant`, so the intent stays
+/// provable after the close.
+#[account]
+#[derive(InitSpace, Debug, PartialEq, new)]
+pub struct FulfillTombstone {
+    pub claimant: Bytes32,
+}
+
+/// Claimant recorded for an intent on this chain, read from its live
+/// [`FulfillMarker`] or from the [`FulfillTombstone`] it was closed to.
+pub fn fulfillment_claimant(account: &AccountInfo) -> Result<Bytes32> {
+    require!(
+        account.owner == &crate::ID,
+        PortalError::InvalidFulfillMarker
+    );
+    let data = account.try_borrow_data()?;
+
+    if let Ok(marker) = FulfillMarker::try_deserialize(&mut &data[..]) {
+        return Ok(marker.claimant);
+    }
+
+    FulfillTombstone::try_deserialize(&mut &data[..])
+        .map(|tombstone| tombstone.claimant)
+        .map_err(|_| PortalError::InvalidFulfillMarker.into())
 }
 
 #[cfg(test)]
@@ -162,6 +195,19 @@ mod tests {
         goldie::assert_json!((
             8 + FulfillMarker::INIT_SPACE,
             borsh::to_vec(&marker).unwrap()
+        ));
+    }
+
+    /// Pins size, discriminator and field order: `prove` reads `claimant` out
+    /// of a tombstone, so all three are ABI.
+    #[test]
+    fn fulfill_tombstone_layout_deterministic() {
+        let tombstone = FulfillTombstone::new([1u8; 32].into());
+
+        goldie::assert_json!((
+            8 + FulfillTombstone::INIT_SPACE,
+            FulfillTombstone::DISCRIMINATOR,
+            borsh::to_vec(&tombstone).unwrap()
         ));
     }
 

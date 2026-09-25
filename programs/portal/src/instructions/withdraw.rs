@@ -1,21 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::{Proof, CLOSE_PROOF_DISCRIMINATOR};
-use eco_svm_std::Bytes32;
+use eco_svm_std::prover::Proof;
+use eco_svm_std::{Bytes32, CANCELLED};
 
 use crate::events::IntentWithdrawn;
+use crate::instructions::close_proof::close_proof;
 use crate::instructions::PortalError;
-use crate::state::{
-    proof_closer_pda, vault_pda, WithdrawnMarker, CLAIMED_MARKER_SEED, PROOF_CLOSER_SEED,
-    VAULT_SEED,
-};
+use crate::state::{proof_closer_pda, vault_pda, WithdrawnMarker, CLAIMED_MARKER_SEED, VAULT_SEED};
 use crate::types::{
     self, Reward, TokenTransferAccounts, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
@@ -90,7 +87,12 @@ pub fn withdraw_intent<'info>(
 
     // once initialized, withdraw is never allowed again
     mark_withdrawn(&ctx, &intent_hash)?;
-    close_proof(&ctx, remaining_accounts)?;
+    close_proof(
+        &ctx.accounts.prover,
+        &ctx.accounts.proof_closer,
+        &ctx.accounts.proof,
+        remaining_accounts,
+    )?;
 
     emit!(IntentWithdrawn::new(
         intent_hash,
@@ -112,6 +114,9 @@ fn validate_proof(
     );
 
     match Proof::try_from_account_info(&ctx.accounts.proof)? {
+        // checked first: a cancelled proof's claimant is a real, if unowned,
+        // key, and `withdraw` does not require the claimant to sign
+        Some(proof) if CANCELLED == proof.claimant => Err(PortalError::IntentCancelled.into()),
         Some(proof)
             if proof.claimant == *ctx.accounts.claimant.key && proof.destination == destination =>
         {
@@ -261,48 +266,4 @@ fn mark_withdrawn<'info>(
             &[&signer_seeds],
         )
         .map_err(|_| PortalError::IntentAlreadyWithdrawn.into())
-}
-
-fn close_proof<'info>(
-    ctx: &Context<'info, Withdraw<'info>>,
-    remaining_accounts: &[AccountInfo<'info>],
-) -> Result<()> {
-    let prover = ctx.accounts.prover.key();
-    let (_, bump) = proof_closer_pda(&prover);
-    let signer_seeds = [PROOF_CLOSER_SEED, prover.as_ref(), &[bump]];
-
-    let remaining_account_metas = remaining_accounts.iter().map(|account| AccountMeta {
-        pubkey: account.key(),
-        is_signer: account.is_signer,
-        is_writable: account.is_writable,
-    });
-    let remaining_account_infos = remaining_accounts
-        .iter()
-        .map(ToAccountInfo::to_account_info);
-
-    let ix = Instruction::new_with_bytes(
-        ctx.accounts.prover.key(),
-        &CLOSE_PROOF_DISCRIMINATOR,
-        vec![
-            AccountMeta::new_readonly(ctx.accounts.proof_closer.key(), true),
-            AccountMeta::new(ctx.accounts.proof.key(), false),
-        ]
-        .into_iter()
-        .chain(remaining_account_metas)
-        .collect(),
-    );
-
-    invoke_signed(
-        &ix,
-        vec![
-            ctx.accounts.proof_closer.to_account_info(),
-            ctx.accounts.proof.to_account_info(),
-        ]
-        .into_iter()
-        .chain(remaining_account_infos)
-        .collect::<Vec<_>>()
-        .as_slice(),
-        &[&signer_seeds],
-    )
-    .map_err(Into::into)
 }

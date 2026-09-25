@@ -33,6 +33,10 @@ impl<'info> VecTokenTransferAccounts<'info> {
     pub fn into_inner(self) -> Vec<TokenTransferAccounts<'info>> {
         self.0
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &TokenTransferAccounts<'info>> {
+        self.0.iter()
+    }
 }
 
 pub struct TokenTransferAccounts<'info> {

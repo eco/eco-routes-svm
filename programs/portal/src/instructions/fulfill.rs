@@ -9,14 +9,13 @@ use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022::extension::StateWithExtensions;
 use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
-use eco_svm_std::account::AccountExt;
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
 use solana_keccak_hasher::hashv;
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
-use crate::instructions::{now, PortalError};
-use crate::state::{executor_pda, FulfillMarker, EXECUTOR_SEED, FULFILL_MARKER_SEED};
+use crate::instructions::{create_fulfill_marker, now, PortalError};
+use crate::state::{executor_pda, EXECUTOR_SEED};
 use crate::types::{
     self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
@@ -69,6 +68,7 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
     require!(route.deadline >= now()?, PortalError::RouteExpired);
+    require!(claimant != CANCELLED, PortalError::ReservedClaimant);
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
@@ -86,7 +86,14 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    mark_fulfilled(&ctx, &intent_hash, &claimant, route.deadline)?;
+    create_fulfill_marker(
+        &ctx.accounts.fulfill_marker,
+        &ctx.accounts.payer,
+        &ctx.accounts.system_program,
+        &intent_hash,
+        claimant,
+        route.deadline,
+    )?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
 
@@ -252,29 +259,6 @@ fn executor_atas_digest(executor: &Pubkey, call_accounts: &[AccountInfo]) -> Res
         ])
         .to_bytes())
     })
-}
-
-fn mark_fulfilled(
-    ctx: &Context<Fulfill>,
-    intent_hash: &Bytes32,
-    claimant: &Bytes32,
-    deadline: u64,
-) -> Result<()> {
-    let (fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
-    require!(
-        ctx.accounts.fulfill_marker.key() == fulfill_marker,
-        PortalError::InvalidFulfillMarker
-    );
-    let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
-
-    FulfillMarker::new(*claimant, ctx.accounts.payer.key(), deadline, bump)
-        .init(
-            &ctx.accounts.fulfill_marker,
-            &ctx.accounts.payer,
-            &ctx.accounts.system_program,
-            &[&signer_seeds],
-        )
-        .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
 }
 
 #[cfg(test)]
