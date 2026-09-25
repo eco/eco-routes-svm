@@ -40,9 +40,11 @@ The `refund` instruction's account list and arguments change shape, which breaks
 - Args: `RefundArgs` gains `close_proof_account_count: u8`, the number of trailing remaining accounts forwarded to the prover's `close_proof`. Pass `0` when no proof is closed.
 - Paths, checked in this order:
   1. Withdrawn: refunds leftovers as before.
-  2. Proven cancellation (`Proof` for this destination with `claimant == CANCELLED`, and `reward.prover` is an executable program): refunds immediately, at any time, and closes the proof through the prover's `close_proof`. Because this branch comes before the deadline branch, a refund of a cancelled-and-proven intent **still needs the close-proof tail after `reward.deadline`**.
-  3. Otherwise the deadline gate applies (`RewardNotExpired` before `reward.deadline`). A proven cancellation whose `reward.prover` is no longer an executable program takes this path: it refunds only after `reward.deadline`, needs no close-proof tail, and leaves the proof open.
-- On the cancellation path the token chunks must sweep every reward mint: each mint in `reward.tokens` needs a chunk whose source is the vault's ATA for that mint, or the refund fails with `InvalidMint` and nothing moves. Extra non-reward mints remain allowed. The withdrawn and deadline paths keep sweeping only the chunks they are given.
+  2. Proven cancellation (`Proof` for this destination with `claimant == CANCELLED`). `reward.deadline` decides how it is refunded:
+     - Before `reward.deadline` (the fast path): the token chunks must sweep every reward mint (each mint in `reward.tokens` needs a chunk whose source is the vault's ATA for that mint, or the refund fails with `InvalidMint` and nothing moves; extra non-reward mints remain allowed), `reward.prover` must be an executable program (`InvalidProver` otherwise), and the proof is closed through the prover's `close_proof`, so the close-proof tail is required. Every reward mint's vault ATA must therefore exist and be transferable; a client should create any missing one idempotently in the same transaction.
+     - From `reward.deadline`: refunded like any timed-out intent, sweeping only the chunks given. The proof is closed only when `close_proof_account_count > 0` (then `reward.prover` must be executable and the CPI must succeed); with `0` the proof stays open, which is harmless because `withdraw` rejects `CANCELLED`. This keeps a cancelled intent refundable when its prover can no longer close proofs (a closed program, or one that is not a program) or a reward mint cannot be swept (closed or non-transferable mint, frozen or missing vault ATA).
+  3. Fulfilled for this destination and not withdrawn: `IntentFulfilledAndNotWithdrawn`, as before.
+  4. Otherwise (no proof, or a proof for another destination) the deadline gate applies (`RewardNotExpired` before `reward.deadline`), as before.
 
 ### `withdraw`
 
