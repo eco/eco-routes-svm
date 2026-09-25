@@ -950,6 +950,8 @@ fn refund_intent_cancelled_unsweepable_reward_mint_until_deadline_success() {
     });
 
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+    let pda_payer_balance = ctx.balance(&pda_payer_pda().0);
+    let proof_rent = ctx.balance(&proof);
 
     let result = ctx.portal().refund_intent_with_close_proof(
         destination,
@@ -969,6 +971,10 @@ fn refund_intent_cancelled_unsweepable_reward_mint_until_deadline_success() {
     ))));
     assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
     assert!(ctx.get_account(&proof).is_none());
+    assert_eq!(
+        ctx.balance(&pda_payer_pda().0),
+        pda_payer_balance + proof_rent
+    );
     reward.tokens[1..].iter().for_each(|token| {
         assert_eq!(
             ctx.token_balance_ata(&token.token, &reward.creator),
