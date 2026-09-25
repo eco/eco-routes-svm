@@ -257,13 +257,14 @@ anchor test --skip-deploy
 
 ### Portal Program
 
+Proven cancellation changes the `refund` account layout and several errors and events; see [Proven Cancellation: Client-Visible Changes](docs/proven-cancellation.md) before integrating.
 
 #### Key Instructions:
 - `publish` - Create and emit intent on source chain
 - `fund` - Fund an intent with reward tokens
 - `fulfill` - Execute intent operations and mark as fulfilled
 - `prove` - Submit proof of fulfillment from destination chain
-- `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven
+- `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven. The cancellation path must sweep every reward mint and closes the proof through the prover's `close_proof`
 - `withdraw` - Withdraw rewards after successful proof validation
 - `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes the `CANCELLED` sentinel into the intent's fulfill marker; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
 - `close_fulfill_marker` - Reclaim part of a `FulfillMarker`'s rent once `route.deadline` has passed, by shrinking it to a `FulfillTombstone` that keeps the claimant. Signed by the marker's stored `payer`, which is also the refund target. The tombstone keeps the intent provable and blocks both `fulfill` and `cancel`.
@@ -293,7 +294,7 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 #### Key Instructions:
 - `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
-- `close_proof` - Close Proof accounts after successful withdrawal (called by Portal during `withdraw`)
+- `close_proof` - Close Proof accounts after successful withdrawal or a proven-cancellation refund (called by Portal during `withdraw` and `refund`); the proof's rent goes to the signing `payer`
 
 ### Flash-Fulfiller Program
 
