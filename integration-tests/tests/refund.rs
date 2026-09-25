@@ -805,8 +805,8 @@ fn refund_intent_cancelled_missing_reward_mint_fail() {
     }
 }
 
-/// Before `reward.deadline` the fast path must close the proof, so a
-/// `reward.prover` that is not a program fails it rather than refunding early.
+/// A cancelled refund closes the proof through `reward.prover`, so a prover
+/// that is not a program is rejected.
 #[test]
 fn refund_intent_cancelled_before_deadline_non_program_prover_fail() {
     let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
@@ -835,79 +835,8 @@ fn refund_intent_cancelled_before_deadline_non_program_prover_fail() {
     assert_eq!(ctx.balance(&reward.creator), 0);
 }
 
-/// From `reward.deadline` a proven cancellation is an ordinary timeout refund:
-/// with no close-proof tail the proof stays open (harmless — `withdraw`
-/// rejects `CANCELLED`). This is the liveness escape for a prover that can no
-/// longer close proofs; hyper-prover without its tail stands in for one.
-#[test]
-fn refund_intent_cancelled_after_deadline_without_close_proof_success() {
-    let (mut ctx, destination, reward, route_hash) = setup(false);
-    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
-    let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &reward.prover).0;
-
-    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
-    ctx.warp_to_timestamp(reward.deadline as i64);
-    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
-
-    let result = ctx.portal().refund_intent(
-        destination,
-        reward.clone(),
-        vault,
-        route_hash,
-        proof,
-        state::WithdrawnMarker::pda(&intent_hash).0,
-        reward.creator,
-        token_accounts,
-    );
-
-    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
-        intent_hash,
-        reward.creator,
-    ))));
-    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
-    reward.tokens.iter().for_each(|token| {
-        assert_eq!(
-            ctx.token_balance_ata(&token.token, &reward.creator),
-            token.amount
-        );
-    });
-    assert!(ctx.get_account(&proof).is_some());
-}
-
-/// Same escape when `reward.prover` is not a program at all.
-#[test]
-fn refund_intent_cancelled_after_deadline_non_program_prover_success() {
-    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
-    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
-    let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &reward.prover).0;
-
-    ctx.set_proof(proof, cancelled_proof(destination), reward.prover);
-    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
-    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
-
-    let result = ctx.portal().refund_intent(
-        destination,
-        reward.clone(),
-        vault,
-        route_hash,
-        proof,
-        state::WithdrawnMarker::pda(&intent_hash).0,
-        reward.creator,
-        token_accounts,
-    );
-
-    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
-        intent_hash,
-        reward.creator,
-    ))));
-    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
-    assert!(ctx.get_account(&proof).is_some());
-}
-
-/// A close-proof tail after `reward.deadline` still closes the proof and
-/// returns its rent.
+/// From `reward.deadline` a cancelled refund needs no reward mint swept, but
+/// it still closes the proof and returns its rent.
 #[test]
 fn refund_intent_cancelled_after_deadline_with_close_proof_success() {
     let (mut ctx, destination, reward, route_hash) = setup(false);
@@ -944,9 +873,42 @@ fn refund_intent_cancelled_after_deadline_with_close_proof_success() {
     assert_eq!(ctx.balance(&pda_payer), pda_payer_balance + proof_rent);
 }
 
+/// The proof is closed on every cancelled refund, after `reward.deadline`
+/// too, so the close-proof tail stays mandatory.
+#[test]
+fn refund_intent_cancelled_after_deadline_without_close_proof_accounts_fail() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    ctx.warp_to_timestamp(reward.deadline as i64);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    let result = ctx.portal().refund_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+    );
+
+    assert!(result.is_err_and(common::is_program_error(
+        hyper_prover::ID,
+        anchor_lang::error::ErrorCode::AccountNotEnoughKeys,
+    )));
+    assert_eq!(ctx.balance(&reward.creator), 0);
+    assert!(ctx.get_account(&proof).is_some());
+}
+
 /// A reward mint whose vault ATA cannot be swept (here: it does not exist)
 /// blocks the fast path, and nothing moves; from `reward.deadline` the
-/// refund succeeds without it, so that mint cannot lock the rest.
+/// refund succeeds without it and still closes the proof, so that mint cannot
+/// lock the rest.
 #[test]
 fn refund_intent_cancelled_unsweepable_reward_mint_until_deadline_success() {
     let (mut ctx, destination, reward, route_hash) = setup(false);
@@ -989,7 +951,7 @@ fn refund_intent_cancelled_unsweepable_reward_mint_until_deadline_success() {
 
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
-    let result = ctx.portal().refund_intent(
+    let result = ctx.portal().refund_intent_with_close_proof(
         destination,
         reward.clone(),
         vault,
@@ -998,6 +960,7 @@ fn refund_intent_cancelled_unsweepable_reward_mint_until_deadline_success() {
         state::WithdrawnMarker::pda(&intent_hash).0,
         reward.creator,
         token_accounts,
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
     );
 
     assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
@@ -1005,6 +968,7 @@ fn refund_intent_cancelled_unsweepable_reward_mint_until_deadline_success() {
         reward.creator,
     ))));
     assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&proof).is_none());
     reward.tokens[1..].iter().for_each(|token| {
         assert_eq!(
             ctx.token_balance_ata(&token.token, &reward.creator),

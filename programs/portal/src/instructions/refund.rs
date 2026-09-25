@@ -56,18 +56,15 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Why a refund is allowed. `reward.deadline` decides how a proven
-/// cancellation is refunded: before it, only by the strict `Cancelled` fast
-/// path; from it, like any timed-out intent. The fallback keeps a cancelled
-/// intent refundable when its prover can no longer close proofs or a reward
-/// mint can no longer be swept.
+/// Why a refund is allowed. Only `Cancelled` closes the proof.
 #[derive(PartialEq, Eq)]
 enum RefundPath {
     Withdrawn,
-    /// Before `reward.deadline`: sweeps every reward mint and closes the proof.
-    Cancelled,
-    /// From `reward.deadline`: closes the proof only if a tail is supplied.
-    CancelledExpired,
+    /// `expired` is `reward.deadline <= now`: only before it must every reward
+    /// mint be swept.
+    Cancelled {
+        expired: bool,
+    },
     Expired,
 }
 
@@ -101,19 +98,14 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
     let token_transfer_accounts: VecTokenTransferAccounts<'info> =
         token_transfer_accounts.try_into()?;
 
-    if refund_path == RefundPath::Cancelled {
+    if refund_path == (RefundPath::Cancelled { expired: false }) {
         require_reward_mints_swept(&ctx, &reward, &token_transfer_accounts)?;
     }
 
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
 
-    let closes_proof = match refund_path {
-        RefundPath::Cancelled => true,
-        RefundPath::CancelledExpired => close_proof_account_count > 0,
-        RefundPath::Withdrawn | RefundPath::Expired => false,
-    };
-    if closes_proof {
+    if let RefundPath::Cancelled { .. } = refund_path {
         require!(ctx.accounts.prover.executable, PortalError::InvalidProver);
         close_proof(
             &ctx.accounts.prover,
@@ -143,11 +135,7 @@ fn validate_intent_status<'info>(
     match Proof::try_from_account_info(&ctx.accounts.proof.to_account_info())? {
         // proven cancellation for this destination: refundable immediately
         Some(proof) if proof.destination == destination && CANCELLED == proof.claimant => {
-            return Ok(if expired {
-                RefundPath::CancelledExpired
-            } else {
-                RefundPath::Cancelled
-            });
+            return Ok(RefundPath::Cancelled { expired });
         }
         // fulfilled but not withdrawn
         Some(proof) if proof.destination == destination => {
@@ -162,13 +150,14 @@ fn validate_intent_status<'info>(
     Ok(RefundPath::Expired)
 }
 
-/// The early cancellation path closes the proof, after which only
-/// `reward.deadline` makes the intent refundable again. `refund` is permissionless and sweeps only
+/// The cancellation path closes the proof, after which only `reward.deadline`
+/// makes the intent refundable again. `refund` is permissionless and sweeps only
 /// the chunks it is given, so without this a caller could close the proof while
 /// leaving reward tokens in the vault until the deadline. Extra, non-reward
-/// mints remain allowed, as on the other paths. A reward mint whose vault ATA
-/// cannot be swept blocks only this early path: from `reward.deadline` the
-/// refund proceeds without it.
+/// mints remain allowed, as on the other paths. Applied only before
+/// `reward.deadline`: a reward mint whose vault ATA cannot be swept (closed,
+/// frozen, non-transferable, never created) then blocks only the early
+/// refund, and from the deadline a cancelled refund sweeps what it is given.
 fn require_reward_mints_swept(
     ctx: &Context<Refund>,
     reward: &Reward,
