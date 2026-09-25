@@ -271,7 +271,9 @@ fn cancel_after_close_fail() {
     );
 }
 
-/// A cancelled marker closes like any other and still proves as a cancellation.
+/// A cancelled marker closes like any other and its tombstone keeps the
+/// `CANCELLED` sentinel; `cancel_close_marker_prove_via_local_prover_success`
+/// proves such a tombstone.
 #[test]
 fn close_cancelled_marker_keeps_sentinel_success() {
     let mut ctx = common::Context::default();

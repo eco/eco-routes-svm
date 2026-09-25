@@ -35,7 +35,6 @@ pub struct CloseFulfillMarkerArgs {
 /// `payer` is the sole authority able to close the marker and the address the
 /// rent returns to, so a sponsored or ephemeral fee-payer would strand it.
 #[derive(Accounts)]
-#[instruction(args: CloseFulfillMarkerArgs)]
 pub struct CloseFulfillMarker<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
