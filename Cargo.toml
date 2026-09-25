@@ -8,6 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+aggregator-prover = { path = "programs/aggregator-prover" }
 anchor-lang = "1.1.2"
 anchor-spl = "1.1.2"
 derive-new = "0.7.0"

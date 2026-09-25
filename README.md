@@ -72,6 +72,8 @@ An atomic orchestrator that lets solvers fulfill intents with zero capital — t
 
 ### How They Work Together
 
+The optional **Aggregator-Prover** (`programs/aggregator-prover/`) creates a standard proof from an immutable prover set. Solvers deliver through a concrete prover, aggregate on the source chain, then withdraw using the aggregator program ID as `reward.prover`. Portal needs no changes.
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -330,6 +332,22 @@ Atomic flash-fulfillment orchestrator for same-chain solvers.
 
 A helper program used by Hyperlane message construction in tests and off-chain tooling.
 
+### Aggregator-Prover Program
+
+- `init()` — the program's upgrade authority initializes the singleton `Config` PDA once. The prover list comes directly from `remaining_accounts`; it must be nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
+- `aggregate(intent_hash)` — permissionless source-chain aggregation for one intent. The only argument is the intent hash. The destination and claimant are copied from the caller-selected configured prover’s proof.
+- `close_proof()` — accepts Portal's `proof_closer_pda(aggregator_program_id)` signer, the aggregate proof, and a writable signer receiving rent. It leaves underlying proofs untouched.
+
+`aggregate` accounts, in order: payer writable signer, Config, selected prover program, selected prover’s proof PDA, writable aggregate proof PDA, system program, event authority, aggregator program. The caller chooses a prover off-chain. The program checks that it is configured and executable, and that its proof has the canonical PDA, correct owner, discriminator, data shape, and nonzero claimant. The proof’s destination and claimant are copied unchanged; no other prover accounts are required.
+
+There is no `prove` instruction. Relay through a concrete prover: for Hyperlane, destination `Portal.prove → HyperProver.prove` dispatches the message, source `HyperProver.handle` records the underlying proof, then `AggregatorProver.aggregate` creates the proof used by `Portal.withdraw`. For Polymer, a relayer loads the bridge proof and calls `PolymerProver.validate` on the source chain, then aggregates its proof PDA. A single-intent `validate` and `aggregate` can share one transaction. Portal and provers are unchanged.
+
+The aggregate proof uses the existing `Proof` layout and PDA seeds and emits the standard `IntentProven` CPI event. Aggregation always initializes a new proof PDA; an existing PDA causes initialization to fail, even for an identical proof. Prover order has no priority semantics; the first successfully aggregated proof is retained. There is no challenge interface or destination-preimage validation. The aggregator trusts configured provers for destination correctness; an incorrect destination copied into the aggregate proof cannot be replaced by a later proof.
+
+**Solver integration is required before enabling these routes.** Portal sees only the aggregate proof. A proof delivered to a prover does not block an expired refund until aggregation succeeds. Aggregate before `reward.deadline`, ideally in the same transaction as proof delivery, then withdraw. Merely combining aggregation with withdrawal does not remove the earlier refund race. This source-chain aggregation step differs from EVM's read-only union. The aggregator sends no bridge messages; destination-chain dispatch and source-chain delivery must use a concrete prover. Listeners should track the aggregator's `IntentProven` event for settlement readiness.
+
+The trust floor is the weakest prover. Deployment must review the exact prover list and each prover's proof semantics; executable-account validation does not establish trust. Program upgrade authorities retain the usual ability to replace code until revoked. Underlying proof rent is not reclaimed by aggregate withdrawal.
+
 ### Dummy ISM Program
 
 A simplified ISM implementation used as the mailbox's default ISM in local test environments, standing in for Hyperlane's real default ISM.
@@ -356,6 +374,7 @@ A simplified ISM implementation used as the mailbox's default ISM in local test 
 - `close_proof_hyper_prover.rs` - HyperProver proof cleanup
 - `close_proof_local_prover.rs` - LocalProver proof cleanup
 - `init_hyper_prover.rs` - HyperProver initialization
+- `aggregator_prover.rs` - Prover configuration, generated event IDL, Hyperlane delivery and Polymer validation through aggregation and Portal withdrawal (native/SPL/Token-2022), competing proofs, and atomic Polymer validation/aggregation. Bridge verification uses the local dummy ISM and mock Polymer program.
 - `flash_fulfill.rs` - Atomic flash-fulfillment flows
 - `set_flash_fulfill_intent.rs` - Flash-fulfillment intent buffer writes
 - `pay_for_gas.rs` - Hyperlane gas payment via proof-helper
@@ -415,7 +434,7 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`):
+The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`):
 
 ```toml
 [features]
@@ -472,6 +491,7 @@ What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]
 
 ```toml
 [programs.localnet]
+aggregator-prover = "..."
 dummy-ism = "..."              # localnet-only test program
 mock-polymer-prover = "..."    # localnet-only test program
 malicious-prover = "..."       # localnet-only test program
@@ -484,6 +504,7 @@ portal = "..."
 proof-helper = "..."
 
 [programs.devnet]
+aggregator-prover = "..."
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
@@ -493,6 +514,7 @@ proof-helper = "..."
 # localnet-only test programs excluded
 
 [programs.mainnet]
+aggregator-prover = "..."
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
@@ -521,8 +543,8 @@ Releases are published via the manual `Release` GitHub Actions workflow (`.githu
 Each release attaches mainnet and devnet IDLs as downloadable assets on the GitHub Release:
 
 ```
-dist/idl/mainnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.mainnet.json
-dist/idl/devnet/{portal,hyper_prover,local_prover,flash_fulfiller,proof_helper,polymer_prover}.devnet.json
+dist/idl/mainnet/{portal,hyper_prover,local_prover,aggregator_prover,flash_fulfiller,proof_helper,polymer_prover}.mainnet.json
+dist/idl/devnet/{portal,hyper_prover,local_prover,aggregator_prover,flash_fulfiller,proof_helper,polymer_prover}.devnet.json
 ```
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.json`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
@@ -542,7 +564,7 @@ Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conve
 
 If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
 
-The `version` field in each released crate's `Cargo.toml` (the 6 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
+The `version` field in each released crate's `Cargo.toml` (the 7 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
 
 ### First release
 
