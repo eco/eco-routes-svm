@@ -804,3 +804,67 @@ fn refund_intent_cancelled_missing_reward_mint_fail() {
         });
     }
 }
+
+/// A cancellation whose `reward.prover` is no longer a program cannot have its
+/// proof closed, so it is not refundable early; it falls back to the deadline
+/// instead of stranding the reward.
+#[test]
+fn refund_intent_cancelled_with_non_program_prover_not_expired_fail() {
+    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), reward.prover);
+
+    let result = ctx.portal().refund_intent(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::RewardNotExpired
+    )));
+    assert!(ctx.get_account(&proof).is_some());
+}
+
+#[test]
+fn refund_intent_cancelled_with_non_program_prover_expired_success() {
+    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), reward.prover);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    let result = ctx.portal().refund_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    reward.tokens.iter().for_each(|token| {
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &reward.creator),
+            token.amount
+        );
+    });
+    assert!(ctx.get_account(&proof).is_some());
+}

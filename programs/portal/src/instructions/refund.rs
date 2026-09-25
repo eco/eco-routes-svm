@@ -45,7 +45,8 @@ pub struct Refund<'info> {
     pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: address is validated. Deliberately not `executable`: a timeout
     /// refund must work for an intent whose `reward.prover` is not a deployed
-    /// program; executability is checked on the cancellation path only.
+    /// program; executability only decides whether a proven cancellation can
+    /// take the early path.
     #[account(address = args.reward.prover @ PortalError::InvalidProver)]
     pub prover: UncheckedAccount<'info>,
     /// CHECK: address is validated
@@ -102,7 +103,6 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
     refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
 
     if refund_path == RefundPath::Cancelled {
-        require!(ctx.accounts.prover.executable, PortalError::InvalidProver);
         close_proof(
             &ctx.accounts.prover,
             &ctx.accounts.proof_closer,
@@ -127,9 +127,13 @@ fn validate_intent_status<'info>(
     }
 
     match Proof::try_from_account_info(&ctx.accounts.proof.to_account_info())? {
-        // proven cancellation for this destination: refundable immediately
+        // proven cancellation for this destination: refundable immediately,
+        // unless `reward.prover` is no longer a program that can close the
+        // proof — then the deadline still refunds it, leaving the proof open
         Some(proof) if proof.destination == destination && CANCELLED == proof.claimant => {
-            return Ok(RefundPath::Cancelled);
+            if ctx.accounts.prover.executable {
+                return Ok(RefundPath::Cancelled);
+            }
         }
         // fulfilled but not withdrawn
         Some(proof) if proof.destination == destination => {
