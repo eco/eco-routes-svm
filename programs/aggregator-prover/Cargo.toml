@@ -4,6 +4,13 @@ edition = "2021"
 name = "aggregator-prover"
 version = "0.1.0"
 
+# Pins the platform-tools for a plain `cargo build-sbf`, which is what `solana-verify build`
+# (and the remote verify-from-repo) runs: anchor-cli passes `--tools-version v1.52` itself,
+# so without this the verifiable build would pick the image's default and diverge from
+# `anchor build`. Keep the two in step.
+[package.metadata.solana]
+tools-version = "v1.52"
+
 [lib]
 crate-type = ["cdylib", "lib"]
 name = "aggregator_prover"

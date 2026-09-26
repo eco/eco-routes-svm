@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
+aggregator-prover = "EconCw1jAAqADgdvChWuySx11yDBZtLz6Wz4vgbJAuFq"
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 malicious-proof-closer = "3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp"
 malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"
@@ -19,7 +19,7 @@ portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.devnet]
-aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
+aggregator-prover = "EconCw1jAAqADgdvChWuySx11yDBZtLz6Wz4vgbJAuFq"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
@@ -28,7 +28,7 @@ polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
-aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
+aggregator-prover = "EconCw1jAAqADgdvChWuySx11yDBZtLz6Wz4vgbJAuFq"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
