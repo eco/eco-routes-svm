@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::prover;
 
-declare_id!("EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo");
+declare_id!("EcoqJaiaCnZrG7gQuvD1V6gbqz59VRNqSEjQAKYujEoV");
 
 pub mod event;
 pub mod instructions;
