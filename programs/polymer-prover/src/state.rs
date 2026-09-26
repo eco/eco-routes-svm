@@ -78,7 +78,7 @@ mod tests {
         let (pda, _) = portal::state::dispatcher_pda(&crate::ID);
         assert_eq!(
             pda.to_string(),
-            "ACL8p7ice1LimrdnB9355y54dS5gmXi5Zm675bybhU7S"
+            "HYogmguVJZgbrX6bZkUqW1jB2JuvYXF5S4gFNXCN3T4H"
         );
         goldie::assert_json!(portal::state::dispatcher_pda(&crate::ID));
     }
@@ -89,7 +89,7 @@ mod tests {
         let (pda, _) = portal::state::proof_closer_pda(&crate::ID);
         assert_eq!(
             pda.to_string(),
-            "93EzFXtxNJataBPhTEbZv21aPmr5uZwSCtRqgN7iV8SC"
+            "EWCizBs5HhnVe7bxsMyYR8Pw8xBnKXHX85JBQ12udgaW"
         );
         goldie::assert_json!(portal::state::proof_closer_pda(&crate::ID));
     }
