@@ -14,7 +14,7 @@ mock-polymer-prover = "FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3"
 flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
-polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
+polymer-prover = "EcoqJaiaCnZrG7gQuvD1V6gbqz59VRNqSEjQAKYujEoV"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
@@ -24,7 +24,7 @@ flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
-polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
+polymer-prover = "EcoqJaiaCnZrG7gQuvD1V6gbqz59VRNqSEjQAKYujEoV"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
@@ -33,7 +33,7 @@ flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
 hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
 portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
 local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
-polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
+polymer-prover = "EcoqJaiaCnZrG7gQuvD1V6gbqz59VRNqSEjQAKYujEoV"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [registry]
