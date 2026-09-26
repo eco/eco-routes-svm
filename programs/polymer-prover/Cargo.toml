@@ -39,3 +39,10 @@ goldie = { workspace = true }
 # and the EVM event selector.
 solana-keccak-hasher = { version = "3.1", features = ["sha3"] }
 solana-sha256-hasher = "3.1"
+
+# Pins the platform-tools for a plain `cargo build-sbf`, which is what `solana-verify build`
+# (and the remote verify-from-repo) runs: that path cannot pass `--tools-version`, and without
+# this it would compile with the Solana CLI's default instead of the v1.52 that anchor-cli 1.1.2
+# hard-codes and CI asserts (SBF_TOOLS_VERSION). Keep the two in step.
+[package.metadata.solana]
+tools-version = "v1.52"
