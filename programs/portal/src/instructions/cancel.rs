@@ -43,11 +43,13 @@ pub struct CancelArgs {
 /// the outcome. `prove` then carries the sentinel to the source unchanged,
 /// where it enables `refund` before `reward.deadline`.
 ///
-/// The canonical route is rebuilt the way `fulfill` rebuilds it, so a route
-/// that fits a `fulfill` transaction also fits a `cancel` one: call account
+/// The canonical route is rebuilt the way `fulfill` rebuilds it: call account
 /// keys come from the remaining accounts, deduplicated by the transaction. The
 /// signer and writable flags come from `account_flags` instead of the account
-/// infos, so the call accounts are passed read-only and unsigned. No calls are
+/// infos, so the call accounts are passed read-only and unsigned. Those flags
+/// cost one byte per call-account slot, repeats included, which `fulfill`
+/// does not pay, so a route near the transaction size limit can fit `fulfill`
+/// but not `cancel`; it then refunds from `reward.deadline` instead. No calls are
 /// executed.
 #[derive(Accounts)]
 pub struct Cancel<'info> {

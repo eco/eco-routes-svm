@@ -159,10 +159,11 @@ fn validate_intent_status<'info>(
     }
 }
 
-/// The cancellation path closes the proof, after which only `reward.deadline`
-/// makes the intent refundable again. `refund` is permissionless and sweeps only
-/// the chunks it is given, so without this a caller could close the proof while
-/// leaving reward tokens in the vault until the deadline. Extra, non-reward
+/// The cancellation path closes the proof, after which the intent is
+/// refundable again only from `reward.deadline` or after someone re-proves the
+/// cancellation. `refund` is permissionless and sweeps only the chunks it is
+/// given, so without this a caller could close the proof while leaving reward
+/// tokens in the vault. Extra, non-reward
 /// mints remain allowed, as on the other paths. Applied only before
 /// `reward.deadline`: a reward mint whose vault ATA cannot be swept (closed,
 /// frozen, non-transferable, never created) then blocks only the early
