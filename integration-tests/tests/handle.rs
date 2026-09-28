@@ -826,7 +826,19 @@ fn handle_cancellation_enables_refund_success() {
         .unwrap();
 
     let proof = Proof::pda(&intent_hash, &hyper_prover::ID).0;
-    assert!(CANCELLED == ctx.account::<ProofAccount>(&proof).unwrap().0.claimant);
+    let proof_account = ctx.account::<ProofAccount>(&proof).unwrap();
+    assert!(CANCELLED == proof_account.0.claimant);
+    // Pin the literal bytes, not just equality with the `CANCELLED` constant: a
+    // drift in the constant itself would still pass a symbolic comparison. Same
+    // 32 bytes as EVM `Inbox.CANCELLED()`.
+    assert_eq!(
+        proof_account.0.claimant.to_bytes(),
+        [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe6, 0x85,
+            0x05, 0x6a, 0xec, 0x77, 0x68, 0x6a, 0x83, 0xe2, 0xa6, 0xbd, 0xf3, 0x7c, 0x6f, 0x71,
+            0xdd, 0x2f, 0xdb, 0x5f,
+        ]
+    );
     assert!(ctx.now() < reward.deadline);
 
     let result = ctx.portal().refund_intent_with_close_proof(

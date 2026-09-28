@@ -276,6 +276,17 @@ fn prove_cancelled_intent_via_local_prover_success() {
     ))));
     let proof = ctx.account::<ProofAccount>(&proof).unwrap();
     assert!(CANCELLED == proof.0.claimant);
+    // Pin the literal bytes, not just equality with the `CANCELLED` constant: a
+    // drift in the constant itself would still pass a symbolic comparison. Same
+    // 32 bytes as EVM `Inbox.CANCELLED()`.
+    assert_eq!(
+        proof.0.claimant.to_bytes(),
+        [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe6, 0x85,
+            0x05, 0x6a, 0xec, 0x77, 0x68, 0x6a, 0x83, 0xe2, 0xa6, 0xbd, 0xf3, 0x7c, 0x6f, 0x71,
+            0xdd, 0x2f, 0xdb, 0x5f,
+        ]
+    );
     assert_eq!(proof.0.destination, CHAIN_ID);
 }
 

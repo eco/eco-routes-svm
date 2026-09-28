@@ -275,7 +275,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `prove` - Submit proof of fulfillment from destination chain
 - `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven. The cancellation path always closes the proof through the prover's `close_proof` (provers must be finalized); before `reward.deadline` it must also sweep every reward mint, from `reward.deadline` it sweeps whatever token chunks it is given. The `proof_closer` and `prover` accounts are optional and required only on the cancellation path
 - `withdraw` - Withdraw rewards after successful proof validation
-- `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes a permanent `FulfillMarker` holding the `CANCELLED` sentinel at the intent's fulfill-marker PDA; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
+- `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes a permanent `FulfillMarker` holding the `CANCELLED` sentinel (a hash-derived, unowned EVM address, byte-identical to EVM `Inbox.CANCELLED`) at the intent's fulfill-marker PDA; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
 
 #### Key Accounts:
 - `Vault` - Escrows reward tokens for intent funding

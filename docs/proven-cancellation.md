@@ -6,6 +6,11 @@ An intent whose route was never fulfilled can be cancelled on its destination af
 
 The `refund` instruction's account list and arguments change shape, and `close_fulfill_marker` is removed with the `FulfillMarker` shrinking to 41 bytes, which breaks every existing caller. This is acceptable only because each release deploys the programs under new program IDs; do not upgrade a deployed portal in place.
 
+`CANCELLED` is deliberately a valid EVM address (see below), so an old-generation source (an EVM prover, or an
+old SVM portal, which stores claimants verbatim) would treat it as a payable claimant, and a permissionless
+`withdraw` would burn the reward. Every release therefore needs a new EVM root SALT and new program IDs, and
+prover whitelists must never cross generations.
+
 ## Destination Chain
 
 ### `cancel` (new)
@@ -14,7 +19,9 @@ The `refund` instruction's account list and arguments change shape, and `close_f
 - Args: `CancelArgs { intent_hash, route, reward_hash, account_flags: Vec<u8> }`. `route` is in the same compact form `fulfill` takes: each call's `data` is a borsh `Calldata`, whose `account_count` accounts are the next remaining accounts. `account_flags` has one byte per remaining account: bit 0 (`ACCOUNT_FLAG_SIGNER`) is the committed `is_signer`, bit 1 (`ACCOUNT_FLAG_WRITABLE`) the committed `is_writable`; any other bit is rejected. The portal rebuilds each call's canonical `CalldataWithAccounts` from these and hashes the result, so a route that fits a `fulfill` transaction also fits a `cancel` one, and the original call signers are not needed. `route.portal` must equal the portal ID. A count mismatch between calls, remaining accounts and flags fails with `InvalidCalldata`; a wrong flag or key fails with `InvalidIntentHash`.
 - Permissionless, allowed only once `route.deadline < now`. It creates a `FulfillMarker { claimant: CANCELLED }` at the intent's marker PDA, the same account `fulfill` writes, so it fails with `IntentAlreadyFulfilled` if the intent was fulfilled or already cancelled (and `fulfill` fails once it is cancelled). The payer pays the marker's rent-exempt minimum (1,176,240 lamports at the default rent), and the marker is permanent: nothing can close it, which is what keeps a fulfilled intent from ever being cancelled.
 - Emits `IntentCancelled { intent_hash }`.
-- `CANCELLED` is `keccak256("eco.portal.intent.cancelled")` (`eco_svm_std::CANCELLED`), byte-identical to EVM `Inbox.CANCELLED`.
+- `CANCELLED` (`eco_svm_std::CANCELLED`) is the EVM address `0xe685056aEc77686A83E2a6bDf37c6f71dD2fdB5f` (the low
+  20 bytes of `keccak256("eco.portal.intent.cancelled")`) left-padded to 32 bytes, byte-identical to EVM
+  `Inbox.CANCELLED`. It is deliberately a valid EVM address, hash-derived so no EVM or Solana key controls it.
 
 ### `prove`
 

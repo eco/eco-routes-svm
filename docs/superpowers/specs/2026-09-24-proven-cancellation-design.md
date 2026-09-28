@@ -11,5 +11,11 @@ SVM scope, summarized:
 - **Source:** `Proof` layout and all prover programs unchanged; `withdraw` rejects `claimant == CANCELLED`;
   `refund` allows a proven cancellation immediately and CPIs `close_proof` to return the rent.
 - **Client-visible changes:** `docs/proven-cancellation.md`.
-- **Shared:** `eco-svm-std::CANCELLED` = `keccak256("eco.portal.intent.cancelled")`, golden-pinned to the EVM bytes.
-- **Release:** one atomic release under new program IDs; minor version.
+- **Shared:** `eco-svm-std::CANCELLED` = 12 zero bytes ‖ the low 20 bytes of `keccak256("eco.portal.intent.cancelled")`
+  — the EVM address `0xe685056aEc77686A83E2a6bDf37c6f71dD2fdB5f` left-padded to 32 bytes, golden-pinned to the EVM
+  bytes. It is deliberately a valid EVM address, hash-derived so no EVM or Solana key controls it; `withdraw`
+  rejects it.
+- **Release:** one atomic release under new program IDs; minor version. An old-generation source (EVM prover or
+  old SVM portal) would treat the sentinel as a payable claimant and a permissionless `withdraw` would burn the
+  reward, so every release needs new program IDs / a new EVM root SALT, and whitelists must never cross
+  generations.

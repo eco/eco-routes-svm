@@ -50,15 +50,15 @@ impl IntoIterator for Bytes32 {
 
 /// Claimant sentinel written by the destination portal's `cancel` instruction.
 ///
-/// `keccak256("eco.portal.intent.cancelled")`, byte-identical to EVM
-/// `Inbox.CANCELLED`, so a cancellation travels as an ordinary
-/// `(intent_hash, claimant)` pair on every prover. Nobody holds a key for it
-/// (it is a hash output), and its upper 12 bytes are non-zero, so EVM provers
-/// never read it as an address. On the source, a `Proof` whose claimant is
-/// `CANCELLED` is a proven cancellation: `refund` accepts it before
-/// `reward.deadline`, and `withdraw` rejects it.
+/// The EVM address `0xe685056aEc77686A83E2a6bDf37c6f71dD2fdB5f` (the low 20
+/// bytes of `keccak256("eco.portal.intent.cancelled")`), left-padded to 32
+/// bytes, byte-identical to EVM `Inbox.CANCELLED`, so a cancellation travels
+/// as an ordinary `(intent_hash, claimant)` pair on every prover. It is
+/// hash-derived, so no EVM or Solana key controls it. On the source, a
+/// `Proof` whose claimant is `CANCELLED` is a proven cancellation: `refund`
+/// accepts it before `reward.deadline`, and `withdraw` rejects it.
 pub const CANCELLED: Bytes32 = Bytes32([
-    0xa8, 0xaa, 0x89, 0x81, 0x26, 0x67, 0x9f, 0x5f, 0x17, 0x9c, 0xb3, 0xa4, 0xe6, 0x85, 0x05, 0x6a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe6, 0x85, 0x05, 0x6a,
     0xec, 0x77, 0x68, 0x6a, 0x83, 0xe2, 0xa6, 0xbd, 0xf3, 0x7c, 0x6f, 0x71, 0xdd, 0x2f, 0xdb, 0x5f,
 ]);
 
@@ -124,7 +124,10 @@ mod tests {
         hasher.update(b"eco.portal.intent.cancelled");
         hasher.finalize(&mut hash);
 
-        assert_eq!(<[u8; 32]>::from(CANCELLED), hash);
+        let mut expected = [0u8; 32];
+        expected[12..].copy_from_slice(&hash[12..]);
+
+        assert_eq!(<[u8; 32]>::from(CANCELLED), expected);
     }
 
     /// The same 32 bytes are `Inbox.CANCELLED` on EVM; a drift here makes one
@@ -135,14 +138,16 @@ mod tests {
 
         assert_eq!(
             hex,
-            "a8aa898126679f5f179cb3a4e685056aec77686a83e2a6bdf37c6f71dd2fdb5f"
+            "000000000000000000000000e685056aec77686a83e2a6bdf37c6f71dd2fdb5f"
         );
     }
 
-    /// Upper 12 bytes non-zero: EVM provers can never mistake it for an address.
+    /// Upper 12 bytes zero: `CANCELLED` is a valid (left-padded) EVM address,
+    /// so EVM provers record it as an ordinary claimant with no
+    /// cancellation-specific code.
     #[test]
-    fn cancelled_is_not_an_evm_address() {
-        assert!(CANCELLED[..12].iter().any(|byte| *byte != 0));
+    fn cancelled_upper_bytes_are_zero() {
+        assert!(CANCELLED[..12].iter().all(|byte| *byte == 0));
     }
 
     #[test]
