@@ -1,0 +1,41 @@
+[package]
+description = "Polymer-backed prover for eco-routes-svm"
+edition = "2021"
+name = "polymer-prover"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "polymer_prover"
+
+[features]
+cpi = ["no-entrypoint"]
+# polymer-prover's logs ARE the cross-chain ABI: EVM PolymerProver._processSolanaLog
+# reverts InvalidSolanaLog() on any line without a `program: ` head, and one bad line
+# aborts validateSolana for the whole batch. Anchor's dispatcher would otherwise emit
+# `Instruction: Prove` alongside the `Prove:` lines. Unlike every other program here,
+# this one must stay silent, so the feature is on by default rather than declared-only.
+default = ["no-log-ix-name"]
+idl-build = ["anchor-lang/idl-build"]
+mainnet = ["eco-svm-std/mainnet", "portal/mainnet"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+eco-svm-std = { workspace = true }
+portal = { workspace = true, features = ["no-entrypoint"] }
+
+# The k256 → getrandom path (via anchor's solana-secp256k1-recover) needs a
+# getrandom backend for the SBF target; enable the custom backend there only.
+[target.'cfg(target_os = "solana")'.dependencies]
+getrandom = { workspace = true }
+
+[dev-dependencies]
+goldie = { workspace = true }
+# Anchor 1.x's `solana_program` facade has no `hash` module; the tests take the
+# granular sha256 / keccak crates directly to re-derive Anchor discriminators
+# and the EVM event selector.
+solana-keccak-hasher = { version = "3.1", features = ["sha3"] }
+solana-sha256-hasher = "3.1"

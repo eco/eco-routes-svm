@@ -1,0 +1,26 @@
+[package]
+description = "A Portal-compatible union of an immutable prover set"
+edition = "2021"
+name = "aggregator-prover"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "aggregator_prover"
+
+[features]
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+mainnet = ["eco-svm-std/mainnet", "portal/mainnet"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+eco-svm-std = { workspace = true }
+portal = { workspace = true, features = ["no-entrypoint"] }
+
+[target.'cfg(target_os = "solana")'.dependencies]
+getrandom = { workspace = true }
