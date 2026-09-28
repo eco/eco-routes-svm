@@ -14,8 +14,8 @@ use solana_keccak_hasher::hashv;
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
-use crate::instructions::{create_fulfill_marker, now, PortalError};
-use crate::state::{executor_pda, EXECUTOR_SEED};
+use crate::instructions::{claim_fulfill_marker, now, PortalError};
+use crate::state::{executor_pda, FulfillMarker, EXECUTOR_SEED};
 use crate::types::{
     self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
@@ -86,13 +86,12 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    create_fulfill_marker(
+    claim_fulfill_marker(
         &ctx.accounts.fulfill_marker,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
         &intent_hash,
-        claimant,
-        route.deadline,
+        |bump| FulfillMarker::new(claimant, ctx.accounts.payer.key(), route.deadline, bump),
     )?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));

@@ -1,15 +1,16 @@
 use anchor_lang::prelude::{borsh, AccountMeta};
 use anchor_lang::solana_program::system_instruction;
-use anchor_lang::system_program;
+use anchor_lang::{system_program, Space};
 use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
 use local_prover::state::ProofAccount;
 use portal::events::{IntentCancelled, IntentFulfilled, IntentProven};
 use portal::instructions::PortalError;
-use portal::state::{self, FulfillMarker};
+use portal::state::{self, FulfillMarker, FulfillTombstone};
 use portal::types::{self, Call, Calldata, CalldataWithAccounts, Route};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
@@ -23,23 +24,44 @@ fn open_intent(ctx: &mut common::Context) -> (Bytes32, Route, Bytes32) {
     (intent_hash, route, reward.hash())
 }
 
+/// The cancel transaction carries exactly one signature, and LiteSVM's
+/// default fee structure charges 5000 lamports each.
+const TRANSACTION_FEE: u64 = 5_000;
+
+/// `cancel` writes the permanent tombstone directly, so the canceller pays
+/// only its rent.
 #[test]
 fn cancel_success() {
     let mut ctx = common::Context::default();
     let (intent_hash, route, reward_hash) = open_intent(&mut ctx);
     let fulfill_marker = FulfillMarker::pda(&intent_hash).0;
+    let payer = ctx.payer.pubkey();
+    let tombstone_rent = ctx
+        .get_sysvar::<Rent>()
+        .minimum_balance(8 + FulfillTombstone::INIT_SPACE);
 
     ctx.warp_to_timestamp(route.deadline as i64 + 1);
+    let payer_balance = ctx.balance(&payer);
 
     let result = ctx
         .portal()
         .cancel_intent(intent_hash, &route, reward_hash, fulfill_marker);
 
     assert!(result.is_ok_and(common::contains_event(IntentCancelled::new(intent_hash))));
-    let marker = ctx.account::<FulfillMarker>(&fulfill_marker).unwrap();
-    assert_eq!(marker.claimant, CANCELLED);
-    assert_eq!(marker.payer, ctx.payer.pubkey());
-    assert_eq!(marker.deadline, route.deadline);
+    assert!(ctx.account::<FulfillMarker>(&fulfill_marker).is_none());
+    assert_eq!(
+        ctx.account::<FulfillTombstone>(&fulfill_marker).unwrap(),
+        FulfillTombstone::new(CANCELLED)
+    );
+    assert_eq!(
+        ctx.get_account(&fulfill_marker).unwrap().data.len(),
+        8 + FulfillTombstone::INIT_SPACE
+    );
+    assert_eq!(ctx.balance(&fulfill_marker), tombstone_rent);
+    assert_eq!(
+        ctx.balance(&payer),
+        payer_balance - tombstone_rent - TRANSACTION_FEE
+    );
 }
 
 /// `fulfill` still accepts `now == route.deadline`, so `cancel` must not.
@@ -186,6 +208,10 @@ fn cancel_twice_fail() {
         .cancel_intent(intent_hash, &route, reward_hash, fulfill_marker);
 
     assert!(result.is_err_and(common::is_error(PortalError::IntentAlreadyFulfilled)));
+    assert_eq!(
+        ctx.account::<FulfillTombstone>(&fulfill_marker).unwrap(),
+        FulfillTombstone::new(CANCELLED)
+    );
 }
 
 /// Mutual exclusion from the other side: the windows are disjoint, so a
@@ -214,10 +240,8 @@ fn fulfill_after_cancel_fail() {
 
     assert!(result.is_err_and(common::is_error(PortalError::RouteExpired)));
     assert_eq!(
-        ctx.account::<FulfillMarker>(&fulfill_marker)
-            .unwrap()
-            .claimant,
-        CANCELLED
+        ctx.account::<FulfillTombstone>(&fulfill_marker).unwrap(),
+        FulfillTombstone::new(CANCELLED)
     );
 }
 
@@ -367,10 +391,8 @@ fn cancel_route_that_fits_fulfill_fits_transaction_success() {
         .send_transaction(cancel)
         .is_ok_and(common::contains_event(IntentCancelled::new(intent_hash))));
     assert_eq!(
-        ctx.account::<FulfillMarker>(&fulfill_marker)
-            .unwrap()
-            .claimant,
-        CANCELLED
+        ctx.account::<FulfillTombstone>(&fulfill_marker).unwrap(),
+        FulfillTombstone::new(CANCELLED)
     );
 
     let result = ctx.portal().prove_intent_via_local_prover(

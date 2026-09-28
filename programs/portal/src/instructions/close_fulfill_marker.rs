@@ -20,7 +20,8 @@ pub struct CloseFulfillMarkerArgs {
 /// fact fulfilled — and if that cancellation's proof reached the source before
 /// the solver's, the creator would be refunded for a delivered route. The
 /// tombstone keeps `fulfill` and `cancel` failing and keeps the claimant, so
-/// the intent also stays provable after the close.
+/// the intent also stays provable after the close. `cancel` writes a tombstone
+/// directly, so a cancelled intent has no marker to close.
 ///
 /// Solana charges rent on a 128-byte account overhead, so shrinking 81 bytes
 /// to 40 returns only about a fifth of the marker's rent.

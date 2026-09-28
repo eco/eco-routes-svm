@@ -31,17 +31,17 @@ pub fn now() -> Result<u64> {
         .expect("timestamp must fit in u64"))
 }
 
-/// Writes the intent's `FulfillMarker`, the one record both `fulfill` and
-/// `cancel` claim: whichever creates it first owns the intent, and every later
-/// attempt — including one against its closed `FulfillTombstone` — fails with
-/// `IntentAlreadyFulfilled`.
-pub(crate) fn create_fulfill_marker<'info>(
+/// Claims the intent's fulfill-marker PDA, the one record both `fulfill` (a
+/// `FulfillMarker`) and `cancel` (a `FulfillTombstone`) write: whichever
+/// creates it first owns the intent, and every later attempt fails with
+/// `IntentAlreadyFulfilled` because the PDA is occupied. `record` is built
+/// from the PDA's bump.
+pub(crate) fn claim_fulfill_marker<'info, T: AccountExt>(
     fulfill_marker: &UncheckedAccount<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
     intent_hash: &Bytes32,
-    claimant: Bytes32,
-    deadline: u64,
+    record: impl FnOnce(u8) -> T,
 ) -> Result<()> {
     let (expected_fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
     require!(
@@ -50,7 +50,7 @@ pub(crate) fn create_fulfill_marker<'info>(
     );
     let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
 
-    FulfillMarker::new(claimant, payer.key(), deadline, bump)
+    record(bump)
         .init(fulfill_marker, payer, system_program, &[&signer_seeds])
         .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
 }

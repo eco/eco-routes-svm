@@ -310,11 +310,11 @@ fn cancel_after_close_fail() {
     );
 }
 
-/// A cancelled marker closes like any other and its tombstone keeps the
-/// `CANCELLED` sentinel; `cancel_close_marker_prove_via_local_prover_success`
-/// proves such a tombstone.
+/// `cancel` already writes the permanent tombstone, so a cancelled intent has
+/// no marker to close: the close fails and leaves the sentinel and its rent
+/// untouched.
 #[test]
-fn close_cancelled_marker_keeps_sentinel_success() {
+fn close_cancelled_fulfill_marker_fail() {
     let mut ctx = common::Context::default();
     let (intent_hash, route, reward) = ctx.rand_minimal_intent(local_prover::ID);
     let fulfill_marker = FulfillMarker::pda(&intent_hash).0;
@@ -328,9 +328,10 @@ fn close_cancelled_marker_keeps_sentinel_success() {
         .portal()
         .close_fulfill_marker(intent_hash, fulfill_marker);
 
-    assert!(result.is_ok());
+    assert!(result.is_err_and(common::is_error(PortalError::InvalidFulfillMarker)));
     assert_eq!(
         ctx.account::<FulfillTombstone>(&fulfill_marker).unwrap(),
         FulfillTombstone::new(CANCELLED)
     );
+    assert_eq!(ctx.balance(&fulfill_marker), tombstone_rent(&ctx));
 }

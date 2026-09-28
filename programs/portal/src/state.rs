@@ -83,7 +83,9 @@ impl FulfillMarker {
     }
 }
 
-/// What `close_fulfill_marker` leaves at a [`FulfillMarker`]'s PDA.
+/// The permanent record at an intent's [`FulfillMarker`] PDA: what
+/// `close_fulfill_marker` shrinks a marker to, and what `cancel` writes
+/// directly, since a cancellation has no rent to reclaim later.
 ///
 /// Keeping the PDA occupied is what keeps `cancel` sound: a deleted marker is
 /// indistinguishable from "never fulfilled", so `cancel` could otherwise
@@ -95,6 +97,8 @@ impl FulfillMarker {
 pub struct FulfillTombstone {
     pub claimant: Bytes32,
 }
+
+impl AccountExt for FulfillTombstone {}
 
 /// What an intent's claimed fulfill-marker PDA holds.
 pub enum FulfillRecord {
@@ -133,7 +137,7 @@ impl FulfillRecord {
 }
 
 /// Claimant recorded for an intent on this chain, read from its live
-/// [`FulfillMarker`] or from the [`FulfillTombstone`] it was closed to.
+/// [`FulfillMarker`] or from its [`FulfillTombstone`].
 pub fn fulfillment_claimant(account: &AccountInfo) -> Result<Bytes32> {
     FulfillRecord::try_from_account_info(account).map(|record| record.claimant())
 }

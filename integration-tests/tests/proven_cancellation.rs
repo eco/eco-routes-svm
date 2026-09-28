@@ -267,10 +267,10 @@ fn cancel_prove_withdraw_tokens_via_local_prover_fail() {
         .is_none());
 }
 
-/// Closing a cancelled marker leaves a tombstone that still proves the
-/// cancellation.
+/// A cancellation is already a tombstone: there is no marker to close, and a
+/// failed close leaves it provable.
 #[test]
-fn cancel_close_marker_prove_via_local_prover_success() {
+fn cancel_close_marker_fail_prove_via_local_prover_success() {
     let mut ctx = common::Context::default();
     let (intent_hash, route, reward) = ctx.rand_minimal_intent(local_prover::ID);
     let fulfill_marker = FulfillMarker::pda(&intent_hash).0;
@@ -281,9 +281,10 @@ fn cancel_close_marker_prove_via_local_prover_success() {
     ctx.portal()
         .cancel_intent(intent_hash, &route, reward.hash(), fulfill_marker)
         .unwrap();
-    ctx.portal()
+    assert!(ctx
+        .portal()
         .close_fulfill_marker(intent_hash, fulfill_marker)
-        .unwrap();
+        .is_err_and(common::is_error(PortalError::InvalidFulfillMarker)));
     assert!(ctx.account::<FulfillTombstone>(&fulfill_marker).is_some());
 
     let result = ctx.portal().prove_intent_via_local_prover(

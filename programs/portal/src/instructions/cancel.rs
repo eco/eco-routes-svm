@@ -2,7 +2,8 @@ use anchor_lang::prelude::*;
 use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 
 use crate::events::IntentCancelled;
-use crate::instructions::{create_fulfill_marker, now, PortalError};
+use crate::instructions::{claim_fulfill_marker, now, PortalError};
+use crate::state::FulfillTombstone;
 use crate::types::{self, Calldata, CalldataWithAccounts, Route};
 
 /// `CancelArgs::account_flags` bit marking a call account as a signer.
@@ -26,12 +27,16 @@ pub struct CancelArgs {
 
 /// Permanently closes an unfulfilled intent on its destination.
 ///
-/// Writes the `CANCELLED` sentinel into the intent's `FulfillMarker` PDA, the
-/// same record `fulfill` writes, so the two are mutually exclusive by
-/// construction: whichever lands first owns the PDA and the other fails to
-/// create it. Time separates them too — `fulfill` needs
+/// Writes a `FulfillTombstone` holding the `CANCELLED` sentinel at the
+/// intent's `FulfillMarker` PDA, the same PDA `fulfill` claims, so the two are
+/// mutually exclusive by construction: whichever lands first owns the PDA and
+/// the other fails to create it. Time separates them too — `fulfill` needs
 /// `route.deadline >= now`, `cancel` needs `route.deadline < now` — so they
 /// never race.
+///
+/// The tombstone is written directly because a cancellation has nothing for
+/// `close_fulfill_marker` to reclaim later: it is already the permanent record,
+/// so the canceller pays only its rent.
 ///
 /// Permissionless: the caller chooses only *when* after the deadline, never
 /// the outcome. `prove` then carries the sentinel to the source unchanged,
@@ -44,7 +49,6 @@ pub struct CancelArgs {
 /// infos, so the call accounts are passed read-only and unsigned. No calls are
 /// executed.
 #[derive(Accounts)]
-#[instruction(args: CancelArgs)]
 pub struct Cancel<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -71,13 +75,12 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    create_fulfill_marker(
+    claim_fulfill_marker(
         &ctx.accounts.fulfill_marker,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
         &intent_hash,
-        CANCELLED,
-        route.deadline,
+        |_| FulfillTombstone::new(CANCELLED),
     )?;
 
     emit!(IntentCancelled::new(intent_hash));
