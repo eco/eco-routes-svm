@@ -12,7 +12,7 @@ The `refund` instruction's account list and arguments change shape, which breaks
 
 - Accounts: `payer` (signer, writable), `fulfill_marker` (writable, `FulfillMarker::pda(intent_hash)`), `system_program`, then every call's accounts in call order as remaining accounts, passed read-only and unsigned.
 - Args: `CancelArgs { intent_hash, route, reward_hash, account_flags: Vec<u8> }`. `route` is in the same compact form `fulfill` takes: each call's `data` is a borsh `Calldata`, whose `account_count` accounts are the next remaining accounts. `account_flags` has one byte per remaining account: bit 0 (`ACCOUNT_FLAG_SIGNER`) is the committed `is_signer`, bit 1 (`ACCOUNT_FLAG_WRITABLE`) the committed `is_writable`; any other bit is rejected. The portal rebuilds each call's canonical `CalldataWithAccounts` from these and hashes the result, so a route that fits a `fulfill` transaction also fits a `cancel` one, and the original call signers are not needed. `route.portal` must equal the portal ID. A count mismatch between calls, remaining accounts and flags fails with `InvalidCalldata`; a wrong flag or key fails with `InvalidIntentHash`.
-- Permissionless, allowed only once `route.deadline < now`. It creates the intent's `FulfillMarker` with `claimant = CANCELLED`, so it fails if the intent was fulfilled (and `fulfill` fails once it is cancelled).
+- Permissionless, allowed only once `route.deadline < now`. It creates a 40-byte `FulfillTombstone { claimant: CANCELLED }` directly at the intent's marker PDA, so it fails with `IntentAlreadyFulfilled` if the intent was fulfilled or already cancelled (and `fulfill` fails once it is cancelled). The payer pays only the tombstone's rent-exempt minimum (1,169,280 lamports at the default rent, versus 1,454,640 for a full `FulfillMarker`), and there is nothing to reclaim afterwards: the tombstone is permanent.
 - Emits `IntentCancelled { intent_hash }`.
 - `CANCELLED` is `keccak256("eco.portal.intent.cancelled")` (`eco_svm_std::CANCELLED`), byte-identical to EVM `Inbox.CANCELLED`.
 
@@ -24,19 +24,21 @@ The `refund` instruction's account list and arguments change shape, which breaks
 ### `fulfill`
 
 - Rejects `claimant == CANCELLED` with the new error `ReservedClaimant`.
-- The marker-init failure `IntentAlreadyFulfilled` (also returned by `cancel`) is raised for *any* failure to create the marker, including a payer short of SOL. Services must read the marker account's state to learn whether the intent was really fulfilled or cancelled, rather than trusting the error.
+- `IntentAlreadyFulfilled` (also returned by `cancel`) means the marker PDA is already occupied, by a live `FulfillMarker` or a `FulfillTombstone`, whether the intent was fulfilled or cancelled. Read the account's claimant to tell which (`CANCELLED` for a cancellation). A payer short of SOL does not produce it: the failed System Program CPI aborts the transaction with its own error.
 
 ### `close_fulfill_marker`
 
 - A wrong marker PDA, a marker that is not a live `FulfillMarker` (including a second close) and an account the portal does not own now all fail with `InvalidFulfillMarker` (previously `ConstraintSeeds` / `AccountNotInitialized`).
 - The marker is no longer deleted: it is shrunk in place to a 40-byte `FulfillTombstone` that keeps the claimant. The intent stays provable and both `fulfill` and `cancel` keep failing on it.
+- A cancelled intent's PDA already holds a tombstone, so closing it fails with `InvalidFulfillMarker` and leaves it unchanged.
 - `FulfillMarkerClosed.lamports` is now the partial refund (the marker's rent minus the tombstone's rent-exempt minimum), not the marker's full balance.
 
 ## Source Chain
 
 ### `refund`
 
-- Accounts, in order: `payer` (signer, writable), `creator` (writable), `vault` (writable), `proof` (**now writable**), `proof_closer` (**new**, `proof_closer_pda(reward.prover)`), `prover` (**new**, must equal `reward.prover`), `withdrawn_marker` (writable), `token_program`, `token_2022_program`, `system_program`. Then the remaining accounts: the token chunks, followed by the close-proof tail.
+- Accounts, in order: `payer` (signer, writable), `creator` (writable), `vault` (writable), `proof` (**now writable**), `proof_closer` (**new, optional**, `proof_closer_pda(reward.prover)`), `prover` (**new, optional**, must equal `reward.prover`), `withdrawn_marker` (writable), `token_program`, `token_2022_program`, `system_program`. Then the remaining accounts: the token chunks, followed by the close-proof tail.
+- `proof_closer` and `prover` are Anchor optional accounts: pass the portal program ID in their slots to omit them. Only the proven-cancellation path uses them, and it fails with `InvalidProofCloser` or `InvalidProver` when either is omitted; the withdrawn and timeout paths work without them. When passed, each is checked against its address on every path. Omitting both keeps a timeout refund within a legacy transaction: five reward mints, payer ≠ creator and no compute-budget instruction serialize to 1,232 bytes with them omitted and 1,296 bytes with them passed.
 - Args: `RefundArgs` gains `close_proof_account_count: u8`, the number of trailing remaining accounts forwarded to the prover's `close_proof`. Pass `0` when no proof is closed.
 - Paths, checked in this order:
   1. Withdrawn: refunds leftovers as before.
@@ -66,21 +68,21 @@ The `refund` instruction's account list and arguments change shape, which breaks
 
 Neither account appears in the portal IDL: the IDL only lists account types used as typed `Account<...>` fields, and `fulfill`, `cancel`, `prove` and `close_fulfill_marker` all take the marker PDA as an unchecked account. Both are Anchor accounts at `FulfillMarker::pda(intent_hash)` (seeds `[b"fulfill_marker", intent_hash]`), owned by the portal, Borsh-encoded after an 8-byte discriminator (`sha256("account:<Name>")[..8]`). Tell them apart by discriminator.
 
-`FulfillMarker` — 81 bytes, written by `fulfill` and `cancel`:
+`FulfillMarker` — 81 bytes, written by `fulfill`:
 
 | Offset | Size | Field | Notes |
 | --- | --- | --- | --- |
 | 0 | 8 | discriminator | `[226, 174, 31, 239, 112, 220, 188, 31]` |
-| 8 | 32 | `claimant` | `Bytes32`; `CANCELLED` for a cancelled intent |
+| 8 | 32 | `claimant` | `Bytes32` |
 | 40 | 32 | `payer` | `Pubkey` allowed to close the marker, and its rent target |
 | 72 | 8 | `deadline` | `u64` little-endian, `route.deadline` |
 | 80 | 1 | `bump` | PDA bump |
 
-`FulfillTombstone` — 40 bytes, left by `close_fulfill_marker`:
+`FulfillTombstone` — 40 bytes, left by `close_fulfill_marker` or written directly by `cancel`:
 
 | Offset | Size | Field | Notes |
 | --- | --- | --- | --- |
 | 0 | 8 | discriminator | `[167, 239, 111, 226, 98, 112, 202, 27]` |
-| 8 | 32 | `claimant` | `Bytes32`, copied from the closed marker |
+| 8 | 32 | `claimant` | `Bytes32`, copied from the closed marker; `CANCELLED` for a cancelled intent |
 
 `fulfill_marker_layout_deterministic` and `fulfill_tombstone_layout_deterministic` in `programs/portal/src/state.rs` pin both encodings.

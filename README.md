@@ -273,15 +273,15 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `fund` - Fund an intent with reward tokens
 - `fulfill` - Execute intent operations and mark as fulfilled
 - `prove` - Submit proof of fulfillment from destination chain
-- `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven. The cancellation path always closes the proof through the prover's `close_proof` (provers must be finalized); before `reward.deadline` it must also sweep every reward mint, from `reward.deadline` it sweeps whatever token chunks it is given
+- `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven. The cancellation path always closes the proof through the prover's `close_proof` (provers must be finalized); before `reward.deadline` it must also sweep every reward mint, from `reward.deadline` it sweeps whatever token chunks it is given. The `proof_closer` and `prover` accounts are optional and required only on the cancellation path
 - `withdraw` - Withdraw rewards after successful proof validation
-- `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes the `CANCELLED` sentinel into the intent's fulfill marker; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
+- `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes a permanent `FulfillTombstone` holding the `CANCELLED` sentinel at the intent's fulfill-marker PDA, so the canceller pays only the tombstone's rent; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
 - `close_fulfill_marker` - Reclaim part of a `FulfillMarker`'s rent once `route.deadline` has passed, by shrinking it to a `FulfillTombstone` that keeps the claimant. Signed by the marker's stored `payer`, which is also the refund target. The tombstone keeps the intent provable and blocks both `fulfill` and `cancel`.
 
 #### Key Accounts:
 - `Vault` - Escrows reward tokens for intent funding
 - `FulfillMarker` - Tracks intent fulfillment status with claimant address, plus the payer allowed to close it and the route deadline gating that close
-- `FulfillTombstone` - What `close_fulfill_marker` leaves behind: a 40-byte shrink of `FulfillMarker` that keeps only the claimant (so `prove` still works) and blocks re-fulfillment and cancellation
+- `FulfillTombstone` - What `close_fulfill_marker` leaves behind, and what `cancel` writes directly: a 40-byte record that keeps only the claimant (so `prove` still works) and blocks re-fulfillment and cancellation
 - `WithdrawnMarker` - Prevents double withdrawals of rewards
 
 ### Hyper-Prover Program
