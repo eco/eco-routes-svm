@@ -4,6 +4,7 @@ use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{event_authority_pda, Bytes32};
+use portal::state::proof_closer_pda;
 use portal::types::{Reward, Route};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
@@ -146,6 +147,8 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
+    /// Refunds without the optional `proof_closer` and `prover` accounts,
+    /// which only a proven cancellation needs.
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
@@ -158,31 +161,82 @@ impl Portal<'_> {
         creator: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
-        let args = portal::instructions::RefundArgs {
+        self.refund_intent_with_accounts(
             destination,
-            route_hash,
             reward,
-        };
-        let instruction = portal::instruction::Refund { args };
-        let accounts: Vec<_> = portal::accounts::Refund {
-            payer: self.payer.pubkey(),
-            creator,
             vault,
+            route_hash,
             proof,
             withdrawn_marker,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
+            creator,
+            None,
+            None,
+            token_transfer_accounts,
+            vec![],
+        )
+    }
+
+    /// Passes the intent's `proof_closer` and `prover`; `close_proof_accounts`
+    /// is the tail forwarded to the prover's `close_proof` on the cancellation
+    /// path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_with_close_proof(
+        &mut self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        close_proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let prover = reward.prover;
+
+        self.refund_intent_with_accounts(
+            destination,
+            reward,
+            vault,
+            route_hash,
+            proof,
+            withdrawn_marker,
+            creator,
+            Some(proof_closer_pda(&prover).0),
+            Some(prover),
+            token_transfer_accounts,
+            close_proof_accounts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_with_accounts(
+        &mut self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        proof_closer: Option<Pubkey>,
+        prover: Option<Pubkey>,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        close_proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let instruction = self.refund_intent_instruction(
+            destination,
+            reward,
+            vault,
+            route_hash,
+            proof,
+            withdrawn_marker,
+            creator,
+            proof_closer,
+            prover,
+            token_transfer_accounts,
+            close_proof_accounts,
+        );
 
         let transaction = Transaction::new(
             &[&self.payer],
@@ -197,6 +251,54 @@ impl Portal<'_> {
         );
 
         self.send_transaction(transaction)
+    }
+
+    /// A `None` optional account is passed as the portal program ID, Anchor's
+    /// placeholder for an omitted account.
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_instruction(
+        &self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        proof_closer: Option<Pubkey>,
+        prover: Option<Pubkey>,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        close_proof_accounts: Vec<AccountMeta>,
+    ) -> Instruction {
+        let args = portal::instructions::RefundArgs {
+            destination,
+            route_hash,
+            reward,
+            close_proof_account_count: close_proof_accounts.len().try_into().unwrap(),
+        };
+        let accounts: Vec<_> = portal::accounts::Refund {
+            payer: self.payer.pubkey(),
+            creator,
+            vault,
+            proof,
+            proof_closer,
+            prover,
+            withdrawn_marker,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_transfer_accounts)
+        .chain(close_proof_accounts)
+        .collect();
+
+        Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: portal::instruction::Refund { args }.data(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -339,6 +441,34 @@ impl Portal<'_> {
         call_accounts: impl IntoIterator<Item = AccountMeta>,
         additional_signers: Vec<&Keypair>,
     ) -> TransactionResult {
+        let transaction = self.fulfill_intent_transaction(
+            intent_hash,
+            route,
+            reward_hash,
+            claimant,
+            executor,
+            fulfill_marker,
+            token_accounts,
+            call_accounts,
+            additional_signers,
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fulfill_intent_transaction(
+        &self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        claimant: Bytes32,
+        executor: Pubkey,
+        fulfill_marker: Pubkey,
+        token_accounts: impl IntoIterator<Item = AccountMeta>,
+        call_accounts: impl IntoIterator<Item = AccountMeta>,
+        additional_signers: Vec<&Keypair>,
+    ) -> Transaction {
         let args = portal::instructions::FulfillArgs {
             intent_hash,
             route: route.clone(),
@@ -372,7 +502,7 @@ impl Portal<'_> {
             .chain(additional_signers)
             .collect();
 
-        let transaction = Transaction::new(
+        Transaction::new(
             &signers,
             Message::new(
                 &[
@@ -382,54 +512,103 @@ impl Portal<'_> {
                 Some(&self.payer.pubkey()),
             ),
             self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+        )
     }
 
-    pub fn close_fulfill_marker(
+    pub fn cancel_intent(
         &mut self,
         intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
         fulfill_marker: Pubkey,
     ) -> TransactionResult {
-        let payer = self.payer.pubkey();
-
-        self.close_fulfill_markers(vec![(intent_hash, fulfill_marker)], payer, vec![])
+        self.cancel_intent_with_call_accounts(
+            intent_hash,
+            route,
+            reward_hash,
+            fulfill_marker,
+            vec![],
+        )
     }
 
-    /// `payer` is the marker's stored payer (the close authority and refund
-    /// target), which is not necessarily the transaction's fee payer — the
-    /// latter is always `self.payer`.
-    pub fn close_fulfill_markers(
+    /// `route` is the compact route `fulfill` takes; `call_accounts` are the
+    /// canonical call account metas, whose flags travel in `account_flags`.
+    pub fn cancel_intent_with_call_accounts(
         &mut self,
-        markers: Vec<(Bytes32, Pubkey)>,
-        payer: Pubkey,
-        additional_signers: Vec<&Keypair>,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+        call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
-        let instructions: Vec<_> = markers
-            .into_iter()
-            .map(|(intent_hash, fulfill_marker)| Instruction {
-                program_id: portal::ID,
-                accounts: portal::accounts::CloseFulfillMarker {
-                    payer,
-                    fulfill_marker,
-                }
-                .to_account_metas(None),
-                data: portal::instruction::CloseFulfillMarker {
-                    args: portal::instructions::CloseFulfillMarkerArgs { intent_hash },
-                }
-                .data(),
-            })
-            .collect();
-
-        let signers: Vec<_> = iter::once(&self.payer).chain(additional_signers).collect();
-        let transaction = Transaction::new(
-            &signers,
-            Message::new(&instructions, Some(&self.payer.pubkey())),
-            self.svm.latest_blockhash(),
+        let transaction = self.cancel_intent_transaction(
+            intent_hash,
+            route,
+            reward_hash,
+            fulfill_marker,
+            call_accounts,
         );
 
         self.send_transaction(transaction)
+    }
+
+    pub fn cancel_intent_transaction(
+        &self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+        call_accounts: Vec<AccountMeta>,
+    ) -> Transaction {
+        let account_flags = call_accounts
+            .iter()
+            .map(|meta| {
+                (if meta.is_signer {
+                    portal::instructions::ACCOUNT_FLAG_SIGNER
+                } else {
+                    0
+                }) | (if meta.is_writable {
+                    portal::instructions::ACCOUNT_FLAG_WRITABLE
+                } else {
+                    0
+                })
+            })
+            .collect();
+        let args = portal::instructions::CancelArgs {
+            intent_hash,
+            route: route.clone(),
+            reward_hash,
+            account_flags,
+        };
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts: portal::accounts::Cancel {
+                payer: self.payer.pubkey(),
+                fulfill_marker,
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None)
+            .into_iter()
+            .chain(
+                call_accounts
+                    .iter()
+                    .map(|meta| AccountMeta::new_readonly(meta.pubkey, false)),
+            )
+            .collect(),
+            data: portal::instruction::Cancel { args }.data(),
+        };
+
+        Transaction::new(
+            &[&self.payer],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

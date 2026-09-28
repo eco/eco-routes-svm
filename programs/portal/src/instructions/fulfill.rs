@@ -9,18 +9,14 @@ use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022::extension::StateWithExtensions;
 use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
-use eco_svm_std::account::AccountExt;
-use eco_svm_std::{Bytes32, CHAIN_ID};
+use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 use solana_keccak_hasher::hashv;
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
-use crate::instructions::{now, PortalError};
-use crate::state::{executor_pda, FulfillMarker, EXECUTOR_SEED, FULFILL_MARKER_SEED};
-use crate::types::{
-    self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
-    VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
-};
+use crate::instructions::{canonical_route, claim_fulfill_marker, now, PortalError};
+use crate::state::{executor_pda, EXECUTOR_SEED};
+use crate::types::{self, Route, VecTokenTransferAccounts, VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE};
 
 /// Byte offsets of `amount` in the SPL token account layout — the only field a
 /// route call may legitimately change. Shared verbatim by token-2022's base
@@ -69,6 +65,7 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
     require!(route.deadline >= now()?, PortalError::RouteExpired);
+    require!(claimant != CANCELLED, PortalError::ReservedClaimant);
 
     let (token_transfer_accounts, call_accounts) = token_transfer_and_call_accounts(&ctx, &route)?;
     fund_executor(&ctx, &route, token_transfer_accounts)?;
@@ -86,7 +83,13 @@ pub fn fulfill_intent<'info>(ctx: Context<'info, Fulfill<'info>>, args: FulfillA
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
-    mark_fulfilled(&ctx, &intent_hash, &claimant, route.deadline)?;
+    claim_fulfill_marker(
+        &ctx.accounts.fulfill_marker,
+        &ctx.accounts.payer,
+        &ctx.accounts.system_program,
+        &intent_hash,
+        claimant,
+    )?;
 
     emit!(IntentFulfilled::new(intent_hash, claimant));
 
@@ -136,34 +139,37 @@ fn fund_executor<'info>(
     Ok(())
 }
 
+/// Executes the route's calls and rebuilds the committed route in one pass
+/// through `canonical_route`, so each call runs with exactly the accounts it
+/// commits to. The committed signer and writable flags are the call accounts'
+/// own, as the transaction passed them.
 fn execute_route_calls(
     executor: &Pubkey,
-    mut route: Route,
+    route: Route,
     call_accounts: &[AccountInfo],
 ) -> Result<Route> {
     let (_, bump) = executor_pda();
     let signer_seeds = [EXECUTOR_SEED, &[bump]];
-    let mut call_accounts = call_accounts.iter();
+    let metas: Vec<SerializableAccountMeta> = call_accounts
+        .iter()
+        .map(|account| SerializableAccountMeta {
+            pubkey: *account.key,
+            is_signer: account.is_signer,
+            is_writable: account.is_writable,
+        })
+        .collect();
 
-    route.calls.iter_mut().try_for_each(|call| {
-        let calldata = Calldata::try_from_slice(&call.data)?;
-        let call_accounts: Vec<_> = call_accounts
-            .by_ref()
-            .take(calldata.account_count as usize)
-            .map(ToAccountInfo::to_account_info)
-            .collect();
-
+    // Trailing accounts no call consumes are tolerated: a CPI target program
+    // must be present as an instruction account, but it is not part of the
+    // committed route, so it is never hashed.
+    let (route, _) = canonical_route(route, &metas, |call, calldata, accounts| {
         execute_route_call(
             executor,
             Pubkey::new_from_array(call.target.into()),
             &calldata.data,
-            &call_accounts,
+            &call_accounts[accounts],
             &signer_seeds,
-        )?;
-
-        call.data = borsh::to_vec(&CalldataWithAccounts::new(calldata, call_accounts)?)?;
-
-        Result::Ok(())
+        )
     })?;
 
     Ok(route)
@@ -252,29 +258,6 @@ fn executor_atas_digest(executor: &Pubkey, call_accounts: &[AccountInfo]) -> Res
         ])
         .to_bytes())
     })
-}
-
-fn mark_fulfilled(
-    ctx: &Context<Fulfill>,
-    intent_hash: &Bytes32,
-    claimant: &Bytes32,
-    deadline: u64,
-) -> Result<()> {
-    let (fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
-    require!(
-        ctx.accounts.fulfill_marker.key() == fulfill_marker,
-        PortalError::InvalidFulfillMarker
-    );
-    let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
-
-    FulfillMarker::new(*claimant, ctx.accounts.payer.key(), deadline, bump)
-        .init(
-            &ctx.accounts.fulfill_marker,
-            &ctx.accounts.payer,
-            &ctx.accounts.system_program,
-            &[&signer_seeds],
-        )
-        .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
 }
 
 #[cfg(test)]

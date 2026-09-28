@@ -38,11 +38,8 @@ pub mod portal {
         prove_intent(ctx, args)
     }
 
-    pub fn close_fulfill_marker(
-        ctx: Context<CloseFulfillMarker>,
-        args: CloseFulfillMarkerArgs,
-    ) -> Result<()> {
-        instructions::close_fulfill_marker(ctx, args)
+    pub fn cancel(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
+        cancel_intent(ctx, args)
     }
 }
 
