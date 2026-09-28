@@ -5,7 +5,6 @@ use eco_svm_std::Bytes32;
 use crate::state::{FulfillMarker, FULFILL_MARKER_SEED};
 
 mod cancel;
-mod close_fulfill_marker;
 mod close_proof;
 mod fulfill;
 mod fund;
@@ -16,7 +15,6 @@ mod refund;
 mod withdraw;
 
 pub use cancel::*;
-pub use close_fulfill_marker::*;
 pub use fulfill::*;
 pub use fund::*;
 pub use prove::*;
@@ -31,17 +29,16 @@ pub fn now() -> Result<u64> {
         .expect("timestamp must fit in u64"))
 }
 
-/// Claims the intent's fulfill-marker PDA, the one record both `fulfill` (a
-/// `FulfillMarker`) and `cancel` (a `FulfillTombstone`) write: whichever
+/// Claims the intent's fulfill-marker PDA, the one record both `fulfill` (the
+/// solver's claimant) and `cancel` (the `CANCELLED` sentinel) write: whichever
 /// creates it first owns the intent, and every later attempt fails with
-/// `IntentAlreadyFulfilled` because the PDA is occupied. `record` is built
-/// from the PDA's bump.
-pub(crate) fn claim_fulfill_marker<'info, T: AccountExt>(
+/// `IntentAlreadyFulfilled` because the PDA is occupied.
+pub(crate) fn claim_fulfill_marker<'info>(
     fulfill_marker: &UncheckedAccount<'info>,
     payer: &Signer<'info>,
     system_program: &Program<'info, System>,
     intent_hash: &Bytes32,
-    record: impl FnOnce(u8) -> T,
+    claimant: Bytes32,
 ) -> Result<()> {
     let (expected_fulfill_marker, bump) = FulfillMarker::pda(intent_hash);
     require!(
@@ -50,7 +47,7 @@ pub(crate) fn claim_fulfill_marker<'info, T: AccountExt>(
     );
     let signer_seeds = [FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]];
 
-    record(bump)
+    FulfillMarker::new(claimant, bump)
         .init(fulfill_marker, payer, system_program, &[&signer_seeds])
         .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
 }
@@ -85,6 +82,7 @@ pub enum PortalError {
     InvalidIntentHash,
     EmptyIntentHashes,
     // Anchor assigns error codes positionally from 6000 — append only, never insert.
+    /// Retired: no instruction returns it. Kept so every later code keeps its number.
     InvalidFulfillMarkerPayer,
     RouteNotExpired,
     /// The payout destination is not the claimant's derived ATA and the claimant

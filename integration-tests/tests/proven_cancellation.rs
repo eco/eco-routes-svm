@@ -1,11 +1,10 @@
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
-use eco_svm_std::prover::{IntentProven, Proof};
+use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
-use local_prover::state::ProofAccount;
 use portal::events::IntentRefunded;
 use portal::instructions::PortalError;
-use portal::state::{self, proof_closer_pda, FulfillMarker, FulfillTombstone, WithdrawnMarker};
+use portal::state::{self, proof_closer_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Reward, Route};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
@@ -265,44 +264,4 @@ fn cancel_prove_withdraw_tokens_via_local_prover_fail() {
     assert!(ctx
         .get_account(&WithdrawnMarker::pda(&intent_hash).0)
         .is_none());
-}
-
-/// A cancellation is already a tombstone: there is no marker to close, and a
-/// failed close leaves it provable.
-#[test]
-fn cancel_close_marker_fail_prove_via_local_prover_success() {
-    let mut ctx = common::Context::default();
-    let (intent_hash, route, reward) = ctx.rand_minimal_intent(local_prover::ID);
-    let fulfill_marker = FulfillMarker::pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
-    let cancelled = Pubkey::new_from_array(CANCELLED.into());
-
-    ctx.warp_to_timestamp(route.deadline as i64 + 1);
-    ctx.portal()
-        .cancel_intent(intent_hash, &route, reward.hash(), fulfill_marker)
-        .unwrap();
-    assert!(ctx
-        .portal()
-        .close_fulfill_marker(intent_hash, fulfill_marker)
-        .is_err_and(common::is_error(PortalError::InvalidFulfillMarker)));
-    assert!(ctx.account::<FulfillTombstone>(&fulfill_marker).is_some());
-
-    let result = ctx.portal().prove_intent_via_local_prover(
-        vec![intent_hash],
-        CHAIN_ID,
-        vec![fulfill_marker],
-        state::dispatcher_pda(&local_prover::ID).0,
-        vec![proof],
-    );
-
-    assert!(
-        result.is_ok_and(common::contains_cpi_event(IntentProven::new(
-            intent_hash,
-            cancelled,
-            CHAIN_ID,
-        )))
-    );
-    let proof: ProofAccount = ctx.account(&proof).unwrap();
-    assert_eq!(CHAIN_ID, proof.0.destination);
-    assert!(CANCELLED == proof.0.claimant);
 }

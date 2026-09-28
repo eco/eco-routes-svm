@@ -3,7 +3,6 @@ use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 
 use crate::events::IntentCancelled;
 use crate::instructions::{claim_fulfill_marker, now, PortalError};
-use crate::state::FulfillTombstone;
 use crate::types::{self, Calldata, CalldataWithAccounts, Route};
 
 /// `CancelArgs::account_flags` bit marking a call account as a signer.
@@ -27,16 +26,15 @@ pub struct CancelArgs {
 
 /// Permanently closes an unfulfilled intent on its destination.
 ///
-/// Writes a `FulfillTombstone` holding the `CANCELLED` sentinel at the
-/// intent's `FulfillMarker` PDA, the same PDA `fulfill` claims, so the two are
+/// Writes a `FulfillMarker` holding the `CANCELLED` sentinel at the intent's
+/// fulfill-marker PDA, the same PDA `fulfill` claims, so the two are
 /// mutually exclusive by construction: whichever lands first owns the PDA and
 /// the other fails to create it. Time separates them too — `fulfill` needs
 /// `route.deadline >= now`, `cancel` needs `route.deadline < now` — so they
 /// never race.
 ///
-/// The tombstone is written directly because a cancellation has nothing for
-/// `close_fulfill_marker` to reclaim later: it is already the permanent record,
-/// so the canceller pays only its rent.
+/// The marker is never closed, so a cancellation stays permanent and a
+/// cancelled intent can never be fulfilled, and vice versa.
 ///
 /// Permissionless: the caller chooses only *when* after the deadline, never
 /// the outcome. `prove` then carries the sentinel to the source unchanged,
@@ -80,7 +78,7 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
         &intent_hash,
-        |_| FulfillTombstone::new(CANCELLED),
+        CANCELLED,
     )?;
 
     emit!(IntentCancelled::new(intent_hash));

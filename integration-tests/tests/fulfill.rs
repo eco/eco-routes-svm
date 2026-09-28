@@ -171,12 +171,7 @@ fn fulfill_intent_token_transfer_success() {
     });
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
-        FulfillMarker::new(
-            claimant,
-            ctx.payer.pubkey(),
-            destination_route.deadline,
-            bump
-        )
+        FulfillMarker::new(claimant, bump)
     );
 }
 
@@ -306,12 +301,7 @@ fn fulfill_intent_token_2022_transfer_success() {
     });
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
-        FulfillMarker::new(
-            claimant,
-            ctx.payer.pubkey(),
-            destination_route.deadline,
-            bump
-        )
+        FulfillMarker::new(claimant, bump)
     );
 }
 
@@ -369,7 +359,7 @@ fn fulfill_intent_native_transfer_success() {
     assert_eq!(ctx.balance(&recipient), route.native_amount);
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
-        FulfillMarker::new(claimant, ctx.payer.pubkey(), route.deadline, bump)
+        FulfillMarker::new(claimant, bump)
     );
 }
 

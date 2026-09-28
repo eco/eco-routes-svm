@@ -65,14 +65,15 @@ impl WithdrawnMarker {
 /// `try_deserialize` of a shorter account fails with `InvalidFulfillMarker`,
 /// and the claimant it holds has no other source.
 ///
-/// `payer` is the sole authority allowed to close the marker and reclaim its
-/// rent; `deadline` is `route.deadline`, which gates that close.
+/// The marker is permanent: `fulfill` writes the solver's claimant and `cancel`
+/// writes the `CANCELLED` sentinel, and nothing ever closes it. Keeping the PDA
+/// occupied is what makes the two mutually exclusive — a closed marker is
+/// indistinguishable from "never fulfilled", so `cancel` could then succeed on
+/// a fulfilled intent and send the source a conflicting proof.
 #[account]
 #[derive(InitSpace, Debug, PartialEq, new)]
 pub struct FulfillMarker {
     pub claimant: Bytes32,
-    pub payer: Pubkey,
-    pub deadline: u64,
     pub bump: u8,
 }
 
@@ -84,63 +85,16 @@ impl FulfillMarker {
     }
 }
 
-/// The permanent record at an intent's [`FulfillMarker`] PDA: what
-/// `close_fulfill_marker` shrinks a marker to, and what `cancel` writes
-/// directly, since a cancellation has no rent to reclaim later.
-///
-/// Keeping the PDA occupied is what keeps `cancel` sound: a deleted marker is
-/// indistinguishable from "never fulfilled", so `cancel` could otherwise
-/// succeed on a fulfilled intent after its solver reclaimed rent. It also
-/// keeps `fulfill` failing, and it keeps `claimant`, so the intent stays
-/// provable after the close.
-#[account]
-#[derive(InitSpace, Debug, PartialEq, new)]
-pub struct FulfillTombstone {
-    pub claimant: Bytes32,
-}
-
-impl AccountExt for FulfillTombstone {}
-
-/// What an intent's claimed fulfill-marker PDA holds.
-pub enum FulfillRecord {
-    Marker(FulfillMarker),
-    Tombstone(FulfillTombstone),
-}
-
-impl FulfillRecord {
-    /// Reads a portal-owned [`FulfillMarker`] or [`FulfillTombstone`],
-    /// matching the discriminator first so only the stored type is decoded.
-    pub fn try_from_account_info(account: &AccountInfo) -> Result<Self> {
-        require!(
-            account.owner == &crate::ID,
-            PortalError::InvalidFulfillMarker
-        );
-        let data = account.try_borrow_data()?;
-
-        match &data[..] {
-            data if data.starts_with(FulfillMarker::DISCRIMINATOR) => {
-                FulfillMarker::try_deserialize_unchecked(&mut &data[..]).map(Self::Marker)
-            }
-            data if data.starts_with(FulfillTombstone::DISCRIMINATOR) => {
-                FulfillTombstone::try_deserialize_unchecked(&mut &data[..]).map(Self::Tombstone)
-            }
-            _ => return err!(PortalError::InvalidFulfillMarker),
-        }
-        .map_err(|_| PortalError::InvalidFulfillMarker.into())
-    }
-
-    pub fn claimant(&self) -> Bytes32 {
-        match self {
-            Self::Marker(marker) => marker.claimant,
-            Self::Tombstone(tombstone) => tombstone.claimant,
-        }
-    }
-}
-
-/// Claimant recorded for an intent on this chain, read from its live
-/// [`FulfillMarker`] or from its [`FulfillTombstone`].
+/// Claimant recorded for an intent on this chain: the solver's, or `CANCELLED`.
 pub fn fulfillment_claimant(account: &AccountInfo) -> Result<Bytes32> {
-    FulfillRecord::try_from_account_info(account).map(|record| record.claimant())
+    require!(
+        account.owner == &crate::ID,
+        PortalError::InvalidFulfillMarker
+    );
+
+    FulfillMarker::try_deserialize(&mut &account.try_borrow_data()?[..])
+        .map(|marker| marker.claimant)
+        .map_err(|_| PortalError::InvalidFulfillMarker.into())
 }
 
 #[cfg(test)]
@@ -214,29 +168,11 @@ mod tests {
     /// would not catch. Each field gets a distinct byte pattern.
     #[test]
     fn fulfill_marker_layout_deterministic() {
-        let marker = FulfillMarker::new(
-            [1u8; 32].into(),
-            Pubkey::new_from_array([2u8; 32]),
-            0x0304050607080910,
-            11,
-        );
+        let marker = FulfillMarker::new([1u8; 32].into(), 11);
 
         goldie::assert_json!((
             8 + FulfillMarker::INIT_SPACE,
             borsh::to_vec(&marker).unwrap()
-        ));
-    }
-
-    /// Pins size, discriminator and field order: `prove` reads `claimant` out
-    /// of a tombstone, so all three are ABI.
-    #[test]
-    fn fulfill_tombstone_layout_deterministic() {
-        let tombstone = FulfillTombstone::new([1u8; 32].into());
-
-        goldie::assert_json!((
-            8 + FulfillTombstone::INIT_SPACE,
-            FulfillTombstone::DISCRIMINATOR,
-            borsh::to_vec(&tombstone).unwrap()
         ));
     }
 

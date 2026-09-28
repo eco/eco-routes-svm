@@ -49,18 +49,6 @@ pub struct IntentProven {
     claimant: Bytes32,
 }
 
-/// Emitted when a marker is shrunk to its tombstone. `lamports` is what was
-/// returned to `payer`; the tombstone keeps `claimant`, recorded here too so
-/// the event stream is a complete audit record.
-#[event]
-#[derive(new)]
-pub struct FulfillMarkerClosed {
-    intent_hash: Bytes32,
-    payer: Pubkey,
-    claimant: Bytes32,
-    lamports: u64,
-}
-
 #[event]
 #[derive(new)]
 pub struct IntentCancelled {
