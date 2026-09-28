@@ -194,33 +194,30 @@ fn cancel_after_fulfill_fail() {
 }
 
 #[test]
-fn cancel_twice_fail() {
+fn cancel_twice_is_noop_success() {
     let mut ctx = common::Context::default();
     let (intent_hash, route, reward_hash) = open_intent(&mut ctx);
     let fulfill_marker = FulfillMarker::pda(&intent_hash).0;
+    let payer = ctx.payer.pubkey();
 
     ctx.warp_to_timestamp(route.deadline as i64 + 1);
     ctx.portal()
         .cancel_intent(intent_hash, &route, reward_hash, fulfill_marker)
         .unwrap();
+    let marker = ctx.get_account(&fulfill_marker).unwrap();
+    let payer_balance = ctx.balance(&payer);
 
     let result = ctx
         .portal()
         .cancel_intent(intent_hash, &route, reward_hash, fulfill_marker);
 
-    assert!(result.is_err_and(common::is_error(
-        PortalError::IntentAlreadyFulfilledOrCancelled
-    )));
-    assert_eq!(
-        ctx.account::<FulfillMarker>(&fulfill_marker)
-            .unwrap()
-            .claimant,
-        CANCELLED
+    assert!(
+        result.is_ok_and(|meta| !common::contains_event(IntentCancelled::new(intent_hash))(meta))
     );
+    assert_eq!(ctx.get_account(&fulfill_marker).unwrap(), marker);
+    assert_eq!(ctx.balance(&payer), payer_balance - TRANSACTION_FEE);
 }
 
-/// Mutual exclusion from the other side: the windows are disjoint, so a
-/// cancelled intent is already past the point where `fulfill` would accept it.
 #[test]
 fn fulfill_after_cancel_fail() {
     let mut ctx = common::Context::default();

@@ -3,6 +3,7 @@ use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 
 use crate::events::IntentCancelled;
 use crate::instructions::{canonical_route, claim_fulfill_marker, now, PortalError};
+use crate::state::{fulfillment_claimant, FulfillMarker};
 use crate::types::{self, Route};
 
 /// `CancelArgs::account_flags` bit marking a call account as a signer.
@@ -34,7 +35,9 @@ pub struct CancelArgs {
 /// never race.
 ///
 /// The marker is never closed, so a cancellation stays permanent and a
-/// cancelled intent can never be fulfilled, and vice versa.
+/// cancelled intent can never be fulfilled, and vice versa. Cancelling an
+/// already-cancelled intent is a no-op, so a front-run `cancel` never fails a
+/// `cancel` + `prove` transaction.
 ///
 /// Permissionless: the caller chooses only *when* after the deadline, never
 /// the outcome. `prove` then carries the sentinel to the source unchanged,
@@ -86,6 +89,9 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
         intent_hash == expected_intent_hash,
         PortalError::InvalidIntentHash
     );
+    if is_cancelled(&ctx.accounts.fulfill_marker, &intent_hash)? {
+        return Ok(());
+    }
     claim_fulfill_marker(
         &ctx.accounts.fulfill_marker,
         &ctx.accounts.payer,
@@ -97,6 +103,21 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
     emit!(IntentCancelled::new(intent_hash));
 
     Ok(())
+}
+
+/// True when the intent's fulfill marker already holds `CANCELLED`. A marker
+/// holding a solver's claimant reads false, so `claim_fulfill_marker` then
+/// fails with `IntentAlreadyFulfilledOrCancelled`.
+fn is_cancelled(fulfill_marker: &UncheckedAccount, intent_hash: &Bytes32) -> Result<bool> {
+    if fulfill_marker.owner != &crate::ID {
+        return Ok(false);
+    }
+    require!(
+        fulfill_marker.key() == FulfillMarker::pda(intent_hash).0,
+        PortalError::InvalidFulfillMarker
+    );
+
+    Ok(fulfillment_claimant(fulfill_marker)? == CANCELLED)
 }
 
 /// A flag may carry only the two defined bits, so a route has one accepted
