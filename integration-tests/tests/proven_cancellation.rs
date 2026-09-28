@@ -7,6 +7,7 @@ use portal::instructions::PortalError;
 use portal::state::{self, proof_closer_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Reward, Route};
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 pub mod common;
@@ -56,8 +57,16 @@ fn reward_token_accounts(
 fn cancelled_and_proven_intent(
     ctx: &mut common::Context,
     with_reward_tokens: bool,
+    reward_prover: Pubkey,
 ) -> (Route, Reward, Bytes32) {
-    let (_, route, mut reward) = ctx.rand_minimal_intent(local_prover::ID);
+    if reward_prover == aggregator_prover::ID {
+        let authority = Keypair::new();
+        ctx.aggregator_prover().install(authority.pubkey());
+        ctx.aggregator_prover()
+            .init(&authority, vec![local_prover::ID])
+            .unwrap();
+    }
+    let (_, route, mut reward) = ctx.rand_minimal_intent(reward_prover);
     if !with_reward_tokens {
         reward.tokens.clear();
     }
@@ -96,6 +105,11 @@ fn cancelled_and_proven_intent(
             vec![Proof::pda(&intent_hash, &local_prover::ID).0],
         )
         .unwrap();
+    if reward_prover == aggregator_prover::ID {
+        ctx.aggregator_prover()
+            .aggregate(intent_hash, local_prover::ID)
+            .unwrap();
+    }
 
     (route, reward, intent_hash)
 }
@@ -103,7 +117,8 @@ fn cancelled_and_proven_intent(
 #[test]
 fn cancel_prove_refund_via_local_prover_before_reward_deadline_success() {
     let mut ctx = common::Context::default();
-    let (route, reward, intent_hash) = cancelled_and_proven_intent(&mut ctx, false);
+    let (route, reward, intent_hash) =
+        cancelled_and_proven_intent(&mut ctx, false, local_prover::ID);
     let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
     let payer = ctx.payer.pubkey();
     let payer_balance = ctx.balance(&payer);
@@ -135,13 +150,48 @@ fn cancel_prove_refund_via_local_prover_before_reward_deadline_success() {
     );
 }
 
+#[test]
+fn cancel_prove_aggregate_refund_before_reward_deadline_success() {
+    let mut ctx = common::Context::default();
+    let (route, reward, intent_hash) =
+        cancelled_and_proven_intent(&mut ctx, false, aggregator_prover::ID);
+    let member_proof = Proof::pda(&intent_hash, &local_prover::ID).0;
+    let aggregate_proof = Proof::pda(&intent_hash, &aggregator_prover::ID).0;
+    let payer = ctx.payer.pubkey();
+
+    assert!(ctx.now() < reward.deadline);
+    assert!(ctx.get_account(&member_proof).is_some());
+    assert!(ctx.get_account(&aggregate_proof).is_some());
+
+    let result = ctx.portal().refund_intent_with_close_proof(
+        CHAIN_ID,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route.hash(),
+        aggregate_proof,
+        WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+        vec![AccountMeta::new(payer, true)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&aggregate_proof).is_none());
+    assert!(ctx.get_account(&member_proof).is_some());
+}
+
 /// The real fast path always sweeps tokens alongside the close-proof tail:
 /// the creator is paid, the vault ATAs are closed and the proof is closed in
 /// the same refund.
 #[test]
 fn cancel_prove_refund_tokens_via_local_prover_before_reward_deadline_success() {
     let mut ctx = common::Context::default();
-    let (route, reward, intent_hash) = cancelled_and_proven_intent(&mut ctx, true);
+    let (route, reward, intent_hash) =
+        cancelled_and_proven_intent(&mut ctx, true, local_prover::ID);
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
     let creator = reward.creator;
@@ -198,7 +248,8 @@ fn cancel_prove_refund_tokens_via_local_prover_before_reward_deadline_success() 
 #[test]
 fn cancel_prove_withdraw_via_local_prover_fail() {
     let mut ctx = common::Context::default();
-    let (route, reward, intent_hash) = cancelled_and_proven_intent(&mut ctx, false);
+    let (route, reward, intent_hash) =
+        cancelled_and_proven_intent(&mut ctx, false, local_prover::ID);
     let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
     let cancelled = Pubkey::new_from_array(CANCELLED.into());
     let payer = ctx.payer.pubkey();
@@ -227,7 +278,8 @@ fn cancel_prove_withdraw_via_local_prover_fail() {
 #[test]
 fn cancel_prove_withdraw_tokens_via_local_prover_fail() {
     let mut ctx = common::Context::default();
-    let (route, reward, intent_hash) = cancelled_and_proven_intent(&mut ctx, true);
+    let (route, reward, intent_hash) =
+        cancelled_and_proven_intent(&mut ctx, true, local_prover::ID);
     let vault = state::vault_pda(&intent_hash).0;
     let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
     let cancelled = Pubkey::new_from_array(CANCELLED.into());
