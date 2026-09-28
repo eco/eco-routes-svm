@@ -2,8 +2,8 @@ use anchor_lang::prelude::*;
 use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 
 use crate::events::IntentCancelled;
-use crate::instructions::{claim_fulfill_marker, now, PortalError};
-use crate::types::{self, Calldata, CalldataWithAccounts, Route};
+use crate::instructions::{canonical_route, claim_fulfill_marker, now, PortalError};
+use crate::types::{self, Route};
 
 /// `CancelArgs::account_flags` bit marking a call account as a signer.
 pub const ACCOUNT_FLAG_SIGNER: u8 = 1 << 0;
@@ -67,7 +67,20 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
     require!(route.deadline < now()?, PortalError::RouteNotExpired);
 
-    let route = canonical_route(route, ctx.remaining_accounts, &account_flags)?;
+    require!(
+        ctx.remaining_accounts.len() == account_flags.len(),
+        PortalError::InvalidCalldata
+    );
+    let metas = ctx
+        .remaining_accounts
+        .iter()
+        .zip(account_flags)
+        .map(|(account, flags)| account_meta(account.key(), flags))
+        .collect::<Result<Vec<_>>>()?;
+    let (route, consumed) = canonical_route(route, &metas, |_, _, _| Ok(()))?;
+    // Every account and flag must belong to a call, so a route has one
+    // accepted encoding.
+    require!(consumed == metas.len(), PortalError::InvalidCalldata);
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     require!(
         intent_hash == expected_intent_hash,
@@ -86,41 +99,8 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
     Ok(())
 }
 
-/// Rebuilds each call's `CalldataWithAccounts` from its compact `Calldata`,
-/// consuming `call_accounts` and `account_flags` in step. Every account and
-/// flag must be consumed exactly once, and a flag may carry only the two
-/// defined bits, so a route has one accepted encoding.
-fn canonical_route(
-    mut route: Route,
-    call_accounts: &[AccountInfo],
-    account_flags: &[u8],
-) -> Result<Route> {
-    require!(
-        call_accounts.len() == account_flags.len(),
-        PortalError::InvalidCalldata
-    );
-
-    let mut metas = call_accounts
-        .iter()
-        .zip(account_flags)
-        .map(|(account, flags)| account_meta(account.key(), *flags));
-
-    route.calls.iter_mut().try_for_each(|call| {
-        let calldata = Calldata::try_from_slice(&call.data)?;
-        let accounts = metas
-            .by_ref()
-            .take(calldata.account_count as usize)
-            .collect::<Result<Vec<_>>>()?;
-
-        call.data = borsh::to_vec(&CalldataWithAccounts::new(calldata, accounts)?)?;
-
-        Result::Ok(())
-    })?;
-    require!(metas.next().is_none(), PortalError::InvalidCalldata);
-
-    Ok(route)
-}
-
+/// A flag may carry only the two defined bits, so a route has one accepted
+/// encoding.
 fn account_meta(pubkey: Pubkey, flags: u8) -> Result<SerializableAccountMeta> {
     require!(
         flags & !(ACCOUNT_FLAG_SIGNER | ACCOUNT_FLAG_WRITABLE) == 0,

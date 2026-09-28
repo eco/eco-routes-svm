@@ -9,17 +9,14 @@ use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022::extension::StateWithExtensions;
 use anchor_spl::token_2022::spl_token_2022::state::Account as Token2022Account;
 use anchor_spl::{associated_token, token, token_2022};
-use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
+use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 use solana_keccak_hasher::hashv;
 
 use crate::events::IntentFulfilled;
 use crate::instructions::fund_context::FundTokenContext;
-use crate::instructions::{claim_fulfill_marker, now, PortalError};
+use crate::instructions::{canonical_route, claim_fulfill_marker, now, PortalError};
 use crate::state::{executor_pda, EXECUTOR_SEED};
-use crate::types::{
-    self, Calldata, CalldataWithAccounts, Route, VecTokenTransferAccounts,
-    VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
-};
+use crate::types::{self, Route, VecTokenTransferAccounts, VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE};
 
 /// Byte offsets of `amount` in the SPL token account layout — the only field a
 /// route call may legitimately change. Shared verbatim by token-2022's base
@@ -142,34 +139,37 @@ fn fund_executor<'info>(
     Ok(())
 }
 
+/// Executes the route's calls and rebuilds the committed route in one pass
+/// through `canonical_route`, so each call runs with exactly the accounts it
+/// commits to. The committed signer and writable flags are the call accounts'
+/// own, as the transaction passed them.
 fn execute_route_calls(
     executor: &Pubkey,
-    mut route: Route,
+    route: Route,
     call_accounts: &[AccountInfo],
 ) -> Result<Route> {
     let (_, bump) = executor_pda();
     let signer_seeds = [EXECUTOR_SEED, &[bump]];
-    let mut call_accounts = call_accounts.iter();
+    let metas: Vec<SerializableAccountMeta> = call_accounts
+        .iter()
+        .map(|account| SerializableAccountMeta {
+            pubkey: *account.key,
+            is_signer: account.is_signer,
+            is_writable: account.is_writable,
+        })
+        .collect();
 
-    route.calls.iter_mut().try_for_each(|call| {
-        let calldata = Calldata::try_from_slice(&call.data)?;
-        let call_accounts: Vec<_> = call_accounts
-            .by_ref()
-            .take(calldata.account_count as usize)
-            .map(ToAccountInfo::to_account_info)
-            .collect();
-
+    // Trailing accounts no call consumes are tolerated: a CPI target program
+    // must be present as an instruction account, but it is not part of the
+    // committed route, so it is never hashed.
+    let (route, _) = canonical_route(route, &metas, |call, calldata, accounts| {
         execute_route_call(
             executor,
             Pubkey::new_from_array(call.target.into()),
             &calldata.data,
-            &call_accounts,
+            &call_accounts[accounts],
             &signer_seeds,
-        )?;
-
-        call.data = borsh::to_vec(&CalldataWithAccounts::new(calldata, call_accounts)?)?;
-
-        Result::Ok(())
+        )
     })?;
 
     Ok(route)

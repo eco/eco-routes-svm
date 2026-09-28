@@ -1050,6 +1050,66 @@ fn fulfill_intent_invalid_calldata_fail() {
     )));
 }
 
+/// A trailing account no call consumes is accepted and never hashed: it is how
+/// a solver supplies a CPI target program the route does not commit.
+#[test]
+fn fulfill_intent_unconsumed_trailing_account_success() {
+    let mut ctx = common::Context::default();
+    let (_, mut route, _) = ctx.rand_intent();
+    route.tokens.clear();
+    let reward_hash = rand::random::<[u8; 32]>().into();
+    let recipient = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
+    let executor = state::executor_pda().0;
+    let solver = ctx.solver.pubkey();
+
+    ctx.airdrop(&solver, route.native_amount).unwrap();
+    let calldata = Calldata {
+        data: system_instruction::transfer(&executor, &recipient, route.native_amount).data,
+        account_count: 3,
+    };
+    let call_accounts = vec![
+        AccountMeta::new(executor, false),
+        AccountMeta::new(recipient, false),
+        AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+    ];
+    let calldata_with_accounts =
+        CalldataWithAccounts::new(calldata.clone(), call_accounts.clone()).unwrap();
+
+    let source_route = route_with_calldatas_with_accounts(
+        route.clone(),
+        vec![(system_program::ID, calldata_with_accounts)],
+    );
+    let route_native_amount = route.native_amount;
+    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
+    let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
+
+    let mut accounts = call_accounts;
+    accounts.push(AccountMeta::new_readonly(Pubkey::new_unique(), false));
+    let result = ctx.portal().fulfill_intent(
+        intent_hash,
+        &destination_route,
+        reward_hash,
+        claimant,
+        executor,
+        fulfill_marker,
+        vec![],
+        accounts,
+    );
+    assert!(
+        result.is_ok_and(common::contains_event(IntentFulfilled::new(
+            intent_hash,
+            claimant
+        )))
+    );
+    assert_eq!(ctx.balance(&recipient), route_native_amount);
+    assert_eq!(
+        ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
+        FulfillMarker::new(claimant, bump)
+    );
+}
+
 #[test]
 fn fulfill_intent_already_fulfilled_fail() {
     let mut ctx = common::Context::default();
