@@ -866,6 +866,49 @@ fn refund_intent_expired_with_non_program_prover_success() {
     assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
 }
 
+/// A `prover` that is passed must be executable, even on the timeout path that
+/// never calls it; omitting it (the portal ID in its slot) still refunds.
+#[test]
+fn refund_intent_expired_passed_non_program_prover_fail() {
+    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+
+    let result = ctx.portal().refund_intent_with_accounts(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        Proof::pda(&intent_hash, &reward.prover).0,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        None,
+        Some(reward.prover),
+        vec![],
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        anchor_lang::error::ErrorCode::ConstraintExecutable
+    )));
+    assert_eq!(ctx.balance(&reward.creator), 0);
+
+    let result = ctx.portal().refund_intent(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        Proof::pda(&intent_hash, &reward.prover).0,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+}
+
 /// `refund` is permissionless and sweeps only the token chunks it is given, so
 /// the cancellation fast path — which closes the proof — must sweep every
 /// reward mint; otherwise the unswept tokens would sit in the vault until
@@ -908,7 +951,8 @@ fn refund_intent_cancelled_missing_reward_mint_fail() {
 }
 
 /// A cancelled refund closes the proof through `reward.prover`, so a prover
-/// that is not a program is rejected on either side of `reward.deadline`.
+/// that is not a program is rejected on either side of `reward.deadline`, by
+/// Anchor's `executable` constraint on the `prover` account.
 #[test]
 fn refund_intent_cancelled_non_program_prover_fail() {
     let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
@@ -935,7 +979,7 @@ fn refund_intent_cancelled_non_program_prover_fail() {
         );
 
         assert!(result.is_err_and(common::is_error(
-            portal::instructions::PortalError::InvalidProver
+            anchor_lang::error::ErrorCode::ConstraintExecutable
         )));
         assert!(ctx.get_account(&proof).is_some());
         assert_eq!(ctx.balance(&reward.creator), 0);

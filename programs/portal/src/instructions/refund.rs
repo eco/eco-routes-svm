@@ -44,10 +44,11 @@ pub struct Refund<'info> {
     /// only to close a cancelled proof; the other paths may omit it.
     #[account(address = proof_closer_pda(&args.reward.prover).0 @ PortalError::InvalidProofCloser)]
     pub proof_closer: Option<UncheckedAccount<'info>>,
-    /// CHECK: address is validated. Required only to close a cancelled proof,
-    /// the one place it must also be executable: a timeout refund must work
-    /// for an intent whose `reward.prover` is not a deployed program.
-    #[account(address = args.reward.prover @ PortalError::InvalidProver)]
+    /// CHECK: address is validated. If passed it must be executable. Required
+    /// only to close a cancelled proof; omit it on the paths that don't, so a
+    /// timeout refund works for an intent whose `reward.prover` is not a
+    /// deployed program.
+    #[account(executable, address = args.reward.prover @ PortalError::InvalidProver)]
     pub prover: Option<UncheckedAccount<'info>>,
     /// CHECK: address is validated
     #[account(mut)]
@@ -113,7 +114,6 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
             .accounts
             .prover
             .as_ref()
-            .filter(|prover| prover.executable)
             .ok_or(PortalError::InvalidProver)?;
 
         close_proof(
@@ -144,19 +144,19 @@ fn validate_intent_status<'info>(
     match Proof::try_from_account_info(&ctx.accounts.proof.to_account_info())? {
         // proven cancellation for this destination: refundable immediately
         Some(proof) if proof.destination == destination && CANCELLED == proof.claimant => {
-            return Ok(RefundPath::Cancelled { expired });
+            Ok(RefundPath::Cancelled { expired })
         }
         // fulfilled but not withdrawn
         Some(proof) if proof.destination == destination => {
-            return Err(PortalError::IntentFulfilledAndNotWithdrawn.into());
+            Err(PortalError::IntentFulfilledAndNotWithdrawn.into())
         }
         // no proof, or a proof for another destination
-        _ => {}
+        _ => {
+            require!(expired, PortalError::RewardNotExpired);
+
+            Ok(RefundPath::Expired)
+        }
     }
-
-    require!(expired, PortalError::RewardNotExpired);
-
-    Ok(RefundPath::Expired)
 }
 
 /// The cancellation path closes the proof, after which only `reward.deadline`
