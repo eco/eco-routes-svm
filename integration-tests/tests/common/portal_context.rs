@@ -147,6 +147,8 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
+    /// Refunds without the optional `proof_closer` and `prover` accounts,
+    /// which only a proven cancellation needs.
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
@@ -159,7 +161,7 @@ impl Portal<'_> {
         creator: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
-        self.refund_intent_with_close_proof(
+        self.refund_intent_with_accounts(
             destination,
             reward,
             vault,
@@ -167,13 +169,16 @@ impl Portal<'_> {
             proof,
             withdrawn_marker,
             creator,
+            None,
+            None,
             token_transfer_accounts,
             vec![],
         )
     }
 
-    /// `close_proof_accounts` is the tail forwarded to the prover's
-    /// `close_proof` on the cancellation path.
+    /// Passes the intent's `proof_closer` and `prover`; `close_proof_accounts`
+    /// is the tail forwarded to the prover's `close_proof` on the cancellation
+    /// path.
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent_with_close_proof(
         &mut self,
@@ -188,35 +193,50 @@ impl Portal<'_> {
         close_proof_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
         let prover = reward.prover;
-        let args = portal::instructions::RefundArgs {
+
+        self.refund_intent_with_accounts(
             destination,
-            route_hash,
             reward,
-            close_proof_account_count: close_proof_accounts.len().try_into().unwrap(),
-        };
-        let instruction = portal::instruction::Refund { args };
-        let accounts: Vec<_> = portal::accounts::Refund {
-            payer: self.payer.pubkey(),
-            creator,
             vault,
+            route_hash,
             proof,
-            proof_closer: proof_closer_pda(&prover).0,
-            prover,
             withdrawn_marker,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .chain(close_proof_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
+            creator,
+            Some(proof_closer_pda(&prover).0),
+            Some(prover),
+            token_transfer_accounts,
+            close_proof_accounts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_with_accounts(
+        &mut self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        proof_closer: Option<Pubkey>,
+        prover: Option<Pubkey>,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        close_proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let instruction = self.refund_intent_instruction(
+            destination,
+            reward,
+            vault,
+            route_hash,
+            proof,
+            withdrawn_marker,
+            creator,
+            proof_closer,
+            prover,
+            token_transfer_accounts,
+            close_proof_accounts,
+        );
 
         let transaction = Transaction::new(
             &[&self.payer],
@@ -231,6 +251,54 @@ impl Portal<'_> {
         );
 
         self.send_transaction(transaction)
+    }
+
+    /// A `None` optional account is passed as the portal program ID, Anchor's
+    /// placeholder for an omitted account.
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_instruction(
+        &self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        proof_closer: Option<Pubkey>,
+        prover: Option<Pubkey>,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        close_proof_accounts: Vec<AccountMeta>,
+    ) -> Instruction {
+        let args = portal::instructions::RefundArgs {
+            destination,
+            route_hash,
+            reward,
+            close_proof_account_count: close_proof_accounts.len().try_into().unwrap(),
+        };
+        let accounts: Vec<_> = portal::accounts::Refund {
+            payer: self.payer.pubkey(),
+            creator,
+            vault,
+            proof,
+            proof_closer,
+            prover,
+            withdrawn_marker,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_transfer_accounts)
+        .chain(close_proof_accounts)
+        .collect();
+
+        Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: portal::instruction::Refund { args }.data(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

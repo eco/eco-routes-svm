@@ -28,8 +28,9 @@ pub fn dispatcher_pda(prover: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[DISPATCHER_SEED, prover.as_ref()], &crate::ID)
 }
 
-/// Per-prover authority: `withdraw` signs this into the caller-chosen prover's
-/// `close_proof` CPI, and each prover accepts only `proof_closer_pda(&its_own_id)`.
+/// Per-prover authority: `withdraw`, and `refund` of a proven cancellation, sign
+/// this into the caller-chosen prover's `close_proof` CPI, and each prover accepts
+/// only `proof_closer_pda(&its_own_id)`.
 /// The prover binding is a security boundary — keep it seeded by the prover and
 /// do not collapse it to a single shared PDA.
 pub fn proof_closer_pda(prover: &Pubkey) -> (Pubkey, u8) {
