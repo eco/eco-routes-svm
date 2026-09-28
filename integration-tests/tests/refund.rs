@@ -908,9 +908,9 @@ fn refund_intent_cancelled_missing_reward_mint_fail() {
 }
 
 /// A cancelled refund closes the proof through `reward.prover`, so a prover
-/// that is not a program is rejected.
+/// that is not a program is rejected on either side of `reward.deadline`.
 #[test]
-fn refund_intent_cancelled_before_deadline_non_program_prover_fail() {
+fn refund_intent_cancelled_non_program_prover_fail() {
     let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
     let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
@@ -919,23 +919,27 @@ fn refund_intent_cancelled_before_deadline_non_program_prover_fail() {
     ctx.set_proof(proof, cancelled_proof(destination), reward.prover);
     let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
 
-    let result = ctx.portal().refund_intent_with_close_proof(
-        destination,
-        reward.clone(),
-        vault,
-        route_hash,
-        proof,
-        state::WithdrawnMarker::pda(&intent_hash).0,
-        reward.creator,
-        token_accounts,
-        vec![AccountMeta::new(pda_payer_pda().0, false)],
-    );
+    for now in [ctx.now(), reward.deadline + 1] {
+        ctx.warp_to_timestamp(now as i64);
 
-    assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidProver
-    )));
-    assert!(ctx.get_account(&proof).is_some());
-    assert_eq!(ctx.balance(&reward.creator), 0);
+        let result = ctx.portal().refund_intent_with_close_proof(
+            destination,
+            reward.clone(),
+            vault,
+            route_hash,
+            proof,
+            state::WithdrawnMarker::pda(&intent_hash).0,
+            reward.creator,
+            token_accounts.clone(),
+            vec![AccountMeta::new(pda_payer_pda().0, false)],
+        );
+
+        assert!(result.is_err_and(common::is_error(
+            portal::instructions::PortalError::InvalidProver
+        )));
+        assert!(ctx.get_account(&proof).is_some());
+        assert_eq!(ctx.balance(&reward.creator), 0);
+    }
 }
 
 /// From `reward.deadline` a cancelled refund needs no reward mint swept, but
@@ -1207,6 +1211,153 @@ fn refund_intent_invalid_prover_fail() {
         )));
         assert_eq!(ctx.balance(&reward.creator), 0);
     }
+}
+
+/// Sweeps every reward in a cancelled refund before `reward.deadline` and
+/// asserts it all reached the creator and the proof was closed.
+fn assert_cancelled_fast_refund_success(
+    ctx: &mut common::Context,
+    destination: u64,
+    reward: &Reward,
+    route_hash: Bytes32,
+    token_accounts: Vec<AccountMeta>,
+) {
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    assert!(ctx.now() < reward.deadline);
+
+    let result = ctx.portal().refund_intent_with_close_proof(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert_eq!(ctx.balance(&vault), 0);
+    reward.tokens.iter().for_each(|token| {
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &reward.creator),
+            token.amount
+        );
+    });
+    assert!(ctx.get_account(&proof).is_none());
+}
+
+/// The all-mints check derives vault ATAs under each mint's own token
+/// program, so Token-2022 rewards pass it too.
+#[test]
+fn refund_intent_cancelled_tokens_2022_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(true);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+
+    assert_eq!(ctx.token_program, anchor_spl::token_2022::ID);
+    ctx.set_proof(
+        Proof::pda(&intent_hash, &reward.prover).0,
+        cancelled_proof(destination),
+        hyper_prover::ID,
+    );
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    assert_cancelled_fast_refund_success(
+        &mut ctx,
+        destination,
+        &reward,
+        route_hash,
+        token_accounts,
+    );
+}
+
+/// A zero-amount reward entry is still a reward mint, so its (empty) vault
+/// ATA must be swept too.
+#[test]
+fn refund_intent_cancelled_zero_amount_reward_token_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) =
+        setup_with_reward(false, hyper_prover::ID, |_, reward| {
+            reward.tokens[0].amount = 0
+        });
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    assert_eq!(ctx.token_balance_ata(&reward.tokens[0].token, &vault), 0);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    let result = ctx.portal().refund_intent_with_close_proof(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts[3..].to_vec(),
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::InvalidMint
+    )));
+    assert!(ctx.get_account(&proof).is_some());
+
+    assert_cancelled_fast_refund_success(
+        &mut ctx,
+        destination,
+        &reward,
+        route_hash,
+        token_accounts,
+    );
+}
+
+/// A non-reward token sitting in the vault may be swept alongside the reward
+/// mints; it neither satisfies nor breaks the all-mints check.
+#[test]
+fn refund_intent_cancelled_extra_token_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let extra = portal::types::TokenAmount {
+        token: Pubkey::new_unique(),
+        amount: 1_000,
+    };
+
+    ctx.set_mint_account(&extra.token);
+    ctx.airdrop_token_ata(&extra.token, &vault, extra.amount);
+    ctx.set_proof(
+        Proof::pda(&intent_hash, &reward.prover).0,
+        cancelled_proof(destination),
+        hyper_prover::ID,
+    );
+    let token_accounts = refund_token_accounts(
+        &mut ctx,
+        &[reward.tokens.clone(), vec![extra.clone()]].concat(),
+        &vault,
+        &reward.creator,
+    );
+
+    assert_cancelled_fast_refund_success(
+        &mut ctx,
+        destination,
+        &reward,
+        route_hash,
+        token_accounts,
+    );
+    assert_eq!(
+        ctx.token_balance_ata(&extra.token, &reward.creator),
+        extra.amount
+    );
 }
 
 /// Solana's wire limit for a serialized legacy or v0 transaction.
