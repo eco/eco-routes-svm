@@ -96,22 +96,46 @@ pub struct FulfillTombstone {
     pub claimant: Bytes32,
 }
 
+/// What an intent's claimed fulfill-marker PDA holds.
+pub enum FulfillRecord {
+    Marker(FulfillMarker),
+    Tombstone(FulfillTombstone),
+}
+
+impl FulfillRecord {
+    /// Reads a portal-owned [`FulfillMarker`] or [`FulfillTombstone`],
+    /// matching the discriminator first so only the stored type is decoded.
+    pub fn try_from_account_info(account: &AccountInfo) -> Result<Self> {
+        require!(
+            account.owner == &crate::ID,
+            PortalError::InvalidFulfillMarker
+        );
+        let data = account.try_borrow_data()?;
+
+        match &data[..] {
+            data if data.starts_with(FulfillMarker::DISCRIMINATOR) => {
+                FulfillMarker::try_deserialize_unchecked(&mut &data[..]).map(Self::Marker)
+            }
+            data if data.starts_with(FulfillTombstone::DISCRIMINATOR) => {
+                FulfillTombstone::try_deserialize_unchecked(&mut &data[..]).map(Self::Tombstone)
+            }
+            _ => return err!(PortalError::InvalidFulfillMarker),
+        }
+        .map_err(|_| PortalError::InvalidFulfillMarker.into())
+    }
+
+    pub fn claimant(&self) -> Bytes32 {
+        match self {
+            Self::Marker(marker) => marker.claimant,
+            Self::Tombstone(tombstone) => tombstone.claimant,
+        }
+    }
+}
+
 /// Claimant recorded for an intent on this chain, read from its live
 /// [`FulfillMarker`] or from the [`FulfillTombstone`] it was closed to.
 pub fn fulfillment_claimant(account: &AccountInfo) -> Result<Bytes32> {
-    require!(
-        account.owner == &crate::ID,
-        PortalError::InvalidFulfillMarker
-    );
-    let data = account.try_borrow_data()?;
-
-    if let Ok(marker) = FulfillMarker::try_deserialize(&mut &data[..]) {
-        return Ok(marker.claimant);
-    }
-
-    FulfillTombstone::try_deserialize(&mut &data[..])
-        .map(|tombstone| tombstone.claimant)
-        .map_err(|_| PortalError::InvalidFulfillMarker.into())
+    FulfillRecord::try_from_account_info(account).map(|record| record.claimant())
 }
 
 #[cfg(test)]

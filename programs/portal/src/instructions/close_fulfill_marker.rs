@@ -3,7 +3,7 @@ use eco_svm_std::Bytes32;
 
 use crate::events::FulfillMarkerClosed;
 use crate::instructions::{now, PortalError};
-use crate::state::{FulfillMarker, FulfillTombstone};
+use crate::state::{FulfillMarker, FulfillRecord, FulfillTombstone, FULFILL_MARKER_SEED};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CloseFulfillMarkerArgs {
@@ -53,22 +53,23 @@ pub fn close_fulfill_marker(
     let fulfill_marker = &ctx.accounts.fulfill_marker;
     let payer = &ctx.accounts.payer;
 
-    require!(
-        fulfill_marker.key() == FulfillMarker::pda(&intent_hash).0,
-        PortalError::InvalidFulfillMarker
-    );
-    require!(
-        fulfill_marker.owner == &crate::ID,
-        PortalError::InvalidFulfillMarker
-    );
-    let FulfillMarker {
+    let FulfillRecord::Marker(FulfillMarker {
         claimant,
         payer: marker_payer,
         deadline,
-        ..
-    } = FulfillMarker::try_deserialize(&mut &fulfill_marker.try_borrow_data()?[..])
-        .map_err(|_| Error::from(PortalError::InvalidFulfillMarker))?;
-
+        bump,
+    }) = FulfillRecord::try_from_account_info(fulfill_marker)?
+    else {
+        return err!(PortalError::InvalidFulfillMarker);
+    };
+    require!(
+        Pubkey::create_program_address(
+            &[FULFILL_MARKER_SEED, intent_hash.as_ref(), &[bump]],
+            &crate::ID,
+        )
+        .is_ok_and(|expected| expected == fulfill_marker.key()),
+        PortalError::InvalidFulfillMarker
+    );
     require!(
         marker_payer == payer.key(),
         PortalError::InvalidFulfillMarkerPayer
