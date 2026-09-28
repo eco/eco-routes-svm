@@ -69,6 +69,45 @@ fn close_fulfill_marker_success() {
     );
 }
 
+/// Lamports above the marker's rent-exempt minimum are returned too: the
+/// tombstone keeps exactly its own rent.
+#[test]
+fn close_fulfill_marker_surplus_lamports_success() {
+    let mut ctx = common::Context::default();
+    let intent = ctx.fulfill_rand_intents(1, local_prover::ID).remove(0);
+    let fulfill_marker = FulfillMarker::pda(&intent.intent_hash).0;
+    let payer = ctx.payer.pubkey();
+    let surplus = 1_000_000;
+    let claimant = ctx
+        .account::<FulfillMarker>(&fulfill_marker)
+        .unwrap()
+        .claimant;
+
+    ctx.airdrop(&fulfill_marker, surplus).unwrap();
+    assert_eq!(ctx.balance(&fulfill_marker), marker_rent(&ctx) + surplus);
+    let refund = marker_rent(&ctx) + surplus - tombstone_rent(&ctx);
+    ctx.warp_to_timestamp(intent.route.deadline as i64 + 1);
+    let payer_balance = ctx.balance(&payer);
+
+    let result = ctx
+        .portal()
+        .close_fulfill_marker(intent.intent_hash, fulfill_marker);
+
+    assert!(
+        result.is_ok_and(common::contains_event(FulfillMarkerClosed::new(
+            intent.intent_hash,
+            payer,
+            claimant,
+            refund,
+        )))
+    );
+    assert_eq!(ctx.balance(&fulfill_marker), tombstone_rent(&ctx));
+    assert_eq!(
+        ctx.balance(&payer),
+        payer_balance + refund - TRANSACTION_FEE
+    );
+}
+
 #[test]
 fn close_fulfill_marker_batch_success() {
     let mut ctx = common::Context::default();

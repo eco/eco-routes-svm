@@ -20,6 +20,15 @@ fn setup_with_prover(
     is_token_2022: bool,
     prover: Pubkey,
 ) -> (common::Context, u64, Reward, Bytes32) {
+    setup_with_reward_tokens(is_token_2022, prover, None)
+}
+
+/// `reward_token_count` keeps only the first that many reward tokens.
+fn setup_with_reward_tokens(
+    is_token_2022: bool,
+    prover: Pubkey,
+    reward_token_count: Option<usize>,
+) -> (common::Context, u64, Reward, Bytes32) {
     let mut ctx = if is_token_2022 {
         common::Context::new_with_token_2022()
     } else {
@@ -27,6 +36,9 @@ fn setup_with_prover(
     };
     let (destination, _, mut reward) = ctx.rand_intent();
     reward.prover = prover;
+    if let Some(count) = reward_token_count {
+        reward.tokens.truncate(count);
+    }
     let route_hash = random::<[u8; 32]>().into();
     let funder = ctx.funder.pubkey();
     let vault_pda = state::vault_pda(&intent_hash(destination, &route_hash, &reward.hash())).0;
@@ -679,6 +691,93 @@ fn refund_intent_cancelled_before_deadline_success() {
     });
     assert!(ctx.get_account(&proof).is_none());
     assert_eq!(ctx.balance(&pda_payer), pda_payer_balance + proof_rent);
+}
+
+/// The all-mints rule with a single reward mint: sweeping it is sufficient.
+#[test]
+fn refund_intent_cancelled_single_token_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) =
+        setup_with_reward_tokens(false, hyper_prover::ID, Some(1));
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let token = reward.tokens[0].clone();
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+    assert!(ctx.now() < reward.deadline);
+
+    let result = ctx.portal().refund_intent_with_close_proof(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert_eq!(ctx.balance(&vault), 0);
+    assert_eq!(
+        ctx.token_balance_ata(&token.token, &reward.creator),
+        token.amount
+    );
+    assert!(ctx.get_account(&proof).is_none());
+}
+
+/// The cancellation refund consumes the proof, so a second refund before
+/// `reward.deadline` finds no proof and falls back to the deadline: nothing
+/// moves twice.
+#[test]
+fn refund_intent_cancelled_twice_before_deadline_fail() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+    ctx.portal()
+        .refund_intent_with_close_proof(
+            destination,
+            reward.clone(),
+            vault,
+            route_hash,
+            proof,
+            withdrawn_marker,
+            reward.creator,
+            token_accounts,
+            vec![AccountMeta::new(pda_payer_pda().0, false)],
+        )
+        .unwrap();
+    let creator_balance = ctx.balance(&reward.creator);
+
+    let result = ctx.portal().refund_intent_with_close_proof(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        withdrawn_marker,
+        reward.creator,
+        vec![],
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::RewardNotExpired
+    )));
+    assert_eq!(ctx.balance(&reward.creator), creator_balance);
+    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&withdrawn_marker).is_none());
 }
 
 /// A cancellation proven for another destination is not this intent's
