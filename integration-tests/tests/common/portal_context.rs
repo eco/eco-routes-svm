@@ -373,6 +373,34 @@ impl Portal<'_> {
         call_accounts: impl IntoIterator<Item = AccountMeta>,
         additional_signers: Vec<&Keypair>,
     ) -> TransactionResult {
+        let transaction = self.fulfill_intent_transaction(
+            intent_hash,
+            route,
+            reward_hash,
+            claimant,
+            executor,
+            fulfill_marker,
+            token_accounts,
+            call_accounts,
+            additional_signers,
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fulfill_intent_transaction(
+        &self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        claimant: Bytes32,
+        executor: Pubkey,
+        fulfill_marker: Pubkey,
+        token_accounts: impl IntoIterator<Item = AccountMeta>,
+        call_accounts: impl IntoIterator<Item = AccountMeta>,
+        additional_signers: Vec<&Keypair>,
+    ) -> Transaction {
         let args = portal::instructions::FulfillArgs {
             intent_hash,
             route: route.clone(),
@@ -406,7 +434,7 @@ impl Portal<'_> {
             .chain(additional_signers)
             .collect();
 
-        let transaction = Transaction::new(
+        Transaction::new(
             &signers,
             Message::new(
                 &[
@@ -416,9 +444,7 @@ impl Portal<'_> {
                 Some(&self.payer.pubkey()),
             ),
             self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+        )
     }
 
     pub fn cancel_intent(
@@ -428,10 +454,63 @@ impl Portal<'_> {
         reward_hash: Bytes32,
         fulfill_marker: Pubkey,
     ) -> TransactionResult {
+        self.cancel_intent_with_call_accounts(
+            intent_hash,
+            route,
+            reward_hash,
+            fulfill_marker,
+            vec![],
+        )
+    }
+
+    /// `route` is the compact route `fulfill` takes; `call_accounts` are the
+    /// canonical call account metas, whose flags travel in `account_flags`.
+    pub fn cancel_intent_with_call_accounts(
+        &mut self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+        call_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let transaction = self.cancel_intent_transaction(
+            intent_hash,
+            route,
+            reward_hash,
+            fulfill_marker,
+            call_accounts,
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn cancel_intent_transaction(
+        &self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+        call_accounts: Vec<AccountMeta>,
+    ) -> Transaction {
+        let account_flags = call_accounts
+            .iter()
+            .map(|meta| {
+                (if meta.is_signer {
+                    portal::instructions::ACCOUNT_FLAG_SIGNER
+                } else {
+                    0
+                }) | (if meta.is_writable {
+                    portal::instructions::ACCOUNT_FLAG_WRITABLE
+                } else {
+                    0
+                })
+            })
+            .collect();
         let args = portal::instructions::CancelArgs {
             intent_hash,
             route: route.clone(),
             reward_hash,
+            account_flags,
         };
         let instruction = Instruction {
             program_id: portal::ID,
@@ -440,11 +519,18 @@ impl Portal<'_> {
                 fulfill_marker,
                 system_program: anchor_lang::system_program::ID,
             }
-            .to_account_metas(None),
+            .to_account_metas(None)
+            .into_iter()
+            .chain(
+                call_accounts
+                    .iter()
+                    .map(|meta| AccountMeta::new_readonly(meta.pubkey, false)),
+            )
+            .collect(),
             data: portal::instruction::Cancel { args }.data(),
         };
 
-        let transaction = Transaction::new(
+        Transaction::new(
             &[&self.payer],
             Message::new(
                 &[
@@ -454,9 +540,7 @@ impl Portal<'_> {
                 Some(&self.payer.pubkey()),
             ),
             self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+        )
     }
 
     pub fn close_fulfill_marker(

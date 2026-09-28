@@ -1,15 +1,27 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
+use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
 
 use crate::events::IntentCancelled;
 use crate::instructions::{create_fulfill_marker, now, PortalError};
-use crate::types::{self, Route};
+use crate::types::{self, Calldata, CalldataWithAccounts, Route};
+
+/// `CancelArgs::account_flags` bit marking a call account as a signer.
+pub const ACCOUNT_FLAG_SIGNER: u8 = 1 << 0;
+/// `CancelArgs::account_flags` bit marking a call account as writable.
+pub const ACCOUNT_FLAG_WRITABLE: u8 = 1 << 1;
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CancelArgs {
     pub intent_hash: Bytes32,
+    /// The route in `fulfill`'s compact form: each call's `data` is a borsh
+    /// `Calldata`, and its accounts are the next `account_count` remaining
+    /// accounts.
     pub route: Route,
     pub reward_hash: Bytes32,
+    /// One entry per remaining account, in order: the `is_signer`
+    /// (`ACCOUNT_FLAG_SIGNER`) and `is_writable` (`ACCOUNT_FLAG_WRITABLE`) flags
+    /// the source committed to for that call account.
+    pub account_flags: Vec<u8>,
 }
 
 /// Permanently closes an unfulfilled intent on its destination.
@@ -25,8 +37,12 @@ pub struct CancelArgs {
 /// the outcome. `prove` then carries the sentinel to the source unchanged,
 /// where it enables `refund` before `reward.deadline`.
 ///
-/// `route` is the canonical route the source committed to; it is hashed as
-/// passed (no calls are executed).
+/// The canonical route is rebuilt the way `fulfill` rebuilds it, so a route
+/// that fits a `fulfill` transaction also fits a `cancel` one: call account
+/// keys come from the remaining accounts, deduplicated by the transaction. The
+/// signer and writable flags come from `account_flags` instead of the account
+/// infos, so the call accounts are passed read-only and unsigned. No calls are
+/// executed.
 #[derive(Accounts)]
 #[instruction(args: CancelArgs)]
 pub struct Cancel<'info> {
@@ -43,11 +59,13 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
         intent_hash: expected_intent_hash,
         route,
         reward_hash,
+        account_flags,
     } = args;
 
     require!(route.portal == crate::ID, PortalError::InvalidPortal);
     require!(route.deadline < now()?, PortalError::RouteNotExpired);
 
+    let route = canonical_route(route, ctx.remaining_accounts, &account_flags)?;
     let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
     require!(
         intent_hash == expected_intent_hash,
@@ -65,4 +83,52 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
     emit!(IntentCancelled::new(intent_hash));
 
     Ok(())
+}
+
+/// Rebuilds each call's `CalldataWithAccounts` from its compact `Calldata`,
+/// consuming `call_accounts` and `account_flags` in step. Every account and
+/// flag must be consumed exactly once, and a flag may carry only the two
+/// defined bits, so a route has one accepted encoding.
+fn canonical_route(
+    mut route: Route,
+    call_accounts: &[AccountInfo],
+    account_flags: &[u8],
+) -> Result<Route> {
+    require!(
+        call_accounts.len() == account_flags.len(),
+        PortalError::InvalidCalldata
+    );
+
+    let mut metas = call_accounts
+        .iter()
+        .zip(account_flags)
+        .map(|(account, flags)| account_meta(account.key(), *flags));
+
+    route.calls.iter_mut().try_for_each(|call| {
+        let calldata = Calldata::try_from_slice(&call.data)?;
+        let accounts = metas
+            .by_ref()
+            .take(calldata.account_count as usize)
+            .collect::<Result<Vec<_>>>()?;
+
+        call.data = borsh::to_vec(&CalldataWithAccounts::new(calldata, accounts)?)?;
+
+        Result::Ok(())
+    })?;
+    require!(metas.next().is_none(), PortalError::InvalidCalldata);
+
+    Ok(route)
+}
+
+fn account_meta(pubkey: Pubkey, flags: u8) -> Result<SerializableAccountMeta> {
+    require!(
+        flags & !(ACCOUNT_FLAG_SIGNER | ACCOUNT_FLAG_WRITABLE) == 0,
+        PortalError::InvalidCalldata
+    );
+
+    Ok(SerializableAccountMeta {
+        pubkey,
+        is_signer: flags & ACCOUNT_FLAG_SIGNER != 0,
+        is_writable: flags & ACCOUNT_FLAG_WRITABLE != 0,
+    })
 }

@@ -10,8 +10,8 @@ The `refund` instruction's account list and arguments change shape, which breaks
 
 ### `cancel` (new)
 
-- Accounts: `payer` (signer, writable), `fulfill_marker` (writable, `FulfillMarker::pda(intent_hash)`), `system_program`.
-- Args: `CancelArgs { intent_hash, route, reward_hash }`. `route` must be the canonical route the source committed to, with `route.portal` equal to the portal ID.
+- Accounts: `payer` (signer, writable), `fulfill_marker` (writable, `FulfillMarker::pda(intent_hash)`), `system_program`, then every call's accounts in call order as remaining accounts, passed read-only and unsigned.
+- Args: `CancelArgs { intent_hash, route, reward_hash, account_flags: Vec<u8> }`. `route` is in the same compact form `fulfill` takes: each call's `data` is a borsh `Calldata`, whose `account_count` accounts are the next remaining accounts. `account_flags` has one byte per remaining account: bit 0 (`ACCOUNT_FLAG_SIGNER`) is the committed `is_signer`, bit 1 (`ACCOUNT_FLAG_WRITABLE`) the committed `is_writable`; any other bit is rejected. The portal rebuilds each call's canonical `CalldataWithAccounts` from these and hashes the result, so a route that fits a `fulfill` transaction also fits a `cancel` one, and the original call signers are not needed. `route.portal` must equal the portal ID. A count mismatch between calls, remaining accounts and flags fails with `InvalidCalldata`; a wrong flag or key fails with `InvalidIntentHash`.
 - Permissionless, allowed only once `route.deadline < now`. It creates the intent's `FulfillMarker` with `claimant = CANCELLED`, so it fails if the intent was fulfilled (and `fulfill` fails once it is cancelled).
 - Emits `IntentCancelled { intent_hash }`.
 - `CANCELLED` is `keccak256("eco.portal.intent.cancelled")` (`eco_svm_std::CANCELLED`), byte-identical to EVM `Inbox.CANCELLED`.
