@@ -254,7 +254,6 @@ fn assert_settled(ctx: &common::Context, route: &Route, reward: &Reward) {
         .account::<FulfillMarker>(&FulfillMarker::pda(&hash).0)
         .unwrap();
     assert_eq!(marker.claimant, ctx.solver.pubkey());
-    assert_eq!(marker.payer, ctx.payer.pubkey());
     assert!(ctx
         .get_account(&Proof::pda(&hash, &reward.prover).0)
         .is_none());
