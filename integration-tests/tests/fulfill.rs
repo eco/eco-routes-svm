@@ -1088,7 +1088,7 @@ fn fulfill_intent_already_fulfilled_fail() {
         vec![],
     );
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::IntentAlreadyFulfilled
+        portal::instructions::PortalError::IntentAlreadyFulfilledOrCancelled
     )));
 }
 

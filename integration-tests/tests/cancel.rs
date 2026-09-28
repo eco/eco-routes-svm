@@ -182,7 +182,9 @@ fn cancel_after_fulfill_fail() {
         fulfill_marker,
     );
 
-    assert!(result.is_err_and(common::is_error(PortalError::IntentAlreadyFulfilled)));
+    assert!(result.is_err_and(common::is_error(
+        PortalError::IntentAlreadyFulfilledOrCancelled
+    )));
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker)
             .unwrap()
@@ -206,7 +208,9 @@ fn cancel_twice_fail() {
         .portal()
         .cancel_intent(intent_hash, &route, reward_hash, fulfill_marker);
 
-    assert!(result.is_err_and(common::is_error(PortalError::IntentAlreadyFulfilled)));
+    assert!(result.is_err_and(common::is_error(
+        PortalError::IntentAlreadyFulfilledOrCancelled
+    )));
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker)
             .unwrap()

@@ -17,7 +17,7 @@ prover whitelists must never cross generations.
 
 - Accounts: `payer` (signer, writable), `fulfill_marker` (writable, `FulfillMarker::pda(intent_hash)`), `system_program`, then every call's accounts in call order as remaining accounts, passed read-only and unsigned.
 - Args: `CancelArgs { intent_hash, route, reward_hash, account_flags: Vec<u8> }`. `route` is in the same compact form `fulfill` takes: each call's `data` is a borsh `Calldata`, whose `account_count` accounts are the next remaining accounts. `account_flags` has one byte per remaining account: bit 0 (`ACCOUNT_FLAG_SIGNER`) is the committed `is_signer`, bit 1 (`ACCOUNT_FLAG_WRITABLE`) the committed `is_writable`; any other bit is rejected. The portal rebuilds each call's canonical `CalldataWithAccounts` from these and hashes the result, so a route that fits a `fulfill` transaction also fits a `cancel` one, and the original call signers are not needed. `route.portal` must equal the portal ID. A count mismatch between calls, remaining accounts and flags fails with `InvalidCalldata`; a wrong flag or key fails with `InvalidIntentHash`.
-- Permissionless, allowed only once `route.deadline < now`. It creates a `FulfillMarker { claimant: CANCELLED }` at the intent's marker PDA, the same account `fulfill` writes, so it fails with `IntentAlreadyFulfilled` if the intent was fulfilled or already cancelled (and `fulfill` fails once it is cancelled). The payer pays the marker's rent-exempt minimum (1,176,240 lamports at the default rent), and the marker is permanent: nothing can close it, which is what keeps a fulfilled intent from ever being cancelled.
+- Permissionless, allowed only once `route.deadline < now`. It creates a `FulfillMarker { claimant: CANCELLED }` at the intent's marker PDA, the same account `fulfill` writes, so it fails with `IntentAlreadyFulfilledOrCancelled` if the intent was fulfilled or already cancelled (and `fulfill` fails once it is cancelled). The payer pays the marker's rent-exempt minimum (1,176,240 lamports at the default rent), and the marker is permanent: nothing can close it, which is what keeps a fulfilled intent from ever being cancelled.
 - Emits `IntentCancelled { intent_hash }`.
 - `CANCELLED` (`eco_svm_std::CANCELLED`) is the EVM address `0xe685056aEc77686A83E2a6bDf37c6f71dD2fdB5f` (the low
   20 bytes of `keccak256("eco.portal.intent.cancelled")`) left-padded to 32 bytes, byte-identical to EVM
@@ -31,7 +31,7 @@ prover whitelists must never cross generations.
 ### `fulfill`
 
 - Rejects `claimant == CANCELLED` with the new error `ReservedClaimant`.
-- `IntentAlreadyFulfilled` (also returned by `cancel`) means the marker PDA is already occupied, whether the intent was fulfilled or cancelled. Read the marker's claimant to tell which (`CANCELLED` for a cancellation). A payer short of SOL does not produce it: the failed System Program CPI aborts the transaction with its own error.
+- `IntentAlreadyFulfilledOrCancelled` (also returned by `cancel`) means the marker PDA is already occupied, whether the intent was fulfilled or cancelled. Read the marker's claimant to tell which (`CANCELLED` for a cancellation). A payer short of SOL does not produce it: the failed System Program CPI aborts the transaction with its own error.
 
 ### `close_fulfill_marker` (removed)
 

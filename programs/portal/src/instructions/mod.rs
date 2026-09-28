@@ -32,7 +32,7 @@ pub fn now() -> Result<u64> {
 /// Claims the intent's fulfill-marker PDA, the one record both `fulfill` (the
 /// solver's claimant) and `cancel` (the `CANCELLED` sentinel) write: whichever
 /// creates it first owns the intent, and every later attempt fails with
-/// `IntentAlreadyFulfilled` because the PDA is occupied.
+/// `IntentAlreadyFulfilledOrCancelled` because the PDA is occupied.
 pub(crate) fn claim_fulfill_marker<'info>(
     fulfill_marker: &UncheckedAccount<'info>,
     payer: &Signer<'info>,
@@ -49,7 +49,7 @@ pub(crate) fn claim_fulfill_marker<'info>(
 
     FulfillMarker::new(claimant, bump)
         .init(fulfill_marker, payer, system_program, &[&signer_seeds])
-        .map_err(|_| PortalError::IntentAlreadyFulfilled.into())
+        .map_err(|_| PortalError::IntentAlreadyFulfilledOrCancelled.into())
 }
 
 #[error_code]
@@ -67,7 +67,7 @@ pub enum PortalError {
     InvalidProof,
     IntentFulfilledAndNotWithdrawn,
     IntentAlreadyWithdrawn,
-    IntentAlreadyFulfilled,
+    IntentAlreadyFulfilledOrCancelled,
     IntentNotFulfilled,
     InvalidCreatorToken,
     InvalidClaimantToken,
