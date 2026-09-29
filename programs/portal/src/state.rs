@@ -28,13 +28,9 @@ pub fn dispatcher_pda(prover: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[DISPATCHER_SEED, prover.as_ref()], &crate::ID)
 }
 
-/// Per-prover authority: `withdraw`, and `refund` of a proven cancellation, sign
-/// this into the caller-chosen prover's `close_proof` CPI, and each prover accepts
-/// only `proof_closer_pda(&its_own_id)`.
-/// The prover binding is a security boundary — keep it seeded by the prover and
-/// do not collapse it to a single shared PDA.
-pub fn proof_closer_pda(prover: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[PROOF_CLOSER_SEED, prover.as_ref()], &crate::ID)
+/// Delegated cleanup authority, restricted to one intent across prover CPIs.
+pub fn proof_closer_pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROOF_CLOSER_SEED, intent_hash.as_ref()], &crate::ID)
 }
 
 #[account]
@@ -44,6 +40,26 @@ pub struct WithdrawnMarker {}
 impl AccountExt for WithdrawnMarker {}
 
 impl WithdrawnMarker {
+    pub fn exists(account: &AccountInfo, intent_hash: &Bytes32) -> Result<bool> {
+        require_keys_eq!(
+            account.key(),
+            Self::pda(intent_hash).0,
+            PortalError::InvalidWithdrawnMarker
+        );
+        if account.data_is_empty() {
+            return Ok(false);
+        }
+        require_keys_eq!(
+            *account.owner,
+            crate::ID,
+            PortalError::InvalidWithdrawnMarker
+        );
+        Self::try_deserialize(&mut account.try_borrow_data()?.as_ref())
+            .map_err(|_| PortalError::InvalidWithdrawnMarker)?;
+
+        Ok(true)
+    }
+
     pub fn pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[CLAIMED_MARKER_SEED, intent_hash.as_ref()], &crate::ID)
     }
@@ -178,6 +194,6 @@ mod tests {
 
     #[test]
     fn proof_closer_pda_deterministic() {
-        goldie::assert_json!(proof_closer_pda(&Pubkey::new_from_array([9u8; 32])));
+        goldie::assert_json!(proof_closer_pda(&[9u8; 32].into()));
     }
 }

@@ -92,10 +92,6 @@ pub struct FlashFulfill<'info> {
     /// CHECK: validated by portal.withdraw against WithdrawnMarker::pda(intent_hash)
     #[account(mut)]
     pub withdrawn_marker: UncheckedAccount<'info>,
-    /// CHECK: validated by portal.withdraw against `proof_closer_pda(&reward.prover)`.
-    /// `local_prover_program` is executable-only here, so the caller must supply the
-    /// closer scoped to whichever prover they passed.
-    pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: validated by portal.fulfill against executor_pda()
     #[account(mut)]
     pub executor: UncheckedAccount<'info>,
@@ -220,7 +216,6 @@ pub fn flash_fulfill<'info>(
         &ctx.accounts.flash_vault.to_account_info(),
         &ctx.accounts.intent_vault.to_account_info(),
         &ctx.accounts.proof.to_account_info(),
-        &ctx.accounts.proof_closer.to_account_info(),
         &ctx.accounts.local_prover_program.to_account_info(),
         &ctx.accounts.withdrawn_marker.to_account_info(),
         &ctx.accounts.token_program.to_account_info(),

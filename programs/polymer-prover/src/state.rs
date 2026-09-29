@@ -83,17 +83,6 @@ mod tests {
         goldie::assert_json!(portal::state::dispatcher_pda(&crate::ID));
     }
 
-    /// The portal authority `close_proof` accepts, scoped to this program's ID.
-    #[test]
-    fn accepted_proof_closer_authority_deterministic() {
-        let (pda, _) = portal::state::proof_closer_pda(&crate::ID);
-        assert_eq!(
-            pda.to_string(),
-            "93EzFXtxNJataBPhTEbZv21aPmr5uZwSCtRqgN7iV8SC"
-        );
-        goldie::assert_json!(portal::state::proof_closer_pda(&crate::ID));
-    }
-
     #[test]
     fn config_new_success() {
         let emitters = vec![[1u8; 32].into(), [2u8; 32].into()];

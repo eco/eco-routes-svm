@@ -5,9 +5,26 @@ use derive_new::new;
 
 use crate::Bytes32;
 
+pub mod cpi;
+
 pub const PROOF_SEED: &[u8] = b"proof";
 pub const PROVE_DISCRIMINATOR: [u8; 8] = [52, 246, 26, 161, 211, 170, 86, 215];
 pub const CLOSE_PROOF_DISCRIMINATOR: [u8; 8] = [64, 76, 168, 8, 126, 109, 164, 179];
+pub const VALIDATE_PROOF_DISCRIMINATOR: [u8; 8] = [164, 39, 169, 90, 192, 26, 173, 8];
+const PROOF_ACCOUNT_DISCRIMINATOR: [u8; 8] = [54, 244, 192, 233, 218, 58, 44, 242];
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
+pub struct ValidateProofArgs {
+    pub intent_hash: Bytes32,
+    pub destination: u64,
+    pub claimant: Option<Pubkey>,
+}
+
+#[error_code]
+pub enum ProverError {
+    InvalidProof,
+    InvalidReturnData,
+}
 
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug)]
 pub struct Proof {
@@ -18,6 +35,35 @@ pub struct Proof {
 impl Proof {
     pub fn pda(intent_hash: &Bytes32, prover: &Pubkey) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[PROOF_SEED, intent_hash.as_ref()], prover)
+    }
+
+    pub fn validate(
+        account: &AccountInfo,
+        prover: &Pubkey,
+        args: ValidateProofArgs,
+    ) -> Result<bool> {
+        let ValidateProofArgs {
+            intent_hash,
+            destination,
+            claimant,
+        } = args;
+
+        require_keys_eq!(
+            account.key(),
+            Self::pda(&intent_hash, prover).0,
+            ProverError::InvalidProof
+        );
+
+        let data = account.try_borrow_data()?;
+        if account.owner != prover || !data.starts_with(&PROOF_ACCOUNT_DISCRIMINATOR) {
+            return Ok(false);
+        }
+
+        Ok(Self::try_from_slice(&data[8..]).is_ok_and(|proof| {
+            proof.destination == destination
+                && proof.claimant != Pubkey::default()
+                && claimant.is_none_or(|claimant| proof.claimant == claimant)
+        }))
     }
 
     pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {

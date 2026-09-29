@@ -6,13 +6,12 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
-use eco_svm_std::prover::Proof;
-use eco_svm_std::{Bytes32, CANCELLED};
+use eco_svm_std::prover::cpi;
+use eco_svm_std::Bytes32;
 
 use crate::events::IntentRefunded;
-use crate::instructions::close_proof::close_proof;
 use crate::instructions::{now, PortalError};
-use crate::state::{proof_closer_pda, vault_pda, WithdrawnMarker, VAULT_SEED};
+use crate::state::{vault_pda, WithdrawnMarker, VAULT_SEED};
 use crate::types::{self, Reward, TokenTransferAccounts, VecTokenTransferAccounts};
 
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -20,10 +19,8 @@ pub struct RefundArgs {
     pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
-    /// Number of trailing remaining accounts forwarded to the prover's
-    /// `close_proof` when refunding a proven cancellation. The token chunks
-    /// before them are caller-chosen, so the split cannot be derived.
-    pub close_proof_account_count: u8,
+    pub kind: RefundKind,
+    pub prover_account_count: u8,
 }
 
 #[derive(Accounts)]
@@ -37,18 +34,8 @@ pub struct Refund<'info> {
     /// CHECK: address is validated
     #[account(mut)]
     pub vault: UncheckedAccount<'info>,
-    /// CHECK: address is validated
-    #[account(mut)]
-    pub proof: UncheckedAccount<'info>,
-    /// CHECK: address is validated, scoped to the intent's prover. Required
-    /// only to close a cancelled proof; the other paths may omit it.
-    #[account(address = proof_closer_pda(&args.reward.prover).0 @ PortalError::InvalidProofCloser)]
-    pub proof_closer: Option<UncheckedAccount<'info>>,
-    /// CHECK: address is validated. If passed it must be executable. Required
-    /// only to close a cancelled proof; omit it on the paths that don't, so a
-    /// timeout refund works for an intent whose `reward.prover` is not a
-    /// deployed program.
-    #[account(executable, address = args.reward.prover @ PortalError::InvalidProver)]
+    /// CHECK: bound to the committed program; executable status is checked for CPI paths.
+    #[account(address = args.reward.prover @ PortalError::InvalidProver)]
     pub prover: Option<UncheckedAccount<'info>>,
     /// CHECK: address is validated
     #[account(mut)]
@@ -58,15 +45,11 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Why a refund is allowed. Only `Cancelled` closes the proof.
-enum RefundPath {
-    Withdrawn,
-    /// `expired` is `reward.deadline <= now`: only before it must every reward
-    /// mint be swept.
-    Cancelled {
-        expired: bool,
-    },
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
+pub enum RefundKind {
     Expired,
+    Cancelled,
+    Withdrawn,
 }
 
 pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs) -> Result<()> {
@@ -74,7 +57,8 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
         destination,
         route_hash,
         reward,
-        close_proof_account_count,
+        kind,
+        prover_account_count,
     } = args;
     let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
@@ -84,90 +68,75 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
         ctx.accounts.vault.key() == vault_pda,
         PortalError::InvalidVault
     );
-    require!(
-        ctx.accounts.proof.key() == Proof::pda(&intent_hash, &reward.prover).0,
-        PortalError::InvalidProof
-    );
-    require!(
-        ctx.accounts.withdrawn_marker.key() == WithdrawnMarker::pda(&intent_hash).0,
-        PortalError::InvalidWithdrawnMarker
-    );
 
-    let refund_path = validate_intent_status(&ctx, &reward, destination)?;
-    let (token_transfer_accounts, close_proof_accounts) =
-        token_transfer_and_close_proof_accounts(&ctx, close_proof_account_count)?;
-
-    if matches!(refund_path, RefundPath::Cancelled { expired: false }) {
+    let (token_transfer_accounts, prover_accounts) =
+        token_transfer_and_prover_accounts(&ctx, prover_account_count)?;
+    validate_intent_status(
+        &ctx,
+        &reward,
+        destination,
+        intent_hash,
+        kind,
+        prover_accounts,
+    )?;
+    if kind == RefundKind::Cancelled && reward.deadline > now()? {
         require_reward_mints_swept(&ctx, &reward, &token_transfer_accounts)?;
     }
 
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
 
-    if let RefundPath::Cancelled { .. } = refund_path {
-        let proof_closer = ctx
-            .accounts
-            .proof_closer
-            .as_ref()
-            .ok_or(PortalError::InvalidProofCloser)?;
-        let prover = ctx
-            .accounts
-            .prover
-            .as_ref()
-            .ok_or(PortalError::InvalidProver)?;
-
-        close_proof(
-            prover,
-            proof_closer,
-            &ctx.accounts.proof,
-            close_proof_accounts,
-        )?;
-    }
-
     emit!(IntentRefunded::new(intent_hash, reward.creator));
 
     Ok(())
 }
 
-// TODO: allow early recover if the token specified is not a reward token (before anything)
 fn validate_intent_status<'info>(
     ctx: &Context<'info, Refund<'info>>,
     reward: &Reward,
     destination: u64,
-) -> Result<RefundPath> {
-    if !ctx.accounts.withdrawn_marker.data_is_empty() {
-        return Ok(RefundPath::Withdrawn);
+    intent_hash: Bytes32,
+    kind: RefundKind,
+    prover_accounts: &[AccountInfo<'info>],
+) -> Result<()> {
+    let withdrawn = WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)?;
+    if kind == RefundKind::Withdrawn {
+        require!(withdrawn, PortalError::InvalidWithdrawnMarker);
+        require!(prover_accounts.is_empty(), PortalError::InvalidProof);
+
+        return Ok(());
+    }
+    require!(!withdrawn, PortalError::IntentAlreadyWithdrawn);
+    let prover = ctx
+        .accounts
+        .prover
+        .as_ref()
+        .ok_or(PortalError::InvalidProver)?;
+    match kind {
+        RefundKind::Expired => {
+            require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
+            if prover.executable {
+                require!(
+                    !cpi::has_proof(prover, prover_accounts, intent_hash, destination)?,
+                    PortalError::IntentFulfilledAndNotWithdrawn
+                );
+            } else {
+                require!(prover_accounts.is_empty(), PortalError::InvalidProof);
+            }
+        }
+        RefundKind::Cancelled => {
+            require!(prover.executable, PortalError::InvalidProver);
+            require!(
+                cpi::validate_cancelled(prover, prover_accounts, intent_hash, destination)?,
+                PortalError::IntentNotCancelled
+            );
+        }
+        RefundKind::Withdrawn => unreachable!(),
     }
 
-    let expired = reward.deadline <= now()?;
-
-    match Proof::try_from_account_info(&ctx.accounts.proof.to_account_info())? {
-        // proven cancellation for this destination: refundable immediately
-        Some(proof) if proof.destination == destination && CANCELLED == proof.claimant => {
-            Ok(RefundPath::Cancelled { expired })
-        }
-        // fulfilled but not withdrawn
-        Some(proof) if proof.destination == destination => {
-            Err(PortalError::IntentFulfilledAndNotWithdrawn.into())
-        }
-        // no proof, or a proof for another destination
-        _ => {
-            require!(expired, PortalError::RewardNotExpired);
-
-            Ok(RefundPath::Expired)
-        }
-    }
+    Ok(())
 }
 
-/// The cancellation path closes the proof, after which the intent is
-/// refundable again only from `reward.deadline` or after someone re-proves the
-/// cancellation. `refund` is permissionless and sweeps only the chunks it is
-/// given, so without this a caller could close the proof while leaving reward
-/// tokens in the vault. Extra, non-reward
-/// mints remain allowed, as on the other paths. Applied only before
-/// `reward.deadline`: a reward mint whose vault ATA cannot be swept (closed,
-/// frozen, non-transferable, never created) then blocks only the early
-/// refund, and from the deadline a cancelled refund sweeps what it is given.
 fn require_reward_mints_swept(
     ctx: &Context<Refund>,
     reward: &Reward,
@@ -197,20 +166,19 @@ fn require_reward_mints_swept(
     Ok(())
 }
 
-fn token_transfer_and_close_proof_accounts<'info>(
+fn token_transfer_and_prover_accounts<'info>(
     ctx: &Context<'info, Refund<'info>>,
-    close_proof_account_count: u8,
+    prover_account_count: u8,
 ) -> Result<(VecTokenTransferAccounts<'info>, &'info [AccountInfo<'info>])> {
     let split_index = ctx
         .remaining_accounts
         .len()
-        .checked_sub(close_proof_account_count.into())
+        .checked_sub(prover_account_count.into())
         .ok_or(Error::from(PortalError::InvalidTokenTransferAccounts))?;
 
-    let (token_transfer_accounts, close_proof_accounts) =
-        ctx.remaining_accounts.split_at(split_index);
+    let (token_transfer_accounts, prover_accounts) = ctx.remaining_accounts.split_at(split_index);
 
-    Ok((token_transfer_accounts.try_into()?, close_proof_accounts))
+    Ok((token_transfer_accounts.try_into()?, prover_accounts))
 }
 
 fn refund_native(ctx: &Context<Refund>, signer_seeds: &[&[u8]]) -> Result<()> {

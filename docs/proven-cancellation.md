@@ -40,34 +40,32 @@ prover whitelists must never cross generations.
 
 ## Source Chain
 
+The account ABI now delegates validation to the configured prover; see [Prover validation and cleanup](prover-interface.md) for complete account ordering.
+
 ### `refund`
 
-- Accounts, in order: `payer` (signer, writable), `creator` (writable), `vault` (writable), `proof` (**now writable**), `proof_closer` (**new, optional**, `proof_closer_pda(reward.prover)`), `prover` (**new, optional**, must equal `reward.prover`), `withdrawn_marker` (writable), `token_program`, `token_2022_program`, `system_program`. Then the remaining accounts: the token chunks, followed by the close-proof tail.
-- `proof_closer` and `prover` are Anchor optional accounts: pass the portal program ID in their slots to omit them. Only the proven-cancellation path uses them, and it fails with `InvalidProofCloser` or `InvalidProver` when either is omitted; the withdrawn and timeout paths work without them. When passed, each is checked against its address on every path. Omitting both keeps a timeout refund within a legacy transaction: five reward mints, payer ≠ creator and no compute-budget instruction serialize to 1,232 bytes with them omitted and 1,296 bytes with them passed.
-- Args: `RefundArgs` gains `close_proof_account_count: u8`, the number of trailing remaining accounts forwarded to the prover's `close_proof`. Pass `0` when no proof is closed.
-- Paths, checked in this order:
-  1. Withdrawn: refunds leftovers as before.
-  2. Proven cancellation (`Proof` for this destination with `claimant == CANCELLED`): refundable at any time. The proof is **always** closed through the prover's `close_proof` (so the close-proof tail is always required and `reward.prover` must be an executable program, `InvalidProver` otherwise), before and after `reward.deadline`. `reward.deadline` decides only which token chunks are required:
-     - Before `reward.deadline` (the fast path): the token chunks must sweep every reward mint. Each mint in `reward.tokens` needs a chunk whose source is the vault's ATA for that mint, or the refund fails with `InvalidMint` and nothing moves; extra non-reward mints remain allowed. Every reward mint's vault ATA must therefore exist and be transferable; a client should create any missing one idempotently in the same transaction.
-     - From `reward.deadline`: the refund sweeps whatever chunks it is given, like a timeout refund, so a reward mint that cannot be swept (closed or non-transferable mint, frozen or missing vault ATA) may be omitted instead of locking the rest.
-     - The fast path is live only while `reward.prover` can close its proofs, which is why production provers are deployed finalized (no upgrade authority): a finalized prover can never be closed, so `close_proof` cannot fail for that reason.
-  3. Fulfilled for this destination and not withdrawn: `IntentFulfilledAndNotWithdrawn`, as before.
-  4. Otherwise (no proof, or a proof for another destination) the deadline gate applies (`RewardNotExpired` before `reward.deadline`), as before.
+- Pass `RefundArgs { destination, route_hash, reward, kind, prover_account_count }`. The final count separates prover accounts from caller-selected token triples.
+- `Expired`: require the reward deadline and a wildcard negative from every configured member. A supplied non-executable root still permits timeout refund; an omitted root or failed CPI does not.
+- `Cancelled`: require `cpi::validate_cancelled` to return true. Before the reward deadline every reward mint must be swept; at/after it partial sweeps are allowed. Proofs remain intact, so subsequent refunds can reuse them.
+- `Withdrawn`: require the authentic withdrawal marker and an empty prover tail; refund the supplied assets without executing a prover.
+- Refund creates no marker and performs no proof cleanup. Validation accounts are read-only and unsigned. Larger requests may need a versioned transaction with a lookup table; the five-mint timeout test covers this path.
 
 ### `withdraw`
 
-- Fails with the new error `IntentCancelled` when the proof's claimant is `CANCELLED`.
+Uses `cpi::validate_proof` for the payout claimant and requires true, otherwise `IntentNotFulfilled`. The std helper rejects zero and cancellation claimants. Withdrawal creates the existing permanent marker and leaves proofs intact. `IntentCancelled` keeps its existing error slot but is no longer returned by withdrawal.
 
-### Close-Proof Tail
+### `close_proof`
 
-- hyper-prover's `close_proof` takes `pda_payer` (writable), which receives the proof's rent.
-- local-prover's `close_proof` takes `payer` (writable, **signer**), which receives the proof's rent. On a refund that is whoever supplies the tail, usually the refund caller.
-- Because the tail is forwarded as-is, a refund service should forward a signer in the tail only to provers it allowlists; a signer passed to an unknown `reward.prover` is a signer that program can use.
+Separate Portal instruction taking the intent preimage: `CloseProofArgs { destination, route_hash, reward }`. With an authentic withdrawal marker, any member proof for that intent can be closed. Otherwise require `now >= reward.deadline` and `cpi::validate_cancelled == true` for the same selected proof. A prior refund is not required. Before the deadline the cancellation evidence remains available for early refunds; after cleanup use remaining cancellation evidence or the timeout path if all members have no applicable proof.
 
-## New Errors and Events
+Hyperlane rent goes to its PDA payer; Local/Polymer rent goes to the supplied writable signing payer. Validation does not forward signer privileges. Cleanup preserves its rent-recipient privileges, so clients should only supply signers to trusted provers. Cleanup can be submitted later, once per member, including for late-arriving proofs. Bundling it with settlement shares the transaction rollback boundary.
 
-- Errors (appended to `PortalError`): `ReservedClaimant`, `IntentCancelled`.
-- Event: `IntentCancelled { intent_hash: Bytes32 }`.
+## Errors and Events
+
+- `ReservedClaimant`: destination fulfillment attempted to use the cancellation claimant.
+- `IntentNotCancelled`: cancellation refund or cleanup received a negative cancellation query.
+- `RewardNotExpired`: timeout refund, or cancellation cleanup without withdrawal, preceded the reward deadline.
+- `IntentCancelled { intent_hash: Bytes32 }`: destination cancellation event, unchanged.
 
 ## Account Layouts
 

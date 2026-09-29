@@ -66,7 +66,9 @@ impl LocalProver<'_> {
         portal_proof_closer: &Keypair,
         proof: Pubkey,
     ) -> TransactionResult {
-        let instruction = local_prover::instruction::CloseProof {};
+        let instruction = local_prover::instruction::CloseProof {
+            intent_hash: [1; 32].into(),
+        };
         let accounts = local_prover::accounts::CloseProof {
             portal_proof_closer: portal_proof_closer.pubkey(),
             proof,

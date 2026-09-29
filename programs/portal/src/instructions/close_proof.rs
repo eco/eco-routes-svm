@@ -1,49 +1,64 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-use anchor_lang::solana_program::program::invoke_signed;
-use eco_svm_std::prover::CLOSE_PROOF_DISCRIMINATOR;
+use eco_svm_std::prover::cpi;
+use eco_svm_std::Bytes32;
 
-use crate::state::{proof_closer_pda, PROOF_CLOSER_SEED};
+use crate::instructions::{now, PortalError};
+use crate::state::{proof_closer_pda, WithdrawnMarker, PROOF_CLOSER_SEED};
+use crate::types::{self, Reward};
 
-/// CPIs `prover`'s `close_proof`, signing `proof_closer_pda(prover)`, and
-/// forwards `remaining_accounts` (the prover's rent recipient and whatever
-/// else its `close_proof` needs) unchanged.
-pub(crate) fn close_proof<'info>(
-    prover: &AccountInfo<'info>,
-    proof_closer: &AccountInfo<'info>,
-    proof: &AccountInfo<'info>,
-    remaining_accounts: &[AccountInfo<'info>],
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct CloseProofArgs {
+    pub destination: u64,
+    pub route_hash: Bytes32,
+    pub reward: Reward,
+}
+
+#[derive(Accounts)]
+#[instruction(args: CloseProofArgs)]
+pub struct CloseProof<'info> {
+    /// CHECK: canonical marker and contents are checked in the handler.
+    pub withdrawn_marker: UncheckedAccount<'info>,
+    /// CHECK: bound to the committed prover.
+    #[account(executable, address = args.reward.prover @ PortalError::InvalidProver)]
+    pub prover: UncheckedAccount<'info>,
+    /// CHECK: canonical intent-scoped authority is checked in the handler.
+    pub proof_closer: UncheckedAccount<'info>,
+}
+
+pub fn close_proof<'info>(
+    ctx: Context<'info, CloseProof<'info>>,
+    args: CloseProofArgs,
 ) -> Result<()> {
-    let prover_key = prover.key();
-    let (_, bump) = proof_closer_pda(&prover_key);
-    let signer_seeds = [PROOF_CLOSER_SEED, prover_key.as_ref(), &[bump]];
-
-    let remaining_account_metas = remaining_accounts.iter().map(|account| AccountMeta {
-        pubkey: account.key(),
-        is_signer: account.is_signer,
-        is_writable: account.is_writable,
-    });
-
-    let ix = Instruction::new_with_bytes(
-        prover_key,
-        &CLOSE_PROOF_DISCRIMINATOR,
-        vec![
-            AccountMeta::new_readonly(proof_closer.key(), true),
-            AccountMeta::new(proof.key(), false),
-        ]
-        .into_iter()
-        .chain(remaining_account_metas)
-        .collect(),
+    let CloseProofArgs {
+        destination,
+        route_hash,
+        reward,
+    } = args;
+    let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
+    let (authority, bump) = proof_closer_pda(&intent_hash);
+    require_keys_eq!(
+        ctx.accounts.proof_closer.key(),
+        authority,
+        PortalError::InvalidProofCloser
     );
+    if !WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)? {
+        require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
+        require!(
+            cpi::validate_cancelled(
+                &ctx.accounts.prover,
+                ctx.remaining_accounts,
+                intent_hash,
+                destination
+            )?,
+            PortalError::IntentNotCancelled
+        );
+    }
 
-    invoke_signed(
-        &ix,
-        [proof_closer.clone(), proof.clone()]
-            .into_iter()
-            .chain(remaining_accounts.iter().cloned())
-            .collect::<Vec<_>>()
-            .as_slice(),
-        &[&signer_seeds],
+    cpi::close_proof(
+        &ctx.accounts.prover,
+        &ctx.accounts.proof_closer,
+        ctx.remaining_accounts,
+        intent_hash,
+        &[&[PROOF_CLOSER_SEED, intent_hash.as_ref(), &[bump]]],
     )
-    .map_err(Into::into)
 }

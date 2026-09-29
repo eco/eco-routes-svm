@@ -7,6 +7,7 @@ mod init;
 mod ism;
 mod ism_account_metas;
 mod prove;
+mod validate_proof;
 
 pub use close_proof::*;
 pub use handle::*;
@@ -15,6 +16,7 @@ pub use init::*;
 pub use ism::*;
 pub use ism_account_metas::*;
 pub use prove::*;
+pub use validate_proof::*;
 
 #[error_code]
 pub enum HyperProverError {

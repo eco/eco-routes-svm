@@ -17,8 +17,15 @@ pub mod hyper_prover {
         instructions::init(ctx, args)
     }
 
-    pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
-        instructions::close_proof(ctx)
+    pub fn validate_proof(
+        ctx: Context<ValidateProof>,
+        args: prover::ValidateProofArgs,
+    ) -> Result<bool> {
+        instructions::validate_proof(ctx, args)
+    }
+
+    pub fn close_proof(ctx: Context<CloseProof>, intent_hash: eco_svm_std::Bytes32) -> Result<()> {
+        instructions::close_proof(ctx, intent_hash)
     }
 
     pub fn prove(ctx: Context<Prove>, args: prover::ProveArgs) -> Result<()> {

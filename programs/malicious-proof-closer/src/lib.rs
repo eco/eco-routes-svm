@@ -1,52 +1,95 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
-use anchor_lang::solana_program::program::invoke;
-use eco_svm_std::prover::CLOSE_PROOF_DISCRIMINATOR;
+use anchor_lang::solana_program::program::{invoke, set_return_data};
+use eco_svm_std::prover::{
+    Proof, ValidateProofArgs, CLOSE_PROOF_DISCRIMINATOR, VALIDATE_PROOF_DISCRIMINATOR,
+};
+use eco_svm_std::Bytes32;
 
 declare_id!("3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp");
 
-/// Test-only stand-in "prover" for the per-prover proof_closer scoping regression
-/// (localnet only; excluded from devnet/mainnet builds). `portal::withdraw` accepts
-/// it as `reward.prover`, then CPIs its `close_proof` with the portal `proof_closer`
-/// PDA as an inherited signer and the withdraw call's forwarded remaining accounts.
-/// This handler re-CPIs the real local-prover's `close_proof` with the inherited
-/// signer to close a proof it does not own. With `proof_closer` scoped per-prover,
-/// local-prover rejects the forwarded signer.
-///
-/// `close_proof` shares the standard Anchor discriminator with the real provers'
-/// instruction (`sha256("global:close_proof")[..8]`), so `portal::withdraw`'s CPI
-/// dispatches here.
+/// Localnet fixture for malformed validation responses and replayed cleanup authority.
 #[program]
 pub mod malicious_proof_closer {
     use super::*;
 
-    pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
-        let proof_closer = &ctx.accounts.proof_closer;
-        let local_prover = &ctx.accounts.local_prover;
-        let target_proof = &ctx.accounts.target_proof;
-        let payer = &ctx.accounts.payer;
+    pub fn validate_proof<'info>(
+        ctx: Context<'info, ValidateProof<'info>>,
+        args: ValidateProofArgs,
+    ) -> Result<()> {
+        let data = ctx.accounts.proof.try_borrow_data()?;
+        if data.len() != 1 {
+            drop(data);
+            let valid = Proof::validate(&ctx.accounts.proof, &crate::ID, args)?;
+            set_return_data(&[u8::from(valid)]);
 
-        msg!("malicious-proof-closer: re-CPI local-prover close_proof via forwarded proof_closer signer");
+            return Ok(());
+        }
+        match data[0] {
+            0 => (),
+            1 => set_return_data(&[2]),
+            2 => set_return_data(&[0, 0]),
+            3 => {
+                let (program, accounts) = ctx
+                    .remaining_accounts
+                    .split_first()
+                    .ok_or(ProgramError::NotEnoughAccountKeys)?;
+                let mut data = VALIDATE_PROOF_DISCRIMINATOR.to_vec();
+                args.serialize(&mut data)?;
+                invoke(
+                    &Instruction {
+                        program_id: program.key(),
+                        accounts: accounts
+                            .iter()
+                            .map(|account| AccountMeta::new_readonly(account.key(), false))
+                            .collect(),
+                        data,
+                    },
+                    accounts,
+                )?;
+            }
+            4 => return Err(ProgramError::InvalidInstructionData.into()),
+            _ => {
+                require!(
+                    !ctx.accounts.proof.is_signer
+                        && !ctx.accounts.proof.is_writable
+                        && ctx
+                            .remaining_accounts
+                            .iter()
+                            .all(|account| !account.is_signer && !account.is_writable),
+                    anchor_lang::error::ErrorCode::ConstraintRaw
+                );
+                set_return_data(&[0]);
+            }
+        }
 
-        // local-prover `CloseProof` order: portal_proof_closer, proof, payer. The
-        // proof_closer signature flows through this plain `invoke` because it is a
-        // signer of the current instruction.
-        let metas = vec![
-            AccountMeta::new_readonly(proof_closer.key(), true),
-            AccountMeta::new(target_proof.key(), false),
-            AccountMeta::new(payer.key(), true),
+        Ok(())
+    }
+
+    pub fn close_proof(ctx: Context<CloseProof>, intent_hash: Bytes32) -> Result<()> {
+        let data = ctx.accounts.own_proof.try_borrow_data()?;
+        let intent_hash = if data.len() == 32 {
+            Bytes32::try_from_slice(&data)?
+        } else {
+            intent_hash
+        };
+        let mut data = CLOSE_PROOF_DISCRIMINATOR.to_vec();
+        intent_hash.serialize(&mut data)?;
+        let accounts = vec![
+            AccountMeta::new_readonly(ctx.accounts.proof_closer.key(), true),
+            AccountMeta::new(ctx.accounts.target_proof.key(), false),
+            AccountMeta::new(ctx.accounts.payer.key(), ctx.accounts.payer.is_signer),
         ];
         let infos = [
-            proof_closer.to_account_info(),
-            target_proof.to_account_info(),
-            payer.to_account_info(),
+            ctx.accounts.proof_closer.to_account_info(),
+            ctx.accounts.target_proof.to_account_info(),
+            ctx.accounts.payer.to_account_info(),
         ];
-
         invoke(
             &Instruction {
-                program_id: local_prover.key(),
-                accounts: metas,
-                data: CLOSE_PROOF_DISCRIMINATOR.to_vec(),
+                program_id: ctx.accounts.prover.key(),
+                accounts,
+                data,
             },
             &infos,
         )
@@ -54,21 +97,24 @@ pub mod malicious_proof_closer {
     }
 }
 
-/// Account order as `portal::withdraw` builds the `close_proof` CPI: `proof_closer`
-/// and the withdrawn intent's own `proof`, then the forwarded remaining accounts
-/// (here: the real local-prover program, the target proof PDA, and the rent payer).
+#[derive(Accounts)]
+pub struct ValidateProof<'info> {
+    /// CHECK: proof or test-controlled response mode.
+    pub proof: UncheckedAccount<'info>,
+}
+
 #[derive(Accounts)]
 pub struct CloseProof<'info> {
-    /// CHECK: inherited signer, forwarded verbatim to the nested CPI
+    /// CHECK: inherited authority deliberately forwarded without checking it.
     pub proof_closer: UncheckedAccount<'info>,
-    /// CHECK: the withdrawn intent's own proof (unused)
+    /// CHECK: optional substituted hash controlled by the test.
     pub own_proof: UncheckedAccount<'info>,
-    /// CHECK: the real local-prover program (nested CPI target)
-    pub local_prover: UncheckedAccount<'info>,
-    /// CHECK: the proof this program does not own
+    /// CHECK: nested CPI target controlled by the test.
+    pub prover: UncheckedAccount<'info>,
+    /// CHECK: victim proof controlled by the test.
     #[account(mut)]
     pub target_proof: UncheckedAccount<'info>,
-    /// CHECK: rent recipient of the closed account
+    /// CHECK: leaf rent recipient, with its original signer privileges.
     #[account(mut)]
     pub payer: UncheckedAccount<'info>,
 }

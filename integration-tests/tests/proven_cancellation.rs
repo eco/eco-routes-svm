@@ -4,7 +4,7 @@ use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
 use portal::events::IntentRefunded;
 use portal::instructions::PortalError;
-use portal::state::{self, proof_closer_pda, FulfillMarker, WithdrawnMarker};
+use portal::state::{self, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Reward, Route};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
@@ -107,11 +107,10 @@ fn cancel_prove_refund_via_local_prover_before_reward_deadline_success() {
     let proof = Proof::pda(&intent_hash, &local_prover::ID).0;
     let payer = ctx.payer.pubkey();
     let payer_balance = ctx.balance(&payer);
-    let proof_rent = ctx.balance(&proof);
 
     assert!(ctx.now() < reward.deadline);
 
-    let result = ctx.portal().refund_intent_with_close_proof(
+    let result = ctx.portal().refund_cancelled_intent(
         CHAIN_ID,
         reward.clone(),
         state::vault_pda(&intent_hash).0,
@@ -128,16 +127,10 @@ fn cancel_prove_refund_via_local_prover_before_reward_deadline_success() {
         reward.creator,
     ))));
     assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
-    assert!(ctx.get_account(&proof).is_none());
-    assert_eq!(
-        ctx.balance(&payer),
-        payer_balance + proof_rent - TRANSACTION_FEE
-    );
+    assert!(ctx.get_account(&proof).is_some());
+    assert_eq!(ctx.balance(&payer), payer_balance - TRANSACTION_FEE);
 }
 
-/// The real fast path always sweeps tokens alongside the close-proof tail:
-/// the creator is paid, the vault ATAs are closed and the proof is closed in
-/// the same refund.
 #[test]
 fn cancel_prove_refund_tokens_via_local_prover_before_reward_deadline_success() {
     let mut ctx = common::Context::default();
@@ -160,12 +153,11 @@ fn cancel_prove_refund_tokens_via_local_prover_before_reward_deadline_success() 
         .collect();
     let vault_ata_rent: u64 = vault_atas.iter().map(|ata| ctx.balance(ata)).sum();
     let payer_balance = ctx.balance(&payer);
-    let proof_rent = ctx.balance(&proof);
     let token_accounts = reward_token_accounts(&ctx, &reward, &vault, &creator);
 
     assert!(ctx.now() < reward.deadline);
 
-    let result = ctx.portal().refund_intent_with_close_proof(
+    let result = ctx.portal().refund_cancelled_intent(
         CHAIN_ID,
         reward.clone(),
         vault,
@@ -188,10 +180,10 @@ fn cancel_prove_refund_tokens_via_local_prover_before_reward_deadline_success() 
     vault_atas.iter().for_each(|ata| {
         assert!(ctx.get_account(ata).is_none());
     });
-    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&proof).is_some());
     assert_eq!(
         ctx.balance(&payer),
-        payer_balance + proof_rent + vault_ata_rent - TRANSACTION_FEE
+        payer_balance + vault_ata_rent - TRANSACTION_FEE
     );
 }
 
@@ -211,12 +203,11 @@ fn cancel_prove_withdraw_via_local_prover_fail() {
         cancelled,
         proof,
         WithdrawnMarker::pda(&intent_hash).0,
-        proof_closer_pda(&local_prover::ID).0,
         vec![],
         vec![AccountMeta::new(payer, true)],
     );
 
-    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert!(result.is_err_and(common::is_error(PortalError::IntentNotFulfilled)));
     assert_eq!(ctx.balance(&cancelled), 0);
     assert!(ctx.get_account(&proof).is_some());
 }
@@ -248,12 +239,11 @@ fn cancel_prove_withdraw_tokens_via_local_prover_fail() {
         cancelled,
         proof,
         WithdrawnMarker::pda(&intent_hash).0,
-        proof_closer_pda(&local_prover::ID).0,
         token_accounts,
         vec![AccountMeta::new(payer, true)],
     );
 
-    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert!(result.is_err_and(common::is_error(PortalError::IntentNotFulfilled)));
     assert_eq!(ctx.balance(&cancelled), 0);
     assert_eq!(ctx.balance(&vault), vault_balance);
     reward.tokens.iter().for_each(|token| {
