@@ -37,7 +37,7 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
         let hash: Bytes32 = [12; 32].into();
         let proof = Proof::pda(&hash, &prover).0;
         let claimant = Pubkey::new_unique();
-        let args = GetProofArgs::new(hash, CHAIN_ID, vec![]);
+        let args = GetProofArgs::new(hash, vec![]);
         assert_eq!(
             query(&mut context, prover, proof, args.clone())
                 .unwrap()
@@ -55,7 +55,7 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
         );
         for (destination, actual_claimant, expected) in [
             (CHAIN_ID, claimant, true),
-            (CHAIN_ID + 1, claimant, false),
+            (CHAIN_ID + 1, claimant, true),
             (CHAIN_ID, Pubkey::new_unique(), true),
             (CHAIN_ID, Pubkey::default(), false),
         ] {
@@ -104,10 +104,11 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
 }
 
 #[test]
-fn invalid_return_data_never_authorizes_timeout_refund() {
+fn invalid_proof_responses_never_authorize_timeout_refund() {
     for mode in 0..10 {
         let mut context = common::Context::default();
-        let (destination, _, mut reward) = context.rand_intent();
+        let (_, _, mut reward) = context.rand_intent();
+        let destination = CHAIN_ID;
         reward.prover = malicious_proof_closer::ID;
         reward.tokens.clear();
         let route_hash: Bytes32 = [13; 32].into();
@@ -149,7 +150,9 @@ fn invalid_return_data_never_authorizes_timeout_refund() {
             assert_eq!(context.balance(&vault), 0);
             continue;
         }
-        if mode == 4 {
+        if mode == 6 {
+            assert!(result.is_err_and(common::is_error(PortalError::InvalidProof)));
+        } else if mode == 4 {
             assert!(result.is_err());
         } else {
             assert!(result.is_err_and(common::is_error(ProverError::InvalidReturnData)));
@@ -186,7 +189,7 @@ fn cancellation_cleanup_rejects_wrong_destination() {
 
 #[test]
 fn shared_instruction_discriminators_and_generated_idls_match() {
-    let args = GetProofArgs::new([0; 32].into(), CHAIN_ID, vec![]);
+    let args = GetProofArgs::new([0; 32].into(), vec![]);
     for data in [
         local_prover::instruction::GetProof { args: args.clone() }.data(),
         hyper_prover::instruction::GetProof { args: args.clone() }.data(),
@@ -204,6 +207,21 @@ fn shared_instruction_discriminators_and_generated_idls_match() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(format!("../target/idl/{name}.json"));
         let idl: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let query_args = idl["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|definition| definition["name"] == "GetProofArgs")
+            .unwrap();
+        assert_eq!(
+            query_args["type"]["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|field| field["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["intent_hash", "data"]
+        );
         let instructions = idl["instructions"].as_array().unwrap();
         let validate = instructions
             .iter()

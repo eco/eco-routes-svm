@@ -31,9 +31,9 @@ pub fn get_proof<'info>(
     let proof =
         Option::<Proof>::try_from_slice(&data).map_err(|_| ProverError::InvalidReturnData)?;
     require!(
-        proof.as_ref().is_none_or(|proof| {
-            proof.destination == args.destination && proof.claimant != Pubkey::default()
-        }),
+        proof
+            .as_ref()
+            .is_none_or(|proof| proof.claimant != Pubkey::default()),
         ProverError::InvalidReturnData
     );
 

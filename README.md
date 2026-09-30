@@ -290,7 +290,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `init` - Initialize prover with whitelisted senders
 - `handle` - Process incoming Hyperlane messages and create proof accounts
 - `prove` - Send proof message via Hyperlane
-- `get_proof` - Return `Option<Proof>` for the requested intent and destination
+- `get_proof` - Return `Option<Proof>` for the requested intent hash
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
@@ -305,7 +305,7 @@ A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobo
 - `init` - Initialize prover with whitelisted emitters
 - `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
 - `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse. Capped at 24 intents per call because Solana truncates a transaction's logs at 10 KB while the transaction still succeeds; that budget is shared by every instruction in the transaction, so submit `portal::prove` as the only log-emitting instruction in its transaction, then count the `Program log: Prove: program: <polymer_prover id>, ` lines in `meta.logMessages` against the hashes sent and resubmit any shortfall (`prove` writes no state, so the retry is safe)
-- `get_proof` - Return `Option<Proof>` for the requested intent and destination
+- `get_proof` - Return `Option<Proof>` for the requested intent hash
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
@@ -318,7 +318,7 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 #### Key Instructions:
 - `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
-- `get_proof` - Return `Option<Proof>` for the requested intent and destination
+- `get_proof` - Return `Option<Proof>` for the requested intent hash
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization; rent goes to the signing payer
 
 ### Flash-Fulfiller Program

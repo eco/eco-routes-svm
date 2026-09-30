@@ -16,7 +16,6 @@ const PROOF_ACCOUNT_DISCRIMINATOR: [u8; 8] = [54, 244, 192, 233, 218, 58, 44, 24
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
 pub struct GetProofArgs {
     pub intent_hash: Bytes32,
-    pub destination: u64,
     pub data: Vec<u8>,
 }
 
@@ -54,11 +53,7 @@ impl Proof {
     }
 
     pub fn get(account: &AccountInfo, prover: &Pubkey, args: GetProofArgs) -> Result<Option<Self>> {
-        let GetProofArgs {
-            intent_hash,
-            destination,
-            ..
-        } = args;
+        let GetProofArgs { intent_hash, .. } = args;
 
         require_keys_eq!(
             account.key(),
@@ -71,9 +66,9 @@ impl Proof {
             return Ok(None);
         }
 
-        Ok(Self::try_from_slice(&data[8..]).ok().filter(|proof| {
-            proof.destination == destination && proof.claimant != Pubkey::default()
-        }))
+        Ok(Self::try_from_slice(&data[8..])
+            .ok()
+            .filter(|proof| proof.claimant != Pubkey::default()))
     }
 
     pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {

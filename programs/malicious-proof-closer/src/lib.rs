@@ -51,11 +51,7 @@ pub mod malicious_proof_closer {
             4 => return Err(ProgramError::InvalidInstructionData.into()),
             6..=9 => {
                 let proof = Proof::new(
-                    if data[0] == 6 {
-                        args.destination + 1
-                    } else {
-                        args.destination
-                    },
+                    0,
                     if data[0] == 7 {
                         Pubkey::default()
                     } else {

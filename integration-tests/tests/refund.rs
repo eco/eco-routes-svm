@@ -271,7 +271,7 @@ fn refund_intent_native_and_token_success() {
 }
 
 #[test]
-fn refund_intent_fulfilled_on_wrong_chain_success() {
+fn refund_intent_fulfilled_on_wrong_chain_fail() {
     let (mut ctx, destination, reward, route_hash) = setup(false);
     let creator = reward.creator;
     let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
@@ -279,7 +279,7 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
     let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    let fulfillment_proof = Proof::new(random(), Pubkey::new_unique());
+    let fulfillment_proof = Proof::new(destination + 1, Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
@@ -293,12 +293,11 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
         creator,
         vec![],
     );
-    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
-        intent_hash,
-        creator,
-    ))));
-    assert_eq!(ctx.balance(&creator), reward.native_amount);
-    assert_eq!(ctx.balance(&vault), 0);
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::InvalidProof
+    )));
+    assert_eq!(ctx.balance(&creator), 0);
+    assert_eq!(ctx.balance(&vault), reward.native_amount);
 }
 
 #[test]
@@ -780,8 +779,7 @@ fn refund_intent_cancelled_retry_still_requires_reward_mints() {
     assert!(ctx.get_account(&withdrawn_marker).is_none());
 }
 
-/// A cancellation proven for another destination is not this intent's
-/// cancellation: the fallback deadline still applies.
+/// A returned cancellation must match this intent’s destination.
 #[test]
 fn refund_intent_cancelled_on_wrong_destination_not_expired_fail() {
     let (mut ctx, destination, reward, route_hash) = setup(false);
@@ -803,7 +801,7 @@ fn refund_intent_cancelled_on_wrong_destination_not_expired_fail() {
     );
 
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::RewardNotExpired
+        portal::instructions::PortalError::InvalidProof
     )));
 }
 

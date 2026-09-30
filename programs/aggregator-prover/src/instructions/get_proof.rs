@@ -14,11 +14,7 @@ pub fn get_proof<'info>(
     ctx: Context<'info, GetProof<'info>>,
     args: GetProofArgs,
 ) -> Result<Option<Proof>> {
-    let GetProofArgs {
-        intent_hash,
-        destination,
-        data,
-    } = args;
+    let GetProofArgs { intent_hash, data } = args;
     let queries = Vec::<MemberQuery>::try_from_slice(&data)?;
     require!(
         queries.len() == ctx.accounts.config.provers.len(),
@@ -36,7 +32,7 @@ pub fn get_proof<'info>(
             cpi::get_proof(
                 prover,
                 accounts,
-                GetProofArgs::new(intent_hash, destination, query.data.clone()),
+                GetProofArgs::new(intent_hash, query.data.clone()),
             )
         })
 }

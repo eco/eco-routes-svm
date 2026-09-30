@@ -79,9 +79,10 @@ pub fn withdraw_intent<'info>(
         cpi::get_proof(
             &ctx.accounts.prover,
             prover_accounts,
-            GetProofArgs::new(intent_hash, destination, prover_data),
+            GetProofArgs::new(intent_hash, prover_data),
         )?
-        .is_some_and(|proof| proof.is_payable_to(&ctx.accounts.claimant.key())),
+        .is_some_and(|proof| proof.destination == destination
+            && proof.is_payable_to(&ctx.accounts.claimant.key())),
         PortalError::IntentNotFulfilled
     );
     withdraw_native(&ctx, &reward, &signer_seeds)?;

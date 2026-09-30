@@ -6,14 +6,14 @@ This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Deploy
 
 | Instruction | Arguments | Result |
 | --- | --- | --- |
-| `get_proof` | `GetProofArgs { intent_hash, destination, data: Vec<u8> }` | `Option<Proof>` |
+| `get_proof` | `GetProofArgs { intent_hash, data: Vec<u8> }` | `Option<Proof>` |
 | `close_proof` | `CloseProofArgs { intent_hash, data: Vec<u8> }` | Unit |
 
-`data` belongs to the invoked prover. Local, Hyper and Polymer need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, invalid contents, zero claimants or a destination mismatch. Substituted/omitted accounts and execution errors remain errors.
+`data` belongs to the invoked prover. Local, Hyper and Polymer need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, invalid contents or zero claimants. Substituted/omitted accounts and execution errors remain errors.
 
 `Proof::is_cancelled()` identifies cancellation; `Proof::is_payable_to(&claimant)` checks a nonzero, non-cancellation payout recipient. Portal applies settlement policy to the returned proof.
 
-`eco_svm_std::prover::cpi::get_proof` passes all accounts read-only and unsigned. It requires the invoked program as return-data producer and an exact Borsh `Option<Proof>` encoding, with no trailing bytes. A returned proof must match the requested destination and have a nonzero claimant. CPI/decoding errors never become `None`. The aggregator republishes the result under its own program ID.
+`eco_svm_std::prover::cpi::get_proof` passes all accounts read-only and unsigned. It requires the invoked program as return-data producer and an exact Borsh `Option<Proof>` encoding, with no trailing bytes. A returned proof must have a nonzero claimant. Portal checks its destination against the intent; a mismatch is rejected, never treated as absence for refund. CPI/decoding errors never become `None`. The aggregator republishes the result under its own program ID.
 
 ## Aggregator framing
 

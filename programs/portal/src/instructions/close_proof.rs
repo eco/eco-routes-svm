@@ -49,9 +49,9 @@ pub fn close_proof<'info>(
             cpi::get_proof(
                 &ctx.accounts.prover,
                 ctx.remaining_accounts,
-                GetProofArgs::new(intent_hash, destination, prover_data.clone()),
+                GetProofArgs::new(intent_hash, prover_data.clone()),
             )?
-            .is_some_and(|proof| proof.is_cancelled()),
+            .is_some_and(|proof| proof.destination == destination && proof.is_cancelled()),
             PortalError::IntentNotCancelled
         );
     }

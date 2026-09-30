@@ -109,7 +109,7 @@ fn validate_intent_status<'info>(
         cpi::get_proof(
             prover,
             prover_accounts,
-            GetProofArgs::new(intent_hash, destination, prover_data),
+            GetProofArgs::new(intent_hash, prover_data),
         )?
     } else {
         require!(
@@ -119,8 +119,15 @@ fn validate_intent_status<'info>(
         None
     };
     match proof {
-        Some(proof) if proof.is_cancelled() => Ok(true),
-        Some(_) => err!(PortalError::IntentFulfilledAndNotWithdrawn),
+        Some(proof) => {
+            require!(proof.destination == destination, PortalError::InvalidProof);
+            require!(
+                proof.is_cancelled(),
+                PortalError::IntentFulfilledAndNotWithdrawn
+            );
+
+            Ok(true)
+        }
         None => {
             require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
 

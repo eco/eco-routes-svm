@@ -366,7 +366,7 @@ fn bridge_delivery_validates_and_withdraws_without_aggregation() {
 fn returns_first_proof_in_query_order_without_creating_an_aggregate_proof() {
     let mut context = initialized();
     let hash = test_intent_hash();
-    let args = GetProofArgs::new(hash, DESTINATION, vec![]);
+    let args = GetProofArgs::new(hash, vec![]);
     for (index, prover) in PROVERS.into_iter().enumerate() {
         let claimant = Pubkey::new_from_array([index as u8 + 1; 32]);
         set_prover_proof(&mut context, &hash, prover, DESTINATION, claimant);
@@ -398,7 +398,7 @@ fn absence_requires_all_members_and_rejects_incomplete_or_duplicate_sets() {
     for selected in PROVERS {
         let mut context = initialized();
         let hash = test_intent_hash();
-        let args = GetProofArgs::new(hash, DESTINATION, vec![]);
+        let args = GetProofArgs::new(hash, vec![]);
         assert_eq!(
             context
                 .aggregator_prover()
@@ -440,7 +440,7 @@ fn absence_requires_all_members_and_rejects_incomplete_or_duplicate_sets() {
 #[test]
 fn query_rejects_unconfigured_member_and_substituted_proof() {
     let mut context = initialized();
-    let args = GetProofArgs::new(test_intent_hash(), DESTINATION, vec![]);
+    let args = GetProofArgs::new(test_intent_hash(), vec![]);
     assert!(context
         .aggregator_prover()
         .get_proof(
@@ -563,7 +563,7 @@ fn cancellation_cleanup_waits_for_deadline_and_does_not_require_refund() {
     assert_eq!(
         context
             .aggregator_prover()
-            .get_proof(GetProofArgs::new(hash, DESTINATION, vec![]), &PROVERS)
+            .get_proof(GetProofArgs::new(hash, vec![]), &PROVERS)
             .unwrap()
             .return_data
             .data,
@@ -655,7 +655,7 @@ fn eight_member_query_checks_last_member_within_transaction_limits() {
         .init(&authority, provers.clone())
         .unwrap();
     let hash = test_intent_hash();
-    let args = GetProofArgs::new(hash, DESTINATION, vec![]);
+    let args = GetProofArgs::new(hash, vec![]);
     let absent = context
         .aggregator_prover()
         .get_proof(args.clone(), &provers)
@@ -720,7 +720,7 @@ fn member_queries_forward_variable_account_lists_and_data() {
         program_id: aggregator_prover::ID,
         accounts: accounts.clone(),
         data: aggregator_prover::instruction::GetProof {
-            args: GetProofArgs::new(hash, DESTINATION, borsh::to_vec(&queries).unwrap()),
+            args: GetProofArgs::new(hash, borsh::to_vec(&queries).unwrap()),
         }
         .data(),
     };
@@ -738,7 +738,7 @@ fn member_queries_forward_variable_account_lists_and_data() {
     wrong_data[0].data = vec![2];
     let result = context.send_instruction(Instruction {
         data: aggregator_prover::instruction::GetProof {
-            args: GetProofArgs::new(hash, DESTINATION, borsh::to_vec(&wrong_data).unwrap()),
+            args: GetProofArgs::new(hash, borsh::to_vec(&wrong_data).unwrap()),
         }
         .data(),
         ..instruction.clone()
@@ -753,7 +753,7 @@ fn member_queries_forward_variable_account_lists_and_data() {
         assert!(context
             .send_instruction(Instruction {
                 data: aggregator_prover::instruction::GetProof {
-                    args: GetProofArgs::new(hash, DESTINATION, borsh::to_vec(&malformed).unwrap()),
+                    args: GetProofArgs::new(hash, borsh::to_vec(&malformed).unwrap()),
                 }
                 .data(),
                 ..instruction.clone()
@@ -862,5 +862,52 @@ fn refund_uses_returned_cancellation_before_or_after_deadline() {
         assert!(context
             .get_account(&WithdrawnMarker::pda(&hash).0)
             .is_none());
+    }
+}
+
+#[test]
+fn mismatched_first_proof_cannot_hide_another_members_proof_during_refund() {
+    for claimant in [Pubkey::new_unique(), eco_svm_std::claimant::cancelled()] {
+        let mut context = initialized();
+        let (_, _, mut reward) = context.rand_intent();
+        reward.prover = aggregator_prover::ID;
+        reward.tokens.clear();
+        let route_hash = test_intent_hash();
+        let hash = intent_hash(DESTINATION, &route_hash, &reward.hash());
+        let vault = vault_pda(&hash).0;
+        context.airdrop(&vault, reward.native_amount).unwrap();
+        set_prover_proof(
+            &mut context,
+            &hash,
+            local_prover::ID,
+            DESTINATION + 1,
+            claimant,
+        );
+        set_prover_proof(
+            &mut context,
+            &hash,
+            hyper_prover::ID,
+            DESTINATION,
+            Pubkey::new_unique(),
+        );
+        context.warp_to_timestamp(reward.deadline.try_into().unwrap());
+        let query = context.aggregator_prover().query_accounts(
+            &hash,
+            &[local_prover::ID, hyper_prover::ID, polymer_prover::ID],
+        );
+        let result = context.portal().refund_intent_with_accounts(
+            DESTINATION,
+            reward.clone(),
+            vault,
+            route_hash,
+            Config::pda().0,
+            WithdrawnMarker::pda(&hash).0,
+            reward.creator,
+            Some(reward.prover),
+            [],
+            query,
+        );
+        assert!(result.is_err_and(common::is_error(PortalError::InvalidProof)));
+        assert_eq!(context.balance(&vault), reward.native_amount);
     }
 }
