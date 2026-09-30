@@ -11,7 +11,7 @@
 //! There is deliberately no analogue of `prove_confused_deputy` here. That test
 //! works on the portal path because `portal::prove` forwards attacker-supplied
 //! `prove_accounts` into the prover, so a malicious prover has the real prover in
-//! scope to replay the inherited signer into. `eco_svm_std::prover::prove` — the
+//! scope to replay the inherited signer into. `eco_svm_std::prover::cpi::prove` — the
 //! helper the flash prove leg uses — builds a **fixed six-account** instruction
 //! (`caller, payer, system_program, event_authority, callee, proof`) and forwards
 //! no tail, so a malicious `local_prover_program` is handed nothing to replay

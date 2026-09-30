@@ -14,22 +14,9 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{hyperlane_context, Context, TransactionResult, COMPUTE_UNIT_LIMIT};
-
-#[derive(Clone)]
-pub struct ProverQuery {
-    pub accounts: Vec<AccountMeta>,
-    pub data: Vec<u8>,
-}
-
-impl<T: IntoIterator<Item = AccountMeta>> From<T> for ProverQuery {
-    fn from(accounts: T) -> Self {
-        Self {
-            accounts: accounts.into_iter().collect(),
-            data: vec![],
-        }
-    }
-}
+use crate::common::{
+    hyperlane_context, Context, ProverQuery, TransactionResult, COMPUTE_UNIT_LIMIT,
+};
 
 #[derive(Deref, DerefMut)]
 pub struct Portal<'a>(&'a mut Context);

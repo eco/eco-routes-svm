@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::prover::{cpi, GetProofArgs, Proof};
 
-use crate::instructions::{member_accounts, AggregatorProverError, MemberQuery};
+use crate::instructions::member::{member_accounts, Member};
+use crate::instructions::{AggregatorProverError, MemberQuery};
 use crate::state::Config;
 
 #[derive(Accounts)]
@@ -20,19 +21,18 @@ pub fn get_proof<'info>(
         queries.len() == ctx.accounts.config.provers.len(),
         AggregatorProverError::InvalidProverSet
     );
-    let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, &queries)?;
+    let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, queries)?;
 
     members
         .into_iter()
-        .try_fold(None, |found, (prover, accounts, query)| {
-            if found.is_some() {
-                return Ok(found);
-            }
-
-            cpi::get_proof(
+        .find_map(|member| {
+            let Member {
                 prover,
                 accounts,
-                GetProofArgs::new(intent_hash, query.data.clone()),
-            )
+                query,
+            } = member;
+
+            cpi::get_proof(prover, accounts, GetProofArgs::new(intent_hash, query.data)).transpose()
         })
+        .transpose()
 }

@@ -13,8 +13,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::portal_context::ProverQuery;
-use crate::common::{Context, TransactionResult};
+use crate::common::{Context, ProverQuery, TransactionResult};
 
 const AGGREGATOR_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/aggregator_prover.so");
 
@@ -79,32 +78,8 @@ impl AggregatorProver<'_> {
         self.send_transaction(transaction)
     }
 
-    pub fn query_accounts(&self, intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
-        ProverQuery {
-            accounts: provers
-                .iter()
-                .flat_map(|prover| {
-                    [
-                        AccountMeta::new_readonly(*prover, false),
-                        AccountMeta::new_readonly(Proof::pda(intent_hash, prover).0, false),
-                    ]
-                })
-                .collect(),
-            data: borsh::to_vec(
-                &provers
-                    .iter()
-                    .map(|_| MemberQuery {
-                        account_count: 1,
-                        data: vec![],
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap(),
-        }
-    }
-
     pub fn get_proof(&mut self, args: GetProofArgs, provers: &[Pubkey]) -> TransactionResult {
-        let query = self.query_accounts(&args.intent_hash, provers);
+        let query = query_accounts(&args.intent_hash, provers);
         self.send_instruction(Instruction {
             program_id: aggregator_prover::ID,
             accounts: std::iter::once(AccountMeta::new_readonly(Config::pda().0, false))
@@ -128,44 +103,61 @@ impl AggregatorProver<'_> {
         };
         let config = self.get_account(&Config::pda().0).unwrap();
         let config = Config::try_deserialize(&mut config.data.as_slice()).unwrap();
-        let provers = std::iter::once(prover)
-            .chain(
-                config
-                    .provers
-                    .into_iter()
-                    .filter(|member| *member != prover),
-            )
-            .collect::<Vec<_>>();
-        let query = self.query_accounts(intent_hash, &provers);
-        let accounts = query
-            .accounts
+        let selected = [
+            AccountMeta::new(Proof::pda(intent_hash, &prover).0, false),
+            AccountMeta::new(recipient, prover != hyper_prover::ID),
+        ]
+        .into();
+        let others = config
+            .provers
             .into_iter()
-            .enumerate()
-            .flat_map(|(index, account)| {
-                if index == 1 {
-                    vec![
-                        AccountMeta::new(account.pubkey, false),
-                        AccountMeta::new(recipient, prover != hyper_prover::ID),
-                    ]
-                } else {
-                    vec![account]
-                }
-            });
+            .filter(|member| *member != prover)
+            .map(|member| (member, proof_query(intent_hash, &member)));
+        let query = member_queries(std::iter::once((prover, selected)).chain(others));
+
         ProverQuery {
             accounts: std::iter::once(AccountMeta::new_readonly(Config::pda().0, false))
-                .chain(accounts)
+                .chain(query.accounts)
                 .collect(),
-            data: borsh::to_vec(
-                &provers
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| MemberQuery {
-                        account_count: if index == 0 { 2 } else { 1 },
-                        data: vec![],
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap(),
+            data: query.data,
         }
+    }
+}
+
+pub fn query_accounts(intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
+    member_queries(
+        provers
+            .iter()
+            .map(|prover| (*prover, proof_query(intent_hash, prover))),
+    )
+}
+
+fn proof_query(intent_hash: &Bytes32, prover: &Pubkey) -> ProverQuery {
+    [AccountMeta::new_readonly(
+        Proof::pda(intent_hash, prover).0,
+        false,
+    )]
+    .into()
+}
+
+fn member_queries(members: impl IntoIterator<Item = (Pubkey, ProverQuery)>) -> ProverQuery {
+    let (queries, accounts): (Vec<_>, Vec<_>) = members
+        .into_iter()
+        .map(|(prover, query)| {
+            let ProverQuery { accounts, data } = query;
+            let query = MemberQuery {
+                account_count: accounts.len().try_into().unwrap(),
+                data,
+            };
+            let accounts =
+                std::iter::once(AccountMeta::new_readonly(prover, false)).chain(accounts);
+
+            (query, accounts)
+        })
+        .unzip();
+
+    ProverQuery {
+        accounts: accounts.into_iter().flatten().collect(),
+        data: borsh::to_vec(&queries).unwrap(),
     }
 }

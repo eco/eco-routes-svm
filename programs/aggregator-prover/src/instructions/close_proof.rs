@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::prover::{cpi, CloseProofArgs};
 
-use crate::instructions::{member_accounts, AggregatorProverError, MemberQuery};
+use crate::instructions::member::{member_accounts, Member};
+use crate::instructions::{AggregatorProverError, MemberQuery};
 use crate::state::Config;
 
 #[derive(Accounts)]
@@ -19,16 +20,21 @@ pub fn close_proof<'info>(
 ) -> Result<()> {
     let CloseProofArgs { intent_hash, data } = args;
     let queries = Vec::<MemberQuery>::try_from_slice(&data)?;
-    let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, &queries)?;
-    let (prover, accounts, query) = members
-        .first()
+    let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, queries)?;
+    let Member {
+        prover,
+        accounts,
+        query,
+    } = members
+        .into_iter()
+        .next()
         .ok_or(AggregatorProverError::InvalidProverSet)?;
 
     cpi::close_proof(
         prover,
         &ctx.accounts.portal_proof_closer,
         accounts,
-        CloseProofArgs::new(intent_hash, query.data.clone()),
+        CloseProofArgs::new(intent_hash, query.data),
         &[],
     )
 }

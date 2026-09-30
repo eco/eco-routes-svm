@@ -20,7 +20,7 @@ pub mod malicious_proof_closer {
         let data = ctx.accounts.proof.try_borrow_data()?;
         if data.len() != 1 {
             drop(data);
-            let valid = Proof::get(&ctx.accounts.proof, &crate::ID, args)?;
+            let valid = Proof::get(&ctx.accounts.proof, &crate::ID, &args.intent_hash)?;
             set_return_data(&borsh::to_vec(&valid)?);
 
             return Ok(());

@@ -81,7 +81,7 @@ pub mod malicious_prover {
 /// then the caller-supplied `prove_accounts` tail (the real local-prover program,
 /// payer, system program, event authority, then the target proof PDAs).
 #[derive(Accounts)]
-/// Mirrors `eco_svm_std::prover::prove`'s fixed account order, so this program is
+/// Mirrors `eco_svm_std::prover::cpi::prove`'s fixed account order, so this program is
 /// reachable from **both** dispatch paths: portal's `invoke_prover_prove` (where
 /// the caller orders the tail) and flash-fulfiller's prove leg (where the order
 /// is fixed by the helper). The nested CPI target comes from the tail rather than

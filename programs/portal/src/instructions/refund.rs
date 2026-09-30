@@ -6,7 +6,7 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
-use eco_svm_std::prover::{cpi, GetProofArgs};
+use eco_svm_std::prover::{cpi, GetProofArgs, Proof};
 use eco_svm_std::Bytes32;
 
 use crate::events::IntentRefunded;
@@ -64,17 +64,14 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
 
     let (token_transfer_accounts, prover_accounts) =
         token_transfer_and_prover_accounts(&ctx, prover_account_count)?;
-    let cancelled = validate_intent_status(
+    authorize_refund(
         &ctx,
         &reward,
         destination,
-        intent_hash,
-        prover_data,
+        GetProofArgs::new(intent_hash, prover_data),
         prover_accounts,
+        &token_transfer_accounts,
     )?;
-    if cancelled && reward.deadline > now()? {
-        require_reward_mints_swept(&ctx, &reward, &token_transfer_accounts)?;
-    }
 
     refund_native(&ctx, &signer_seeds)?;
     refund_tokens(&ctx, &signer_seeds, token_transfer_accounts)?;
@@ -84,40 +81,44 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
     Ok(())
 }
 
-fn validate_intent_status<'info>(
+impl<'info> Refund<'info> {
+    fn get_proof(
+        &self,
+        accounts: &[AccountInfo<'info>],
+        args: GetProofArgs,
+    ) -> Result<Option<Proof>> {
+        let prover = self.prover.as_ref().ok_or(PortalError::InvalidProver)?;
+        if !prover.executable {
+            require!(
+                accounts.is_empty() && args.data.is_empty(),
+                PortalError::InvalidProof
+            );
+
+            return Ok(None);
+        }
+
+        cpi::get_proof(prover, accounts, args)
+    }
+}
+
+fn authorize_refund<'info>(
     ctx: &Context<'info, Refund<'info>>,
     reward: &Reward,
     destination: u64,
-    intent_hash: Bytes32,
-    prover_data: Vec<u8>,
+    query: GetProofArgs,
     prover_accounts: &[AccountInfo<'info>],
-) -> Result<bool> {
-    if WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)? {
+    token_transfer_accounts: &VecTokenTransferAccounts,
+) -> Result<()> {
+    if WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &query.intent_hash)? {
         require!(
-            prover_accounts.is_empty() && prover_data.is_empty(),
+            prover_accounts.is_empty() && query.data.is_empty(),
             PortalError::InvalidProof
         );
 
-        return Ok(false);
+        return Ok(());
     }
-    let prover = ctx
-        .accounts
-        .prover
-        .as_ref()
-        .ok_or(PortalError::InvalidProver)?;
-    let proof = if prover.executable {
-        cpi::get_proof(
-            prover,
-            prover_accounts,
-            GetProofArgs::new(intent_hash, prover_data),
-        )?
-    } else {
-        require!(
-            prover_accounts.is_empty() && prover_data.is_empty(),
-            PortalError::InvalidProof
-        );
-        None
-    };
+
+    let proof = ctx.accounts.get_proof(prover_accounts, query)?;
     match proof {
         Some(proof) => {
             require!(proof.destination == destination, PortalError::InvalidProof);
@@ -126,14 +127,16 @@ fn validate_intent_status<'info>(
                 PortalError::IntentFulfilledAndNotWithdrawn
             );
 
-            Ok(true)
+            if reward.deadline > now()? {
+                require_reward_mints_swept(ctx, reward, token_transfer_accounts)?;
+            }
         }
         None => {
             require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
-
-            Ok(false)
         }
     }
+
+    Ok(())
 }
 
 fn require_reward_mints_swept(

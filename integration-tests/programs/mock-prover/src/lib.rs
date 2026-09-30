@@ -24,7 +24,7 @@ fn process_instruction(
         return Err(ProgramError::NotEnoughAccountKeys);
     }
     let proof = accounts.first().ok_or(ProgramError::NotEnoughAccountKeys)?;
-    let valid = Proof::get(proof, program_id, args)?;
+    let valid = Proof::get(proof, program_id, &args.intent_hash)?;
     set_return_data(&borsh::to_vec(&valid)?);
 
     Ok(())

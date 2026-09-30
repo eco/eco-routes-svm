@@ -1,6 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-use anchor_lang::solana_program::program::invoke_signed;
 use derive_new::new;
 
 use crate::{claimant, Bytes32};
@@ -52,12 +50,14 @@ impl Proof {
         self.claimant == *claimant && claimant::is_payable(&self.claimant)
     }
 
-    pub fn get(account: &AccountInfo, prover: &Pubkey, args: GetProofArgs) -> Result<Option<Self>> {
-        let GetProofArgs { intent_hash, .. } = args;
-
+    pub fn get(
+        account: &AccountInfo,
+        prover: &Pubkey,
+        intent_hash: &Bytes32,
+    ) -> Result<Option<Self>> {
         require_keys_eq!(
             account.key(),
-            Self::pda(&intent_hash, prover).0,
+            Self::pda(intent_hash, prover).0,
             ProverError::InvalidProof
         );
 
@@ -161,64 +161,6 @@ pub struct IntentProven {
     intent_hash: Bytes32,
     claimant: Pubkey,
     destination: u64,
-}
-
-/// CPIs a prover program's `prove` instruction for a single intent.
-///
-/// Generic over any prover that follows the standard `prove(ProveArgs)` shape
-/// (local-prover, hyper-prover, etc.). `caller` is signed via `caller_seeds`, so
-/// it must be an authority the prover accepts — `portal::state::dispatcher_pda(prover)`
-/// or `flash_fulfiller::state::prove_authority_pda(prover)`, both scoped to the
-/// prover being dispatched to.
-///
-/// Never pass a fund-holding or claimant identity (e.g. `flash_vault`) as
-/// `caller`. `prover_program` is caller-chosen at every current call site, so
-/// whatever signs here is handed to a program the caller picked; scoping the
-/// authority to that program is what makes the signature useless to it. A
-/// credential that also controls funds would hand over both.
-///
-/// The instruction built here is a fixed six accounts and forwards no tail, so a
-/// caller-chosen `prover_program` receives no other program to replay `caller`
-/// into. That is load-bearing — see `flash_fulfill_confused_deputy.rs`.
-#[allow(clippy::too_many_arguments)]
-pub fn prove<'info>(
-    prover_program: &AccountInfo<'info>,
-    caller: &AccountInfo<'info>,
-    caller_seeds: &[&[u8]],
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    event_authority: &AccountInfo<'info>,
-    proof: &AccountInfo<'info>,
-    args: ProveArgs,
-) -> Result<()> {
-    let mut data = PROVE_DISCRIMINATOR.to_vec();
-    args.serialize(&mut data)?;
-
-    let accounts = vec![
-        AccountMeta::new_readonly(caller.key(), true),
-        AccountMeta::new(payer.key(), true),
-        AccountMeta::new_readonly(system_program.key(), false),
-        AccountMeta::new_readonly(event_authority.key(), false),
-        AccountMeta::new_readonly(prover_program.key(), false),
-        AccountMeta::new(proof.key(), false),
-    ];
-
-    let infos = [
-        caller.to_account_info(),
-        payer.to_account_info(),
-        system_program.to_account_info(),
-        event_authority.to_account_info(),
-        prover_program.to_account_info(),
-        proof.to_account_info(),
-    ];
-
-    let ix = Instruction {
-        program_id: prover_program.key(),
-        accounts,
-        data,
-    };
-
-    invoke_signed(&ix, &infos, &[caller_seeds]).map_err(Into::into)
 }
 
 #[cfg(test)]

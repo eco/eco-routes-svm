@@ -45,13 +45,14 @@ pub fn close_proof<'info>(
     );
     if !WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)? {
         require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
+        let proof = cpi::get_proof(
+            &ctx.accounts.prover,
+            ctx.remaining_accounts,
+            GetProofArgs::new(intent_hash, prover_data.clone()),
+        )?
+        .ok_or(PortalError::IntentNotCancelled)?;
         require!(
-            cpi::get_proof(
-                &ctx.accounts.prover,
-                ctx.remaining_accounts,
-                GetProofArgs::new(intent_hash, prover_data.clone()),
-            )?
-            .is_some_and(|proof| proof.destination == destination && proof.is_cancelled()),
+            proof.destination == destination && proof.is_cancelled(),
             PortalError::IntentNotCancelled
         );
     }

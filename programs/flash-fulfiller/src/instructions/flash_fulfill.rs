@@ -112,7 +112,7 @@ pub struct FlashFulfill<'info> {
     /// crate). Safe because the only PDA signed into it, `prove_authority`, is
     /// scoped to this account's own key, so no honest prover accepts it.
     ///
-    /// `prover::prove` also hands it `payer` as a writable signer. That is
+    /// `prover::cpi::prove` also hands it `payer` as a writable signer. That is
     /// self-inflicted: whoever supplies `payer` also chooses this account. The
     /// buffered flow does not change that — the writer picks `reward.prover`,
     /// but the prove and withdraw legs share one `proof` account, which pins
@@ -182,7 +182,7 @@ pub fn flash_fulfill<'info>(
         &[prove_authority_bump],
     ];
 
-    prover::prove(
+    prover::cpi::prove(
         &ctx.accounts.local_prover_program.to_account_info(),
         &ctx.accounts.prove_authority.to_account_info(),
         prove_authority_seeds,

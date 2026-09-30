@@ -279,7 +279,7 @@ fn bridge_delivery_validates_and_withdraws_without_aggregation() {
         let vault = vault_pda(&hash).0;
         let proof_address = Proof::pda(&hash, &aggregator_prover::ID).0;
         let marker = WithdrawnMarker::pda(&hash).0;
-        let query = context.aggregator_prover().query_accounts(&hash, &PROVERS);
+        let query = common::aggregator_query(&hash, &PROVERS);
         let refund = context.portal().refund_intent_with_accounts(
             DESTINATION,
             reward.clone(),
@@ -325,7 +325,7 @@ fn bridge_delivery_validates_and_withdraws_without_aggregation() {
                 ]
             })
             .collect::<Vec<_>>();
-        let query = context.aggregator_prover().query_accounts(&hash, &PROVERS);
+        let query = common::aggregator_query(&hash, &PROVERS);
         let result = context.portal().withdraw_intent(
             DESTINATION,
             reward.clone(),
@@ -448,7 +448,7 @@ fn query_rejects_unconfigured_member_and_substituted_proof() {
             &[malicious_proof_closer::ID, PROVERS[1], PROVERS[2]]
         )
         .is_err_and(common::is_error(AggregatorProverError::InvalidProver)));
-    let query = context.aggregator_prover().query_accounts(
+    let query = common::aggregator_query(
         &args.intent_hash,
         &[local_prover::ID, hyper_prover::ID, polymer_prover::ID],
     );
@@ -486,7 +486,7 @@ fn every_member_and_late_proofs_can_be_cleaned_after_withdrawal() {
     for prover in PROVERS {
         set_prover_proof(&mut context, &hash, prover, DESTINATION, claimant);
     }
-    let query = context.aggregator_prover().query_accounts(&hash, &PROVERS);
+    let query = common::aggregator_query(&hash, &PROVERS);
     context
         .portal()
         .withdraw_intent(
@@ -835,7 +835,7 @@ fn refund_uses_returned_cancellation_before_or_after_deadline() {
         if expired {
             context.warp_to_timestamp(reward.deadline.try_into().unwrap());
         }
-        let query = context.aggregator_prover().query_accounts(&hash, &PROVERS);
+        let query = common::aggregator_query(&hash, &PROVERS);
         let balance = context.balance(&reward.creator);
         context
             .portal()
@@ -891,7 +891,7 @@ fn mismatched_first_proof_cannot_hide_another_members_proof_during_refund() {
             Pubkey::new_unique(),
         );
         context.warp_to_timestamp(reward.deadline.try_into().unwrap());
-        let query = context.aggregator_prover().query_accounts(
+        let query = common::aggregator_query(
             &hash,
             &[local_prover::ID, hyper_prover::ID, polymer_prover::ID],
         );

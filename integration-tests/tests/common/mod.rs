@@ -34,6 +34,10 @@ mod local_prover_context;
 pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
+mod prover_query;
+
+pub use aggregator_prover_context::query_accounts as aggregator_query;
+pub use prover_query::ProverQuery;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");

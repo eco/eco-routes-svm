@@ -75,16 +75,17 @@ pub fn withdraw_intent<'info>(
     let reward_token_amounts = reward.token_amounts()?;
     let (token_transfer_accounts, prover_accounts) =
         token_transfer_and_remaining_accounts(&ctx, &reward_token_amounts)?;
+    let proof = cpi::get_proof(
+        &ctx.accounts.prover,
+        prover_accounts,
+        GetProofArgs::new(intent_hash, prover_data),
+    )?
+    .ok_or(PortalError::IntentNotFulfilled)?;
     require!(
-        cpi::get_proof(
-            &ctx.accounts.prover,
-            prover_accounts,
-            GetProofArgs::new(intent_hash, prover_data),
-        )?
-        .is_some_and(|proof| proof.destination == destination
-            && proof.is_payable_to(&ctx.accounts.claimant.key())),
+        proof.destination == destination && proof.is_payable_to(&ctx.accounts.claimant.key()),
         PortalError::IntentNotFulfilled
     );
+
     withdraw_native(&ctx, &reward, &signer_seeds)?;
     withdraw_tokens(
         &ctx,
