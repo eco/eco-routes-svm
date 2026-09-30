@@ -6,7 +6,7 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
-use eco_svm_std::prover::cpi;
+use eco_svm_std::prover::{cpi, GetProofArgs};
 use eco_svm_std::Bytes32;
 
 use crate::events::IntentRefunded;
@@ -19,7 +19,7 @@ pub struct RefundArgs {
     pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
-    pub kind: RefundKind,
+    pub prover_data: Vec<u8>,
     pub prover_account_count: u8,
 }
 
@@ -45,19 +45,12 @@ pub struct Refund<'info> {
     pub system_program: Program<'info, System>,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
-pub enum RefundKind {
-    Expired,
-    Cancelled,
-    Withdrawn,
-}
-
 pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs) -> Result<()> {
     let RefundArgs {
         destination,
         route_hash,
         reward,
-        kind,
+        prover_data,
         prover_account_count,
     } = args;
     let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
@@ -71,15 +64,15 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
 
     let (token_transfer_accounts, prover_accounts) =
         token_transfer_and_prover_accounts(&ctx, prover_account_count)?;
-    validate_intent_status(
+    let cancelled = validate_intent_status(
         &ctx,
         &reward,
         destination,
         intent_hash,
-        kind,
+        prover_data,
         prover_accounts,
     )?;
-    if kind == RefundKind::Cancelled && reward.deadline > now()? {
+    if cancelled && reward.deadline > now()? {
         require_reward_mints_swept(&ctx, &reward, &token_transfer_accounts)?;
     }
 
@@ -96,45 +89,44 @@ fn validate_intent_status<'info>(
     reward: &Reward,
     destination: u64,
     intent_hash: Bytes32,
-    kind: RefundKind,
+    prover_data: Vec<u8>,
     prover_accounts: &[AccountInfo<'info>],
-) -> Result<()> {
-    let withdrawn = WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)?;
-    if kind == RefundKind::Withdrawn {
-        require!(withdrawn, PortalError::InvalidWithdrawnMarker);
-        require!(prover_accounts.is_empty(), PortalError::InvalidProof);
+) -> Result<bool> {
+    if WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)? {
+        require!(
+            prover_accounts.is_empty() && prover_data.is_empty(),
+            PortalError::InvalidProof
+        );
 
-        return Ok(());
+        return Ok(false);
     }
-    require!(!withdrawn, PortalError::IntentAlreadyWithdrawn);
     let prover = ctx
         .accounts
         .prover
         .as_ref()
         .ok_or(PortalError::InvalidProver)?;
-    match kind {
-        RefundKind::Expired => {
+    let proof = if prover.executable {
+        cpi::get_proof(
+            prover,
+            prover_accounts,
+            GetProofArgs::new(intent_hash, destination, prover_data),
+        )?
+    } else {
+        require!(
+            prover_accounts.is_empty() && prover_data.is_empty(),
+            PortalError::InvalidProof
+        );
+        None
+    };
+    match proof {
+        Some(proof) if proof.is_cancelled() => Ok(true),
+        Some(_) => err!(PortalError::IntentFulfilledAndNotWithdrawn),
+        None => {
             require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
-            if prover.executable {
-                require!(
-                    !cpi::has_proof(prover, prover_accounts, intent_hash, destination)?,
-                    PortalError::IntentFulfilledAndNotWithdrawn
-                );
-            } else {
-                require!(prover_accounts.is_empty(), PortalError::InvalidProof);
-            }
-        }
-        RefundKind::Cancelled => {
-            require!(prover.executable, PortalError::InvalidProver);
-            require!(
-                cpi::validate_cancelled(prover, prover_accounts, intent_hash, destination)?,
-                PortalError::IntentNotCancelled
-            );
-        }
-        RefundKind::Withdrawn => unreachable!(),
-    }
 
-    Ok(())
+            Ok(false)
+        }
+    }
 }
 
 fn require_reward_mints_swept(

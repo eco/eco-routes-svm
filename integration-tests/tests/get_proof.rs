@@ -1,9 +1,10 @@
+use anchor_lang::prelude::borsh;
 use anchor_lang::{AnchorSerialize, InstructionData};
 use eco_svm_std::prover::{
-    Proof, ProverError, ValidateProofArgs, CLOSE_PROOF_DISCRIMINATOR, VALIDATE_PROOF_DISCRIMINATOR,
+    GetProofArgs, Proof, ProverError, CLOSE_PROOF_DISCRIMINATOR, GET_PROOF_DISCRIMINATOR,
 };
 use eco_svm_std::{claimant, Bytes32, CHAIN_ID};
-use portal::instructions::{PortalError, RefundKind};
+use portal::instructions::PortalError;
 use portal::state::{vault_pda, WithdrawnMarker};
 use portal::types::intent_hash;
 use serde_json::{json, Value};
@@ -18,9 +19,9 @@ fn query(
     context: &mut common::Context,
     prover: Pubkey,
     proof: Pubkey,
-    args: ValidateProofArgs,
+    args: GetProofArgs,
 ) -> common::TransactionResult {
-    let mut data = VALIDATE_PROOF_DISCRIMINATOR.to_vec();
+    let mut data = GET_PROOF_DISCRIMINATOR.to_vec();
     args.serialize(&mut data).unwrap();
     context.send_instruction(Instruction {
         program_id: prover,
@@ -30,13 +31,13 @@ fn query(
 }
 
 #[test]
-fn concrete_validators_return_boolean_for_canonical_proof_contents() {
+fn concrete_provers_return_only_valid_canonical_proofs() {
     for prover in [local_prover::ID, hyper_prover::ID, polymer_prover::ID] {
         let mut context = common::Context::default();
         let hash: Bytes32 = [12; 32].into();
         let proof = Proof::pda(&hash, &prover).0;
         let claimant = Pubkey::new_unique();
-        let args = ValidateProofArgs::new(hash, CHAIN_ID, Some(claimant));
+        let args = GetProofArgs::new(hash, CHAIN_ID, vec![]);
         assert_eq!(
             query(&mut context, prover, proof, args.clone())
                 .unwrap()
@@ -55,31 +56,27 @@ fn concrete_validators_return_boolean_for_canonical_proof_contents() {
         for (destination, actual_claimant, expected) in [
             (CHAIN_ID, claimant, true),
             (CHAIN_ID + 1, claimant, false),
-            (CHAIN_ID, Pubkey::new_unique(), false),
+            (CHAIN_ID, Pubkey::new_unique(), true),
             (CHAIN_ID, Pubkey::default(), false),
         ] {
             context.set_proof(proof, Proof::new(destination, actual_claimant), prover);
             let before = context.get_account(&proof).unwrap();
             let result = query(&mut context, prover, proof, args.clone()).unwrap();
             assert_eq!(result.return_data.program_id, prover);
-            assert_eq!(result.return_data.data, vec![u8::from(expected)]);
+            assert_eq!(
+                result.return_data.data,
+                borsh::to_vec(&expected.then(|| Proof::new(destination, actual_claimant))).unwrap()
+            );
             assert_eq!(context.get_account(&proof).unwrap(), before);
         }
         context.set_proof(proof, Proof::new(CHAIN_ID, claimant::cancelled()), prover);
-        for claimant in [None, Some(claimant::cancelled())] {
-            assert_eq!(
-                query(
-                    &mut context,
-                    prover,
-                    proof,
-                    ValidateProofArgs::new(hash, CHAIN_ID, claimant)
-                )
+        assert_eq!(
+            query(&mut context, prover, proof, args.clone())
                 .unwrap()
                 .return_data
                 .data,
-                vec![1]
-            );
-        }
+            borsh::to_vec(&Some(Proof::new(CHAIN_ID, claimant::cancelled()))).unwrap(),
+        );
         context.set_proof(proof, Proof::new(CHAIN_ID, claimant), prover);
         let valid = context.get_account(&proof).unwrap();
         for mutation in 0..4 {
@@ -108,7 +105,7 @@ fn concrete_validators_return_boolean_for_canonical_proof_contents() {
 
 #[test]
 fn invalid_return_data_never_authorizes_timeout_refund() {
-    for mode in 0..6 {
+    for mode in 0..10 {
         let mut context = common::Context::default();
         let (destination, _, mut reward) = context.rand_intent();
         reward.prover = malicious_proof_closer::ID;
@@ -139,7 +136,6 @@ fn invalid_return_data_never_authorizes_timeout_refund() {
             proof,
             WithdrawnMarker::pda(&hash).0,
             reward.creator,
-            RefundKind::Expired,
             Some(reward.prover),
             [],
             vec![
@@ -190,14 +186,14 @@ fn cancellation_cleanup_rejects_wrong_destination() {
 
 #[test]
 fn shared_instruction_discriminators_and_generated_idls_match() {
-    let args = ValidateProofArgs::new([0; 32].into(), CHAIN_ID, None);
+    let args = GetProofArgs::new([0; 32].into(), CHAIN_ID, vec![]);
     for data in [
-        local_prover::instruction::ValidateProof { args: args.clone() }.data(),
-        hyper_prover::instruction::ValidateProof { args: args.clone() }.data(),
-        polymer_prover::instruction::ValidateProof { args: args.clone() }.data(),
-        aggregator_prover::instruction::ValidateProof { args }.data(),
+        local_prover::instruction::GetProof { args: args.clone() }.data(),
+        hyper_prover::instruction::GetProof { args: args.clone() }.data(),
+        polymer_prover::instruction::GetProof { args: args.clone() }.data(),
+        aggregator_prover::instruction::GetProof { args }.data(),
     ] {
-        assert_eq!(data[..8], VALIDATE_PROOF_DISCRIMINATOR);
+        assert_eq!(data[..8], GET_PROOF_DISCRIMINATOR);
     }
     for name in [
         "local_prover",
@@ -211,19 +207,19 @@ fn shared_instruction_discriminators_and_generated_idls_match() {
         let instructions = idl["instructions"].as_array().unwrap();
         let validate = instructions
             .iter()
-            .find(|instruction| instruction["name"] == "validate_proof")
+            .find(|instruction| instruction["name"] == "get_proof")
             .unwrap();
-        assert_eq!(validate["returns"], "bool");
         assert_eq!(
-            validate["discriminator"],
-            json!(VALIDATE_PROOF_DISCRIMINATOR)
+            validate["returns"],
+            json!({"option": {"defined": {"name": "Proof"}}})
         );
+        assert_eq!(validate["discriminator"], json!(GET_PROOF_DISCRIMINATOR));
         let close = instructions
             .iter()
             .find(|instruction| instruction["name"] == "close_proof")
             .unwrap();
         assert_eq!(close["discriminator"], json!(CLOSE_PROOF_DISCRIMINATOR));
-        assert_eq!(close["args"][0]["name"], "intent_hash");
+        assert_eq!(close["args"][0]["name"], "args");
         if name == "aggregator_prover" {
             assert!(instructions
                 .iter()

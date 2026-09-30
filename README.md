@@ -273,7 +273,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `fund` - Fund an intent with reward tokens
 - `fulfill` - Execute intent operations and mark as fulfilled
 - `prove` - Submit proof of fulfillment from destination chain
-- `refund` - Refund after the reward deadline with no applicable proof, on a proven cancellation, or after withdrawal. The caller selects `RefundKind` and supplies the validation tail. Refund creates no marker and leaves proofs intact. Before the deadline cancellation refunds still sweep every reward mint; after it partial sweeps are allowed.
+- `refund` - Refund after the reward deadline with no applicable proof, on a proven cancellation, or after withdrawal. Portal determines the refund path from the withdrawal marker or returned proof. Refund creates no marker and leaves proofs intact. Before the deadline cancellation refunds still sweep every reward mint; after it partial sweeps are allowed.
 - `withdraw` - Validate the payout claimant through the prover, transfer rewards, and create the permanent withdrawal marker. Leaves proofs intact
 - `close_proof` - Independently reclaim proof rent after withdrawal, or for a validated cancellation at/after the reward deadline
 - `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes a permanent `FulfillMarker` holding the `CANCELLED` sentinel (a hash-derived, unowned EVM address, byte-identical to EVM `Inbox.CANCELLED`) at the intent's fulfill-marker PDA; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
@@ -290,8 +290,8 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `init` - Initialize prover with whitelisted senders
 - `handle` - Process incoming Hyperlane messages and create proof accounts
 - `prove` - Send proof message via Hyperlane
-- `validate_proof` - Return whether a matching proof exists
-- `close_proof(intent_hash)` - Close the canonical proof with Portal’s intent-scoped authorization
+- `get_proof` - Return `Option<Proof>` for the requested intent and destination
+- `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
 - `ProofAccount` - Stores proof data for intent fulfillment
@@ -305,8 +305,8 @@ A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobo
 - `init` - Initialize prover with whitelisted emitters
 - `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
 - `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse. Capped at 24 intents per call because Solana truncates a transaction's logs at 10 KB while the transaction still succeeds; that budget is shared by every instruction in the transaction, so submit `portal::prove` as the only log-emitting instruction in its transaction, then count the `Program log: Prove: program: <polymer_prover id>, ` lines in `meta.logMessages` against the hashes sent and resubmit any shortfall (`prove` writes no state, so the retry is safe)
-- `validate_proof` - Return whether a matching proof exists
-- `close_proof(intent_hash)` - Close the canonical proof with Portal’s intent-scoped authorization
+- `get_proof` - Return `Option<Proof>` for the requested intent and destination
+- `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
 - `ProofAccount` - Stores proof data for intent fulfillment
@@ -318,8 +318,8 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 #### Key Instructions:
 - `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
-- `validate_proof` - Return whether a matching proof exists
-- `close_proof(intent_hash)` - Close the canonical proof with Portal’s intent-scoped authorization; rent goes to the signing payer
+- `get_proof` - Return `Option<Proof>` for the requested intent and destination
+- `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization; rent goes to the signing payer
 
 ### Flash-Fulfiller Program
 
@@ -340,14 +340,14 @@ A helper program used by Hyperlane message construction in tests and off-chain t
 ### Aggregator-Prover Program
 
 - `init()` — the upgrade authority initializes immutable `Config` once with 1–8 unique executable prover IDs. A different set requires another deployment.
-- `validate_proof(args)` — forward an exact claimant query to the selected member, or check all configured members for a wildcard query. Return a boolean under the aggregator's program ID.
-- `close_proof(intent_hash)` — forward Portal's intent-scoped signer to the selected member; the leaf closes its own proof and applies its rent-recipient policy.
+- `get_proof(args)` — query all configured members in caller order using variable-length account groups; return the first proof, or `None` only if every member has none.
+- `close_proof(args)` — forward Portal's intent-scoped signer to the selected member; the leaf closes its own proof and applies its rent-recipient policy.
 
-The aggregator has no `aggregate`, `prove`, proof account or proof event. Destination dispatch and source delivery use concrete provers. An applicable proof at any configured member blocks timeout refund immediately. Listeners track concrete prover events and identify the member when requesting settlement.
+The aggregator has no `aggregate`, `prove`, proof account or proof event. Destination dispatch and source delivery use concrete provers. A returned fulfillment proof blocks refund until withdrawal; cancellation evidence permits immediate refund. Listeners track concrete prover events and identify the member when requesting settlement.
 
-The trust floor is the weakest configured prover. Initialize and review the exact member set before finalizing deployment; executable status alone does not establish trust or interface compatibility. This interface supports one aggregation layer over concrete, single-proof-account members.
+The trust floor is the weakest configured prover. Initialize and review the exact member set before finalizing deployment; executable status alone does not establish trust or interface compatibility. Members supply their own account layouts and query data; account groups have explicit lengths.
 
-See [Prover validation and cleanup](docs/prover-interface.md) for account order, boolean semantics, refund paths and the breaking client changes.
+See [Proof queries and cleanup](docs/prover-interface.md) for account order, proof query semantics, refund paths and the breaking client changes.
 
 ## Testing
 

@@ -67,7 +67,7 @@ impl LocalProver<'_> {
         proof: Pubkey,
     ) -> TransactionResult {
         let instruction = local_prover::instruction::CloseProof {
-            intent_hash: [1; 32].into(),
+            args: eco_svm_std::prover::CloseProofArgs::new([1; 32].into(), vec![]),
         };
         let accounts = local_prover::accounts::CloseProof {
             portal_proof_closer: portal_proof_closer.pubkey(),

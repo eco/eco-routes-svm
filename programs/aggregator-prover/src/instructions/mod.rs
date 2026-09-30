@@ -1,12 +1,15 @@
 use anchor_lang::prelude::*;
 
 mod close_proof;
+mod get_proof;
 mod init;
-mod validate_proof;
+mod member;
 
 pub use close_proof::*;
+pub use get_proof::*;
 pub use init::*;
-pub use validate_proof::*;
+use member::member_accounts;
+pub use member::MemberQuery;
 
 use crate::state;
 

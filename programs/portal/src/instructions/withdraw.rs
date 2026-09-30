@@ -6,7 +6,7 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::cpi;
+use eco_svm_std::prover::{cpi, GetProofArgs};
 use eco_svm_std::Bytes32;
 
 use crate::events::IntentWithdrawn;
@@ -22,6 +22,7 @@ pub struct WithdrawArgs {
     pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
+    pub prover_data: Vec<u8>,
 }
 
 #[derive(Accounts)]
@@ -29,7 +30,7 @@ pub struct WithdrawArgs {
 pub struct Withdraw<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    /// CHECK: validated in `validate_proof`
+    /// CHECK: must match the returned proof’s payable claimant.
     #[account(mut)]
     pub claimant: UncheckedAccount<'info>,
     /// CHECK: address is validated
@@ -54,6 +55,7 @@ pub fn withdraw_intent<'info>(
         destination,
         route_hash,
         reward,
+        prover_data,
     } = args;
     let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
@@ -74,13 +76,12 @@ pub fn withdraw_intent<'info>(
     let (token_transfer_accounts, prover_accounts) =
         token_transfer_and_remaining_accounts(&ctx, &reward_token_amounts)?;
     require!(
-        cpi::validate_proof(
+        cpi::get_proof(
             &ctx.accounts.prover,
             prover_accounts,
-            intent_hash,
-            destination,
-            ctx.accounts.claimant.key()
-        )?,
+            GetProofArgs::new(intent_hash, destination, prover_data),
+        )?
+        .is_some_and(|proof| proof.is_payable_to(&ctx.accounts.claimant.key())),
         PortalError::IntentNotFulfilled
     );
     withdraw_native(&ctx, &reward, &signer_seeds)?;

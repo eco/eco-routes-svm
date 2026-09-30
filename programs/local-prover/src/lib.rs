@@ -17,14 +17,14 @@ pub mod local_prover {
         prove_intent(ctx, args)
     }
 
-    pub fn validate_proof(
-        ctx: Context<ValidateProof>,
-        args: prover::ValidateProofArgs,
-    ) -> Result<bool> {
-        instructions::validate_proof(ctx, args)
+    pub fn get_proof(
+        ctx: Context<GetProof>,
+        args: prover::GetProofArgs,
+    ) -> Result<Option<prover::Proof>> {
+        instructions::get_proof(ctx, args)
     }
 
-    pub fn close_proof(ctx: Context<CloseProof>, intent_hash: eco_svm_std::Bytes32) -> Result<()> {
-        instructions::close_proof(ctx, intent_hash)
+    pub fn close_proof(ctx: Context<CloseProof>, args: prover::CloseProofArgs) -> Result<()> {
+        instructions::close_proof(ctx, args)
     }
 }

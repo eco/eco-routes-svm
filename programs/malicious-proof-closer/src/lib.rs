@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::{invoke, set_return_data};
 use eco_svm_std::prover::{
-    Proof, ValidateProofArgs, CLOSE_PROOF_DISCRIMINATOR, VALIDATE_PROOF_DISCRIMINATOR,
+    CloseProofArgs, GetProofArgs, Proof, CLOSE_PROOF_DISCRIMINATOR, GET_PROOF_DISCRIMINATOR,
 };
 use eco_svm_std::Bytes32;
 
@@ -13,15 +13,15 @@ declare_id!("3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp");
 pub mod malicious_proof_closer {
     use super::*;
 
-    pub fn validate_proof<'info>(
-        ctx: Context<'info, ValidateProof<'info>>,
-        args: ValidateProofArgs,
+    pub fn get_proof<'info>(
+        ctx: Context<'info, GetProof<'info>>,
+        args: GetProofArgs,
     ) -> Result<()> {
         let data = ctx.accounts.proof.try_borrow_data()?;
         if data.len() != 1 {
             drop(data);
-            let valid = Proof::validate(&ctx.accounts.proof, &crate::ID, args)?;
-            set_return_data(&[u8::from(valid)]);
+            let valid = Proof::get(&ctx.accounts.proof, &crate::ID, args)?;
+            set_return_data(&borsh::to_vec(&valid)?);
 
             return Ok(());
         }
@@ -34,7 +34,7 @@ pub mod malicious_proof_closer {
                     .remaining_accounts
                     .split_first()
                     .ok_or(ProgramError::NotEnoughAccountKeys)?;
-                let mut data = VALIDATE_PROOF_DISCRIMINATOR.to_vec();
+                let mut data = GET_PROOF_DISCRIMINATOR.to_vec();
                 args.serialize(&mut data)?;
                 invoke(
                     &Instruction {
@@ -49,6 +49,29 @@ pub mod malicious_proof_closer {
                 )?;
             }
             4 => return Err(ProgramError::InvalidInstructionData.into()),
+            6..=9 => {
+                let proof = Proof::new(
+                    if data[0] == 6 {
+                        args.destination + 1
+                    } else {
+                        args.destination
+                    },
+                    if data[0] == 7 {
+                        Pubkey::default()
+                    } else {
+                        crate::ID
+                    },
+                );
+                let mut response = borsh::to_vec(&Some(proof))?;
+                match data[0] {
+                    8 => {
+                        response.pop();
+                    }
+                    9 => response.push(0),
+                    _ => (),
+                }
+                set_return_data(&response);
+            }
             _ => {
                 require!(
                     !ctx.accounts.proof.is_signer
@@ -66,15 +89,15 @@ pub mod malicious_proof_closer {
         Ok(())
     }
 
-    pub fn close_proof(ctx: Context<CloseProof>, intent_hash: Bytes32) -> Result<()> {
+    pub fn close_proof(ctx: Context<CloseProof>, args: CloseProofArgs) -> Result<()> {
         let data = ctx.accounts.own_proof.try_borrow_data()?;
         let intent_hash = if data.len() == 32 {
             Bytes32::try_from_slice(&data)?
         } else {
-            intent_hash
+            args.intent_hash
         };
         let mut data = CLOSE_PROOF_DISCRIMINATOR.to_vec();
-        intent_hash.serialize(&mut data)?;
+        CloseProofArgs::new(intent_hash, vec![]).serialize(&mut data)?;
         let accounts = vec![
             AccountMeta::new_readonly(ctx.accounts.proof_closer.key(), true),
             AccountMeta::new(ctx.accounts.target_proof.key(), false),
@@ -98,7 +121,7 @@ pub mod malicious_proof_closer {
 }
 
 #[derive(Accounts)]
-pub struct ValidateProof<'info> {
+pub struct GetProof<'info> {
     /// CHECK: proof or test-controlled response mode.
     pub proof: UncheckedAccount<'info>,
 }

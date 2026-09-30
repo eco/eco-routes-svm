@@ -223,6 +223,7 @@ pub fn flash_fulfill<'info>(
         &ctx.accounts.system_program.to_account_info(),
         &reward_transfers,
         WithdrawArgs {
+            prover_data: vec![],
             destination: CHAIN_ID,
             route_hash,
             reward,

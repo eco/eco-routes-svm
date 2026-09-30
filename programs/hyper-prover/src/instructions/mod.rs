@@ -1,22 +1,22 @@
 use anchor_lang::prelude::*;
 
 mod close_proof;
+mod get_proof;
 mod handle;
 mod handle_account_metas;
 mod init;
 mod ism;
 mod ism_account_metas;
 mod prove;
-mod validate_proof;
 
 pub use close_proof::*;
+pub use get_proof::*;
 pub use handle::*;
 pub use handle_account_metas::*;
 pub use init::*;
 pub use ism::*;
 pub use ism_account_metas::*;
 pub use prove::*;
-pub use validate_proof::*;
 
 #[error_code]
 pub enum HyperProverError {

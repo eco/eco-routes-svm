@@ -40,30 +40,30 @@ prover whitelists must never cross generations.
 
 ## Source Chain
 
-The account ABI now delegates validation to the configured prover; see [Prover validation and cleanup](prover-interface.md) for complete account ordering.
+The account ABI now delegates validation to the configured prover; see [Proof queries and cleanup](prover-interface.md) for complete account ordering.
 
 ### `refund`
 
-- Pass `RefundArgs { destination, route_hash, reward, kind, prover_account_count }`. The final count separates prover accounts from caller-selected token triples.
-- `Expired`: require the reward deadline and a wildcard negative from every configured member. A supplied non-executable root still permits timeout refund; an omitted root or failed CPI does not.
-- `Cancelled`: require `cpi::validate_cancelled` to return true. Before the reward deadline every reward mint must be swept; at/after it partial sweeps are allowed. Proofs remain intact, so subsequent refunds can reuse them.
-- `Withdrawn`: require the authentic withdrawal marker and an empty prover tail; refund the supplied assets without executing a prover.
+- Pass `RefundArgs { destination, route_hash, reward, prover_data, prover_account_count }`. The final count separates prover accounts from caller-selected token triples.
+- No proof: require the reward deadline and `None` from the prover (every configured member for an aggregator). A supplied non-executable root still permits timeout refund; an omitted root or failed CPI does not.
+- Cancellation: require the returned proof’s `is_cancelled()` predicate. Before the reward deadline every reward mint must be swept; at/after it partial sweeps are allowed. Proofs remain intact, so subsequent refunds can reuse them.
+- Withdrawn: require the authentic withdrawal marker and an empty prover tail; refund the supplied assets without executing a prover.
 - Refund creates no marker and performs no proof cleanup. Validation accounts are read-only and unsigned. Larger requests may need a versioned transaction with a lookup table; the five-mint timeout test covers this path.
 
 ### `withdraw`
 
-Uses `cpi::validate_proof` for the payout claimant and requires true, otherwise `IntentNotFulfilled`. The std helper rejects zero and cancellation claimants. Withdrawal creates the existing permanent marker and leaves proofs intact. `IntentCancelled` keeps its existing error slot but is no longer returned by withdrawal.
+Uses `cpi::get_proof` and requires `Proof::is_payable_to` for the payout claimant, otherwise `IntentNotFulfilled`. The predicate rejects zero and cancellation claimants. Withdrawal creates the existing permanent marker and leaves proofs intact. `IntentCancelled` keeps its existing error slot but is no longer returned by withdrawal.
 
 ### `close_proof`
 
-Separate Portal instruction taking the intent preimage: `CloseProofArgs { destination, route_hash, reward }`. With an authentic withdrawal marker, any member proof for that intent can be closed. Otherwise require `now >= reward.deadline` and `cpi::validate_cancelled == true` for the same selected proof. A prior refund is not required. Before the deadline the cancellation evidence remains available for early refunds; after cleanup use remaining cancellation evidence or the timeout path if all members have no applicable proof.
+Separate Portal instruction taking the intent preimage: `CloseProofArgs { destination, route_hash, reward, prover_data }`. With an authentic withdrawal marker, any member proof for that intent can be closed. Otherwise require `now >= reward.deadline` and a returned proof with `is_cancelled() == true` for the same selected proof. A prior refund is not required. Before the deadline the cancellation evidence remains available for early refunds; after cleanup use remaining cancellation evidence or the timeout path if all members have no applicable proof.
 
 Hyperlane rent goes to its PDA payer; Local/Polymer rent goes to the supplied writable signing payer. Validation does not forward signer privileges. Cleanup preserves its rent-recipient privileges, so clients should only supply signers to trusted provers. Cleanup can be submitted later, once per member, including for late-arriving proofs. Bundling it with settlement shares the transaction rollback boundary.
 
 ## Errors and Events
 
 - `ReservedClaimant`: destination fulfillment attempted to use the cancellation claimant.
-- `IntentNotCancelled`: cancellation refund or cleanup received a negative cancellation query.
+- `IntentNotCancelled`: cleanup did not receive a cancellation proof.
 - `RewardNotExpired`: timeout refund, or cancellation cleanup without withdrawal, preceded the reward deadline.
 - `IntentCancelled { intent_hash: Bytes32 }`: destination cancellation event, unchanged.
 

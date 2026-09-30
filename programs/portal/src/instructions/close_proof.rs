@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::prover::cpi;
+use eco_svm_std::prover::{self, cpi, GetProofArgs};
 use eco_svm_std::Bytes32;
 
 use crate::instructions::{now, PortalError};
@@ -11,6 +11,7 @@ pub struct CloseProofArgs {
     pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
+    pub prover_data: Vec<u8>,
 }
 
 #[derive(Accounts)]
@@ -33,6 +34,7 @@ pub fn close_proof<'info>(
         destination,
         route_hash,
         reward,
+        prover_data,
     } = args;
     let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (authority, bump) = proof_closer_pda(&intent_hash);
@@ -44,12 +46,12 @@ pub fn close_proof<'info>(
     if !WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)? {
         require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
         require!(
-            cpi::validate_cancelled(
+            cpi::get_proof(
                 &ctx.accounts.prover,
                 ctx.remaining_accounts,
-                intent_hash,
-                destination
-            )?,
+                GetProofArgs::new(intent_hash, destination, prover_data.clone()),
+            )?
+            .is_some_and(|proof| proof.is_cancelled()),
             PortalError::IntentNotCancelled
         );
     }
@@ -58,7 +60,7 @@ pub fn close_proof<'info>(
         &ctx.accounts.prover,
         &ctx.accounts.proof_closer,
         ctx.remaining_accounts,
-        intent_hash,
+        prover::CloseProofArgs::new(intent_hash, prover_data),
         &[&[PROOF_CLOSER_SEED, intent_hash.as_ref(), &[bump]]],
     )
 }

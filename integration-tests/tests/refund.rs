@@ -98,7 +98,6 @@ fn refund_intent_native_success() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -148,7 +147,6 @@ fn refund_intent_tokens_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -200,7 +198,6 @@ fn refund_intent_tokens_2022_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -252,7 +249,6 @@ fn refund_intent_native_and_token_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -288,7 +284,6 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -320,7 +315,6 @@ fn refund_intent_withdrawn_success() {
     ctx.set_withdrawn_marker(withdrawn_marker);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Withdrawn,
         destination,
         reward.clone(),
         vault,
@@ -350,7 +344,6 @@ fn refund_intent_invalid_creator_fail() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -377,7 +370,6 @@ fn refund_intent_invalid_vault_fail() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         wrong_vault,
@@ -404,7 +396,6 @@ fn refund_intent_invalid_proof_fail() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -433,7 +424,6 @@ fn refund_intent_fulfilled_and_not_withdrawn_fail() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -458,7 +448,6 @@ fn refund_intent_not_expired_fail() {
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -509,7 +498,6 @@ fn refund_intent_invalid_creator_token_fail() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         vault,
@@ -599,7 +587,6 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
         })
         .collect();
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Withdrawn,
         destination,
         reward.clone(),
         vault,
@@ -816,7 +803,7 @@ fn refund_intent_cancelled_on_wrong_destination_not_expired_fail() {
     );
 
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::IntentNotCancelled
+        portal::instructions::PortalError::RewardNotExpired
     )));
 }
 
@@ -856,7 +843,6 @@ fn refund_intent_expired_with_non_program_prover_success() {
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         state::vault_pda(&intent_hash).0,
@@ -871,14 +857,10 @@ fn refund_intent_expired_with_non_program_prover_success() {
     assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
 }
 
-/// A `prover` that is passed must be executable, even on the timeout path that
-/// never calls it; omitting it (the portal ID in its slot) still refunds.
 #[test]
-fn refund_intent_non_program_prover_rejects_cancellation_but_allows_timeout() {
+fn refund_intent_non_program_prover_requires_deadline() {
     let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
     let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
-
-    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
     let result = ctx.portal().refund_intent_with_accounts(
         destination,
@@ -888,19 +870,18 @@ fn refund_intent_non_program_prover_rejects_cancellation_but_allows_timeout() {
         Proof::pda(&intent_hash, &reward.prover).0,
         state::WithdrawnMarker::pda(&intent_hash).0,
         reward.creator,
-        portal::instructions::RefundKind::Cancelled,
         Some(reward.prover),
         vec![],
         vec![],
     );
 
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidProver
+        portal::instructions::PortalError::RewardNotExpired
     )));
     assert_eq!(ctx.balance(&reward.creator), 0);
 
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
     let result = ctx.portal().refund_intent(
-        portal::instructions::RefundKind::Expired,
         destination,
         reward.clone(),
         state::vault_pda(&intent_hash).0,
@@ -953,7 +934,7 @@ fn refund_intent_cancelled_missing_reward_mint_fail() {
 }
 
 #[test]
-fn refund_intent_cancelled_non_program_prover_fail() {
+fn refund_intent_non_program_prover_cannot_authorize_early_cancellation() {
     let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
     let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
     let vault = state::vault_pda(&intent_hash).0;
@@ -977,11 +958,16 @@ fn refund_intent_cancelled_non_program_prover_fail() {
             vec![AccountMeta::new(pda_payer_pda().0, false)],
         );
 
-        assert!(result.is_err_and(common::is_error(
-            portal::instructions::PortalError::InvalidProver
-        )));
+        if now < reward.deadline {
+            assert!(result.is_err_and(common::is_error(
+                portal::instructions::PortalError::RewardNotExpired
+            )));
+            assert_eq!(ctx.balance(&reward.creator), 0);
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+        }
         assert!(ctx.get_account(&proof).is_some());
-        assert_eq!(ctx.balance(&reward.creator), 0);
     }
 }
 
@@ -1142,7 +1128,6 @@ fn refund_intent_invalid_prover_fail() {
             proof,
             state::WithdrawnMarker::pda(&intent_hash).0,
             reward.creator,
-            portal::instructions::RefundKind::Cancelled,
             Some(local_prover::ID),
             token_accounts.clone(),
             vec![AccountMeta::new(pda_payer_pda().0, false)],
@@ -1337,7 +1322,6 @@ fn refund_intent_five_mint_timeout_uses_lookup_table() {
         proof,
         withdrawn_marker,
         reward.creator,
-        portal::instructions::RefundKind::Expired,
         Some(reward.prover),
         token_accounts,
         vec![],

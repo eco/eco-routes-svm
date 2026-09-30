@@ -4,7 +4,6 @@ use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{event_authority_pda, Bytes32};
-use portal::instructions::RefundKind;
 use portal::state::proof_closer_pda;
 use portal::types::{Reward, Route};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -16,6 +15,21 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
 use crate::common::{hyperlane_context, Context, TransactionResult, COMPUTE_UNIT_LIMIT};
+
+#[derive(Clone)]
+pub struct ProverQuery {
+    pub accounts: Vec<AccountMeta>,
+    pub data: Vec<u8>,
+}
+
+impl<T: IntoIterator<Item = AccountMeta>> From<T> for ProverQuery {
+    fn from(accounts: T) -> Self {
+        Self {
+            accounts: accounts.into_iter().collect(),
+            data: vec![],
+        }
+    }
+}
 
 #[derive(Deref, DerefMut)]
 pub struct Portal<'a>(&'a mut Context);
@@ -151,7 +165,6 @@ impl Portal<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
-        kind: RefundKind,
         destination: u64,
         reward: Reward,
         vault: Pubkey,
@@ -169,7 +182,6 @@ impl Portal<'_> {
             proof,
             withdrawn_marker,
             creator,
-            kind,
             Some(reward.prover),
             token_transfer_accounts,
             vec![],
@@ -187,7 +199,7 @@ impl Portal<'_> {
         withdrawn_marker: Pubkey,
         creator: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        prover_accounts: Vec<AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         let prover = reward.prover;
 
@@ -199,7 +211,6 @@ impl Portal<'_> {
             proof,
             withdrawn_marker,
             creator,
-            RefundKind::Cancelled,
             Some(prover),
             token_transfer_accounts,
             prover_accounts,
@@ -216,10 +227,9 @@ impl Portal<'_> {
         proof: Pubkey,
         withdrawn_marker: Pubkey,
         creator: Pubkey,
-        kind: RefundKind,
         prover: Option<Pubkey>,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        prover_accounts: Vec<AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         let instruction = self.refund_intent_instruction(
             destination,
@@ -229,7 +239,6 @@ impl Portal<'_> {
             proof,
             withdrawn_marker,
             creator,
-            kind,
             prover,
             token_transfer_accounts,
             prover_accounts,
@@ -262,12 +271,17 @@ impl Portal<'_> {
         proof: Pubkey,
         withdrawn_marker: Pubkey,
         creator: Pubkey,
-        kind: RefundKind,
         prover: Option<Pubkey>,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        prover_accounts: Vec<AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
     ) -> Instruction {
-        let prover_accounts = if kind == RefundKind::Withdrawn
+        let ProverQuery {
+            accounts: prover_accounts,
+            data: prover_data,
+        } = prover_accounts.into();
+        let prover_accounts = if self
+            .get_account(&withdrawn_marker)
+            .is_some_and(|account| !account.data.is_empty())
             || !self
                 .get_account(&reward.prover)
                 .is_some_and(|account| account.executable)
@@ -282,7 +296,7 @@ impl Portal<'_> {
             destination,
             route_hash,
             reward,
-            kind,
+            prover_data,
             prover_account_count: prover_accounts.len().try_into().unwrap(),
         };
         let accounts: Vec<_> = portal::accounts::Refund {
@@ -319,7 +333,7 @@ impl Portal<'_> {
         proof: Pubkey,
         withdrawn_marker: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         self.withdraw_intent_with_signers(
             destination,
@@ -349,11 +363,16 @@ impl Portal<'_> {
         proof: Pubkey,
         withdrawn_marker: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl Into<ProverQuery>,
         signers: Vec<&Keypair>,
     ) -> TransactionResult {
         let prover = reward.prover;
+        let ProverQuery {
+            accounts: remaining_accounts,
+            data: prover_data,
+        } = remaining_accounts.into();
         let args = portal::instructions::WithdrawArgs {
+            prover_data,
             destination,
             route_hash,
             reward,
@@ -842,9 +861,13 @@ impl Portal<'_> {
         destination: u64,
         route_hash: Bytes32,
         reward: Reward,
-        accounts: Vec<AccountMeta>,
+        accounts: impl Into<ProverQuery>,
     ) -> Instruction {
         let intent_hash = portal::types::intent_hash(destination, &route_hash, &reward.hash());
+        let ProverQuery {
+            accounts,
+            data: prover_data,
+        } = accounts.into();
         Instruction {
             program_id: portal::ID,
             accounts: portal::accounts::CloseProof {
@@ -858,6 +881,7 @@ impl Portal<'_> {
             .collect(),
             data: portal::instruction::CloseProof {
                 args: portal::instructions::CloseProofArgs {
+                    prover_data,
                     destination,
                     route_hash,
                     reward,
@@ -872,7 +896,7 @@ impl Portal<'_> {
         destination: u64,
         route_hash: Bytes32,
         reward: Reward,
-        accounts: Vec<AccountMeta>,
+        accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         let instruction = self.close_proof_instruction(destination, route_hash, reward, accounts);
         let transaction = Transaction::new(

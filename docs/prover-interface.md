@@ -1,4 +1,4 @@
-# Prover validation and cleanup
+# Proof queries and cleanup
 
 This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Deploy the programs together under new IDs; regenerate clients from the release IDLs. Proof encoding, destination markers, withdrawal markers and bridge payloads are unchanged.
 
@@ -6,39 +6,43 @@ This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Deploy
 
 | Instruction | Arguments | Result |
 | --- | --- | --- |
-| `validate_proof` | `ValidateProofArgs { intent_hash, destination, claimant: Option<Pubkey> }` | `bool` |
-| `close_proof` | `intent_hash: Bytes32` | Unit |
+| `get_proof` | `GetProofArgs { intent_hash, destination, data: Vec<u8> }` | `Option<Proof>` |
+| `close_proof` | `CloseProofArgs { intent_hash, data: Vec<u8> }` | Unit |
 
-`Some(claimant)` checks an exact claimant. `None` checks for any valid nonzero claimant, including cancellation. A negative exact query does not establish absence of other claimants.
+`data` belongs to the invoked prover. Local, Hyper and Polymer need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, invalid contents, zero claimants or a destination mismatch. Substituted/omitted accounts and execution errors remain errors.
 
-A concrete validator requires its canonical proof PDA for the hash. Missing/pre-funded or invalid contents, zero claimant and destination/claimant mismatch return false. Substituted/omitted accounts and execution errors remain errors. Validation changes no state and receives no signer or writable privileges through the shared CPI helpers.
+`Proof::is_cancelled()` identifies cancellation; `Proof::is_payable_to(&claimant)` checks a nonzero, non-cancellation payout recipient. Portal applies settlement policy to the returned proof.
 
-`eco_svm_std::prover::cpi` exposes `validate_proof` (payable claimant), `validate_cancelled` (sentinel hidden inside std), `has_proof` (wildcard), `invoke_validate_proof` (adapter query) and `close_proof`. Boolean decoding requires exactly one byte, 0 or 1, with the invoked program as return-data producer. CPI/decoding errors never become false. The aggregator explicitly republishes the member result under its own program ID.
+`eco_svm_std::prover::cpi::get_proof` passes all accounts read-only and unsigned. It requires the invoked program as return-data producer and an exact Borsh `Option<Proof>` encoding, with no trailing bytes. A returned proof must match the requested destination and have a nonzero claimant. CPI/decoding errors never become `None`. The aggregator republishes the result under its own program ID.
 
-## Account tails
+## Aggregator framing
 
-| Operation | Concrete tail | Aggregator tail |
-| --- | --- | --- |
-| Exact validation | `[proof]` | `[config, selected_member_program, proof]` |
-| Wildcard validation | `[proof]` | `[config, member_program_0, proof_0, ...]` |
-| Cleanup | `[proof, rent_recipient]` | `[config, selected_member_program, proof, rent_recipient]` |
+The aggregator's `data` is Borsh-encoded `Vec<MemberQuery>`. Each entry has `account_count: u8` (excluding the member program) and opaque `data: Vec<u8>` forwarded to that member.
 
-Wildcard queries require every configured member exactly once in configuration order. The aggregator checks the complete framing before dispatch and returns false only after every member returns false. Exact queries and cleanup require configured executable membership. The aggregator owns only immutable config; it has no aggregate proof or proof event. Members are concrete programs with the single-proof-account validation ABI; nested aggregation is unsupported.
+Accounts are `[config, member_program_0, member_accounts_0..., member_program_1, member_accounts_1..., ...]`. Counts delimit the slices; members may need different numbers of accounts and different data. The aggregator validates membership, uniqueness and complete account consumption before dispatch.
 
-For cancellation cleanup the same tail is validated and closed. Validation ignores the cleanup-only rent recipient. Concrete proof cleanup accepts the Portal closer signer first, then the concrete tail; the aggregator accepts the closer signer first, then the aggregator tail.
+`get_proof` requires every configured member exactly once, in caller-supplied order. It returns the first `Some(proof)`; `None` requires every member to return `None`. A member execution error reached before a proof is found propagates. Where members disagree, caller order determines which proof is returned, retaining selected-member settlement. There is no aggregate proof PDA or proof event.
+
+`close_proof` forwards only the first member group's accounts and data, with the inherited Portal signer. Following groups are permitted so cancellation cleanup can use the identical tail for querying and closing. With a withdrawal marker, only the selected member group is needed.
+
+Account framing does not impose a single-account restriction on members. Solana CPI depth and reentrancy restrictions still apply; nesting the same deployed aggregator program is not supported.
 
 ## Portal accounts
 
-- `withdraw`: payer (writable signer), claimant (writable), vault (writable), prover (executable, equals `reward.prover`), withdrawn marker (writable), Token, Token-2022, System. Remaining: one token triple per unique reward mint, then validation tail. Arguments remain `WithdrawArgs { destination, route_hash, reward }`.
-- `refund`: payer (writable signer), creator (writable), vault (writable), optional prover, withdrawn marker (writable), Token, Token-2022, System. Remaining: caller-selected token triples, then validation tail. Arguments: `RefundArgs { destination, route_hash, reward, kind, prover_account_count }`. Kinds are `Expired`, `Cancelled`, `Withdrawn`. The prover is required for the first two and may be omitted only for `Withdrawn`; any supplied prover must equal `reward.prover`.
-- `close_proof`: withdrawn marker (read-only, may be absent), prover (executable, equals `reward.prover`), proof closer (read-only). Remaining: cleanup tail. Arguments: `CloseProofArgs { destination, route_hash, reward }`.
+- `withdraw`: payer (writable signer), claimant (writable), vault (writable), prover (executable, equals `reward.prover`), withdrawn marker (writable), Token, Token-2022, System. Remaining: one token triple per unique reward mint, then query tail. Arguments: `WithdrawArgs { destination, route_hash, reward, prover_data }`.
+- `refund`: payer (writable signer), creator (writable), vault (writable), optional prover, withdrawn marker (writable), Token, Token-2022, System. Remaining: caller-selected token triples, then query tail. Arguments: `RefundArgs { destination, route_hash, reward, prover_data, prover_account_count }`. The count separates the tails. The prover may be omitted after withdrawal; any supplied prover must equal `reward.prover`.
+- `close_proof`: withdrawn marker (read-only, may be absent), prover (executable, equals `reward.prover`), proof closer (read-only). Remaining: cleanup tail. Arguments: `CloseProofArgs { destination, route_hash, reward, prover_data }`.
 
-Token triples remain `[from, to, mint]`. Validation account tails are read-only and unsigned. Cleanup marks the proof and recipient writable; Local/Polymer require a signing recipient, Hyperlane requires its PDA payer. Flash-Fulfiller drops its closer account, retains prove/withdraw/fulfill/sweep order and the 256-KiB heap requirement, and leaves its proof for a later Portal cleanup instruction.
+Portal forwards `prover_data` unchanged. Concrete query tails are `[proof]`; concrete cleanup tails are `[proof, rent_recipient]`. For cancellation cleanup the same tail must support both `get_proof` and `close_proof`; concrete getters ignore the cleanup recipient. Put the selected member first for aggregate cleanup. A payable proof from that member blocks cancellation cleanup even if another member holds cancellation evidence.
 
-## Cleanup authority and lifecycle
+Token triples remain `[from, to, mint]`. Cleanup marks the proof and recipient writable; Local/Polymer require a signing recipient, Hyperlane requires its PDA payer. Every prover's close instruction takes the Portal closer signer before its tail. Flash-Fulfiller retains prove/withdraw/fulfill/sweep order and the 256-KiB heap requirement, and leaves its proof for later cleanup.
 
-Withdrawal creates the permanent `WithdrawnMarker`; refunds create no state. Neither closes a proof. Independent cleanup requires either an authentic withdrawal marker or a validated cancellation at/after the reward deadline. Timeout, an empty vault or a refund event alone never authorizes closure of fulfillment evidence.
+## Refund and cleanup policy
 
-Portal recomputes the intent hash and signs `[b"proof_closer", intent_hash, bump]`. Every leaf requires both that Portal signer and its own canonical proof PDA for the same hash. The intent hash already commits to `reward.prover`; forwarding does not need another prover argument or whitelist.
+Refund chooses its path from state: an authentic withdrawal marker permits sweeping without querying a prover; a cancellation proof permits refund immediately; any other proof blocks refund; `None` requires the reward deadline. A supplied non-executable root permits timeout refund, but an omitted root or failed CPI cannot establish absence. Before the deadline cancellation refunds must sweep every reward mint; at/after it partial sweeps are allowed.
+
+Withdrawal creates the permanent `WithdrawnMarker`; refunds create no state. Neither closes a proof. Independent cleanup requires either that marker or cancellation evidence at/after the reward deadline. Timeout, an empty vault or a refund event alone never authorizes closure of fulfillment evidence.
+
+Portal recomputes the intent hash and signs `[b"proof_closer", intent_hash, bump]`. Every leaf requires both that Portal signer and its own canonical proof PDA for the same hash. The hash already commits to `reward.prover`.
 
 Close each member independently. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.

@@ -173,6 +173,7 @@ fn bundled_cleanup_failure_rolls_back_withdrawal() {
         .collect(),
         data: portal::instruction::Withdraw {
             args: portal::instructions::WithdrawArgs {
+                prover_data: vec![],
                 destination: CHAIN_ID,
                 route_hash,
                 reward: reward.clone(),

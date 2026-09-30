@@ -280,7 +280,7 @@ impl PolymerProver<'_> {
             }
             .to_account_metas(None),
             data: polymer_prover::instruction::CloseProof {
-                intent_hash: [1; 32].into(),
+                args: eco_svm_std::prover::CloseProofArgs::new([1; 32].into(), vec![]),
             }
             .data(),
         };

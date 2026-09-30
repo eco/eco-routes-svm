@@ -3,21 +3,27 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 use derive_new::new;
 
-use crate::Bytes32;
+use crate::{claimant, Bytes32};
 
 pub mod cpi;
 
 pub const PROOF_SEED: &[u8] = b"proof";
 pub const PROVE_DISCRIMINATOR: [u8; 8] = [52, 246, 26, 161, 211, 170, 86, 215];
 pub const CLOSE_PROOF_DISCRIMINATOR: [u8; 8] = [64, 76, 168, 8, 126, 109, 164, 179];
-pub const VALIDATE_PROOF_DISCRIMINATOR: [u8; 8] = [164, 39, 169, 90, 192, 26, 173, 8];
+pub const GET_PROOF_DISCRIMINATOR: [u8; 8] = [4, 113, 134, 136, 211, 190, 9, 99];
 const PROOF_ACCOUNT_DISCRIMINATOR: [u8; 8] = [54, 244, 192, 233, 218, 58, 44, 242];
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
-pub struct ValidateProofArgs {
+pub struct GetProofArgs {
     pub intent_hash: Bytes32,
     pub destination: u64,
-    pub claimant: Option<Pubkey>,
+    pub data: Vec<u8>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
+pub struct CloseProofArgs {
+    pub intent_hash: Bytes32,
+    pub data: Vec<u8>,
 }
 
 #[error_code]
@@ -26,7 +32,9 @@ pub enum ProverError {
     InvalidReturnData,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug)]
+#[derive(
+    AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug, PartialEq, Eq,
+)]
 pub struct Proof {
     pub destination: u64,
     pub claimant: Pubkey,
@@ -37,15 +45,19 @@ impl Proof {
         Pubkey::find_program_address(&[PROOF_SEED, intent_hash.as_ref()], prover)
     }
 
-    pub fn validate(
-        account: &AccountInfo,
-        prover: &Pubkey,
-        args: ValidateProofArgs,
-    ) -> Result<bool> {
-        let ValidateProofArgs {
+    pub fn is_cancelled(&self) -> bool {
+        claimant::is_cancelled(&self.claimant)
+    }
+
+    pub fn is_payable_to(&self, claimant: &Pubkey) -> bool {
+        self.claimant == *claimant && claimant::is_payable(&self.claimant)
+    }
+
+    pub fn get(account: &AccountInfo, prover: &Pubkey, args: GetProofArgs) -> Result<Option<Self>> {
+        let GetProofArgs {
             intent_hash,
             destination,
-            claimant,
+            ..
         } = args;
 
         require_keys_eq!(
@@ -56,13 +68,11 @@ impl Proof {
 
         let data = account.try_borrow_data()?;
         if account.owner != prover || !data.starts_with(&PROOF_ACCOUNT_DISCRIMINATOR) {
-            return Ok(false);
+            return Ok(None);
         }
 
-        Ok(Self::try_from_slice(&data[8..]).is_ok_and(|proof| {
-            proof.destination == destination
-                && proof.claimant != Pubkey::default()
-                && claimant.is_none_or(|claimant| proof.claimant == claimant)
+        Ok(Self::try_from_slice(&data[8..]).ok().filter(|proof| {
+            proof.destination == destination && proof.claimant != Pubkey::default()
         }))
     }
 
@@ -219,6 +229,23 @@ pub fn prove<'info>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proof_distinguishes_payable_cancelled_and_zero_claimants() {
+        let claimant = Pubkey::new_unique();
+        let proof = Proof::new(10, claimant);
+        assert!(proof.is_payable_to(&claimant));
+        assert!(!proof.is_payable_to(&Pubkey::new_unique()));
+        assert!(!proof.is_cancelled());
+
+        let cancelled = Proof::new(10, claimant::cancelled());
+        assert!(cancelled.is_cancelled());
+        assert!(!cancelled.is_payable_to(&cancelled.claimant));
+
+        let zero = Proof::new(10, Pubkey::default());
+        assert!(!zero.is_cancelled());
+        assert!(!zero.is_payable_to(&zero.claimant));
+    }
 
     #[test]
     fn proof_pda_deterministic() {
