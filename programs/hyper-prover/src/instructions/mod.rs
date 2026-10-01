@@ -31,4 +31,5 @@ pub enum HyperProverError {
     InvalidProof,
     IntentAlreadyProven,
     InvalidPdaPayer,
+    InvalidAuthority,
 }

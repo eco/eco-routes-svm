@@ -70,16 +70,33 @@ impl PolymerProver<'_> {
     /// Deliberately loose — CU counts move on Anchor and toolchain bumps.
     pub const PER_PAIR_CU_BOUND: u64 = 15_000;
 
+    /// Signed by the payer, the default upgrade authority.
     pub fn init(
         &mut self,
         whitelisted_emitters: Vec<Bytes32>,
         config: Pubkey,
     ) -> TransactionResult {
+        let payer = self.payer.insecure_clone();
+
+        self.init_with_authority(&payer, whitelisted_emitters, config)
+    }
+
+    pub fn init_with_authority(
+        &mut self,
+        authority: &Keypair,
+        whitelisted_emitters: Vec<Bytes32>,
+        config: Pubkey,
+    ) -> TransactionResult {
+        let loader = self.get_account(&polymer_prover::ID).unwrap().owner;
         let instruction = Instruction {
             program_id: polymer_prover::ID,
             accounts: polymer_prover::accounts::Init {
                 config,
                 payer: self.payer.pubkey(),
+                authority: authority.pubkey(),
+                program: polymer_prover::ID,
+                program_data: Pubkey::find_program_address(&[polymer_prover::ID.as_ref()], &loader)
+                    .0,
                 system_program: anchor_lang::system_program::ID,
             }
             .to_account_metas(None),
@@ -91,7 +108,7 @@ impl PolymerProver<'_> {
             .data(),
         };
         let transaction = Transaction::new(
-            &[&self.payer],
+            &[&self.payer, authority],
             Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );

@@ -315,8 +315,9 @@ the local-prover model: rent returns to whoever pays for `withdraw`.
   boundary documented in CLAUDE.md and exercised by `prove_confused_deputy.rs` and
   `withdraw_confused_deputy.rs`.
 - **Config immutability.** `init` runs once. Changing the whitelist means a new release,
-  consistent with the redeploy-never-upgrade policy. Residual: `init` is unauthenticated, so
-  the first caller after deploy owns the whitelist forever (see Rollout step 4 for the gate);
+  consistent with the redeploy-never-upgrade policy. `init` requires the program's upgrade
+  authority, so only the deployer sets the whitelist, before the program is made immutable
+  (see Rollout step 4 for the gate);
   and rotating the EVM emitter set later strands in-flight intents that named this program
   ID, the escape hatch being a program upgrade that adds a set-emitters instruction — the
   programs are deployed upgradeable (`deploy-mainnet` in `Anchor.toml` uses plain
@@ -490,10 +491,9 @@ non-EVM claimant skipped, already-proven emits `IntentAlreadyProven`.
 4. `init` on devnet, then mainnet, as a verified, burn-on-failure gate: immediately after
    `anchor deploy --program-name polymer-prover`, send `init` with the exact EVM
    `PolymerProver` address set, then read `Config` back at `["config"]` and assert it
-   byte-equals the intended emitter list. `init` is unauthenticated and the whitelist is
-   immutable, so if `init` fails (`ConstraintZero` means someone else won the race) **or**
-   the read-back does not match, the program ID is burned: grind a fresh `Eco…` keypair and
-   redeploy. Do not proceed to step 5 until the read-back passes — that step is what makes
+   byte-equals the intended emitter list. `init` requires the upgrade authority, so no one
+   else can win the race, but the whitelist is immutable: if the read-back does not match,
+   the program ID is burned and the program is redeployed under a new one. Do not proceed to step 5 until the read-back passes — that step is what makes
    the prover load-bearing, and nothing can route to a hijacked config before it.
 5. eco-routes: extend `PolymerProver`, redeploy on Base with the Solana program ID
    whitelisted. eco-routes pins this program's `Prove:` wire format as a hand-copied

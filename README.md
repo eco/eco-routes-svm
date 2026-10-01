@@ -286,7 +286,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 
 
 #### Key Instructions:
-- `init` - Initialize prover with whitelisted senders
+- `init` - The program's upgrade authority initializes the prover once with whitelisted senders
 - `handle` - Process incoming Hyperlane messages and create proof accounts
 - `prove` - Send proof message via Hyperlane
 - `close_proof` - Clean up proof accounts after validation
@@ -300,7 +300,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobody calls it directly — a relayer loads a Polymer proof into Polymer's program, then calls this program's permissionless `validate`.
 
 #### Key Instructions:
-- `init` - Initialize prover with whitelisted emitters
+- `init` - The program's upgrade authority initializes the prover once with whitelisted emitters
 - `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
 - `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse. Capped at 24 intents per call because Solana truncates a transaction's logs at 10 KB while the transaction still succeeds; that budget is shared by every instruction in the transaction, so submit `portal::prove` as the only log-emitting instruction in its transaction, then count the `Program log: Prove: program: <polymer_prover id>, ` lines in `meta.logMessages` against the hashes sent and resubmit any shortfall (`prove` writes no state, so the retry is safe)
 - `close_proof` - Clean up proof accounts after successful withdrawal (called by Portal during `withdraw`)

@@ -32,4 +32,5 @@ pub enum PolymerProverError {
     InvalidDestination,
     EmptyProofData,
     TooManyIntents,
+    InvalidAuthority,
 }

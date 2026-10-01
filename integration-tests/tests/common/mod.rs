@@ -16,6 +16,7 @@ use litesvm::LiteSVM;
 use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
+use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::clock::Clock;
 use solana_sdk::instruction::InstructionError;
 use solana_sdk::message::Message;
@@ -115,7 +116,7 @@ impl Default for Context {
             .unwrap();
         svm.airdrop(&payer.pubkey(), sol_amount(10.0)).unwrap();
 
-        Self {
+        let mut context = Self {
             svm,
             mint_authority,
             token_program: token::ID,
@@ -124,11 +125,31 @@ impl Default for Context {
             funder,
             solver,
             sender,
-        }
+        };
+        let payer = context.payer.pubkey();
+        context.set_upgrade_authority(&hyper_prover::ID, Some(payer));
+        context.set_upgrade_authority(&polymer_prover::ID, Some(payer));
+
+        context
     }
 }
 
 impl Context {
+    /// `None` makes the program immutable.
+    pub fn set_upgrade_authority(&mut self, program: &Pubkey, authority: Option<Pubkey>) {
+        let loader = self.get_account(program).unwrap().owner;
+        let program_data_address = Pubkey::find_program_address(&[program.as_ref()], &loader).0;
+        let mut program_data = self.get_account(&program_data_address).unwrap();
+        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: authority,
+        })
+        .unwrap();
+        program_data.data[..metadata.len()].copy_from_slice(&metadata);
+        self.set_account(program_data_address, program_data)
+            .unwrap();
+    }
+
     pub fn new_with_token_2022() -> Self {
         Self {
             token_program: token_2022::ID,
