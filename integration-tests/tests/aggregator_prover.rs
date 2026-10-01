@@ -295,6 +295,27 @@ fn bridge_delivery_validates_and_withdraws_without_aggregation() {
         assert!(refund.is_err_and(common::is_error(
             PortalError::IntentFulfilledAndNotWithdrawn
         )));
+        let others = PROVERS
+            .into_iter()
+            .filter(|member| *member != prover)
+            .collect::<Vec<_>>();
+        let query = common::aggregator_query(&hash, &others);
+        let refund = context.portal().refund_intent_with_accounts(
+            DESTINATION,
+            reward.clone(),
+            vault,
+            route_hash,
+            Config::pda().0,
+            marker,
+            reward.creator,
+            Some(reward.prover),
+            [],
+            query,
+        );
+        assert!(refund.is_err_and(common::is_program_error(
+            aggregator_prover::ID,
+            AggregatorProverError::IncompleteProverSet
+        )));
         let token_program = context.token_program;
         reward
             .tokens
@@ -325,7 +346,7 @@ fn bridge_delivery_validates_and_withdraws_without_aggregation() {
                 ]
             })
             .collect::<Vec<_>>();
-        let query = common::aggregator_query(&hash, &PROVERS);
+        let query = common::aggregator_query(&hash, &[prover]);
         let result = context.portal().withdraw_intent(
             DESTINATION,
             reward.clone(),
@@ -353,7 +374,9 @@ fn bridge_delivery_validates_and_withdraws_without_aggregation() {
             underlying_before
         );
         assert!(context.get_account(&marker).is_some());
-        let cleanup = context.aggregator_prover().cleanup_accounts(&hash, prover);
+        let cleanup = context
+            .aggregator_prover()
+            .cleanup_accounts(&hash, &[prover]);
         context
             .portal()
             .close_proof(DESTINATION, route_hash, reward, cleanup)
@@ -394,11 +417,15 @@ fn returns_first_proof_in_query_order_without_creating_an_aggregate_proof() {
 }
 
 #[test]
-fn absence_requires_all_members_and_rejects_incomplete_or_duplicate_sets() {
+fn any_member_subset_returns_a_proof_but_absence_requires_all_members() {
     for selected in PROVERS {
         let mut context = initialized();
         let hash = test_intent_hash();
         let args = GetProofArgs::new(hash, vec![]);
+        let others = PROVERS
+            .into_iter()
+            .filter(|prover| *prover != selected)
+            .collect::<Vec<_>>();
         assert_eq!(
             context
                 .aggregator_prover()
@@ -408,6 +435,12 @@ fn absence_requires_all_members_and_rejects_incomplete_or_duplicate_sets() {
                 .data,
             vec![0]
         );
+        for provers in [vec![], vec![selected], others.clone()] {
+            assert!(context
+                .aggregator_prover()
+                .get_proof(args.clone(), &provers)
+                .is_err_and(common::is_error(AggregatorProverError::IncompleteProverSet)));
+        }
         set_prover_proof(
             &mut context,
             &hash,
@@ -415,20 +448,27 @@ fn absence_requires_all_members_and_rejects_incomplete_or_duplicate_sets() {
             DESTINATION,
             eco_svm_std::claimant::cancelled(),
         );
-        assert_eq!(
-            context
-                .aggregator_prover()
-                .get_proof(args.clone(), &PROVERS)
-                .unwrap()
-                .return_data
-                .data,
-            borsh::to_vec(&Some(Proof::new(
-                DESTINATION,
-                eco_svm_std::claimant::cancelled()
-            )))
-            .unwrap()
-        );
-        for provers in [vec![selected], vec![PROVERS[0]; 3]] {
+        let expected = borsh::to_vec(&Some(Proof::new(
+            DESTINATION,
+            eco_svm_std::claimant::cancelled(),
+        )))
+        .unwrap();
+        for provers in [PROVERS.to_vec(), vec![selected], vec![others[0], selected]] {
+            assert_eq!(
+                context
+                    .aggregator_prover()
+                    .get_proof(args.clone(), &provers)
+                    .unwrap()
+                    .return_data
+                    .data,
+                expected
+            );
+        }
+        assert!(context
+            .aggregator_prover()
+            .get_proof(args.clone(), &others)
+            .is_err_and(common::is_error(AggregatorProverError::IncompleteProverSet)));
+        for provers in [vec![selected, selected], vec![PROVERS[0]; 3]] {
             assert!(context
                 .aggregator_prover()
                 .get_proof(args.clone(), &provers)
@@ -505,7 +545,9 @@ fn every_member_and_late_proofs_can_be_cleaned_after_withdrawal() {
         if context.get_account(&Proof::pda(&hash, &prover).0).is_none() {
             set_prover_proof(&mut context, &hash, prover, DESTINATION, claimant);
         }
-        let mut accounts = context.aggregator_prover().cleanup_accounts(&hash, prover);
+        let mut accounts = context
+            .aggregator_prover()
+            .cleanup_accounts(&hash, &[prover]);
         accounts.accounts.truncate(4);
         accounts.data = borsh::to_vec(&vec![aggregator_prover::instructions::MemberQuery {
             account_count: 2,
@@ -542,15 +584,22 @@ fn cancellation_cleanup_waits_for_deadline_and_does_not_require_refund() {
     }
     let accounts = context
         .aggregator_prover()
-        .cleanup_accounts(&hash, local_prover::ID);
+        .cleanup_accounts(&hash, &[local_prover::ID]);
     context.warp_to_timestamp((reward.deadline - 1).try_into().unwrap());
     assert!(context
         .portal()
         .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
         .is_err_and(common::is_error(PortalError::RewardNotExpired)));
     context.warp_to_timestamp(reward.deadline.try_into().unwrap());
-    for prover in PROVERS {
-        let accounts = context.aggregator_prover().cleanup_accounts(&hash, prover);
+    // a lone member and a member followed by the others both query and close it
+    for (index, prover) in PROVERS.into_iter().enumerate() {
+        let members = std::iter::once(prover)
+            .chain(PROVERS.into_iter().filter(|member| *member != prover))
+            .take(if index == 0 { 1 } else { PROVERS.len() })
+            .collect::<Vec<_>>();
+        let accounts = context
+            .aggregator_prover()
+            .cleanup_accounts(&hash, &members);
         context
             .portal()
             .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
@@ -578,7 +627,7 @@ fn cancellation_cleanup_waits_for_deadline_and_does_not_require_refund() {
     );
     let accounts = context
         .aggregator_prover()
-        .cleanup_accounts(&hash, local_prover::ID);
+        .cleanup_accounts(&hash, &[local_prover::ID]);
     assert!(context
         .portal()
         .close_proof(DESTINATION, route_hash, reward, accounts)
@@ -801,7 +850,7 @@ fn cancellation_from_another_member_does_not_authorize_closing_a_payable_proof()
     context.warp_to_timestamp(reward.deadline.try_into().unwrap());
     let accounts = context
         .aggregator_prover()
-        .cleanup_accounts(&hash, local_prover::ID);
+        .cleanup_accounts(&hash, &[local_prover::ID]);
     assert!(context
         .portal()
         .close_proof(DESTINATION, route_hash, reward, accounts)

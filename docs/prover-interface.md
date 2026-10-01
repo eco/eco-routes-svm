@@ -21,9 +21,9 @@ The aggregator's `data` is Borsh-encoded `Vec<MemberQuery>`. Each entry has `acc
 
 Accounts are `[config, member_program_0, member_accounts_0..., member_program_1, member_accounts_1..., ...]`. Counts delimit the slices; members may need different numbers of accounts and different data. The aggregator validates membership, uniqueness and complete account consumption before dispatch.
 
-`get_proof` requires every configured member exactly once, in caller-supplied order. It returns the first `Some(proof)`; `None` requires every member to return `None`. A member execution error reached before a proof is found propagates. Where members disagree, caller order determines which proof is returned, retaining selected-member settlement. There is no aggregate proof PDA or proof event.
+`get_proof` takes any subset of configured members, each at most once, in caller-supplied order, and returns the first `Some(proof)`. `None` requires every configured member to be supplied and return `None`; a subset that finds no proof fails with `IncompleteProverSet`, since an omitted member may hold the proof. A member execution error reached before a proof is found propagates. Where members disagree, caller order determines which proof is returned, retaining selected-member settlement. There is no aggregate proof PDA or proof event.
 
-`close_proof` forwards only the first member group's accounts and data, with the inherited Portal signer. Following groups are permitted so cancellation cleanup can use the identical tail for querying and closing. With a withdrawal marker, only the selected member group is needed.
+`close_proof` forwards only the first member group's accounts and data, with the inherited Portal signer. Following groups are permitted, so cancellation cleanup can reuse a querying tail; the selected member group alone suffices, with or without a withdrawal marker.
 
 Account framing does not impose a single-account restriction on members. Solana CPI depth and reentrancy restrictions still apply; nesting the same deployed aggregator program is not supported.
 

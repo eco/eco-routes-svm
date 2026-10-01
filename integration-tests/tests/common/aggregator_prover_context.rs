@@ -1,7 +1,7 @@
 use aggregator_prover::instructions::MemberQuery;
 use aggregator_prover::state::Config;
 use anchor_lang::prelude::borsh;
-use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::{GetProofArgs, Proof};
 use eco_svm_std::Bytes32;
@@ -95,25 +95,23 @@ impl AggregatorProver<'_> {
         })
     }
 
-    pub fn cleanup_accounts(&self, intent_hash: &Bytes32, prover: Pubkey) -> ProverQuery {
-        let recipient = if prover == hyper_prover::ID {
+    /// The first member is cleaned; following members are only queried.
+    pub fn cleanup_accounts(&self, intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
+        let (selected, others) = provers.split_first().expect("cleanup must select a member");
+        let recipient = if *selected == hyper_prover::ID {
             hyper_prover::state::pda_payer_pda().0
         } else {
             self.payer.pubkey()
         };
-        let config = self.get_account(&Config::pda().0).unwrap();
-        let config = Config::try_deserialize(&mut config.data.as_slice()).unwrap();
-        let selected = [
-            AccountMeta::new(Proof::pda(intent_hash, &prover).0, false),
-            AccountMeta::new(recipient, prover != hyper_prover::ID),
+        let cleanup = [
+            AccountMeta::new(Proof::pda(intent_hash, selected).0, false),
+            AccountMeta::new(recipient, *selected != hyper_prover::ID),
         ]
         .into();
-        let others = config
-            .provers
-            .into_iter()
-            .filter(|member| *member != prover)
-            .map(|member| (member, proof_query(intent_hash, &member)));
-        let query = member_queries(std::iter::once((prover, selected)).chain(others));
+        let others = others
+            .iter()
+            .map(|member| (*member, proof_query(intent_hash, member)));
+        let query = member_queries(std::iter::once((*selected, cleanup)).chain(others));
 
         ProverQuery {
             accounts: std::iter::once(AccountMeta::new_readonly(Config::pda().0, false))

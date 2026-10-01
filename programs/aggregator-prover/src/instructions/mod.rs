@@ -19,4 +19,5 @@ pub enum AggregatorProverError {
     DuplicateProver,
     InvalidProof,
     InvalidPortalProofCloser,
+    IncompleteProverSet,
 }

@@ -17,13 +17,10 @@ pub fn get_proof<'info>(
 ) -> Result<Option<Proof>> {
     let GetProofArgs { intent_hash, data } = args;
     let queries = Vec::<MemberQuery>::try_from_slice(&data)?;
-    require!(
-        queries.len() == ctx.accounts.config.provers.len(),
-        AggregatorProverError::InvalidProverSet
-    );
     let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, queries)?;
+    let complete = members.len() == ctx.accounts.config.provers.len();
 
-    members
+    let proof = members
         .into_iter()
         .find_map(|member| {
             let Member {
@@ -34,5 +31,12 @@ pub fn get_proof<'info>(
 
             cpi::get_proof(prover, accounts, GetProofArgs::new(intent_hash, query.data)).transpose()
         })
-        .transpose()
+        .transpose()?;
+    // absence is only established by every member; an omitted member may hold the proof
+    require!(
+        proof.is_some() || complete,
+        AggregatorProverError::IncompleteProverSet
+    );
+
+    Ok(proof)
 }
