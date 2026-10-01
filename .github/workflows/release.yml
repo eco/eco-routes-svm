@@ -67,24 +67,39 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bump Cargo.toml versions (runner-only, never committed)
+      # The committed declare_id!s are placeholders. Each program's real ID is seeded by its
+      # placeholder build and those of the programs whose IDs it compiles in, so unchanged
+      # bytecode keeps its address. Cargo.toml versions are not bumped: a bump changes the
+      # bytecode of every dependent of eco-svm-std.
+      - name: Build placeholder programs
         if: steps.dry.outputs.new_release_published == 'true'
-        run: scripts/bump-cargo-versions.sh ${{ steps.dry.outputs.new_release_version }}
+        run: |
+          for cluster in mainnet devnet; do
+            rm -rf target/idl target/deploy
+            anchor run "build-${cluster}"
+            mkdir -p "target/placeholder/${cluster}"
+            for program in $RELEASED_PROGRAMS; do
+              cp "target/deploy/${program}.so" "target/placeholder/${cluster}/"
+            done
+          done
 
-      # Program IDs are derived from the release secret, version and program name, so the
-      # deployer re-derives the same keypairs instead of receiving them. Both clusters share
-      # them. Like the version bump, the rewritten declare_id!s are never committed.
+      - name: Assert on-chain compiler
+        if: steps.dry.outputs.new_release_published == 'true'
+        run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
+
+      # The deployer re-derives the same keypairs from the published program-ids.json instead
+      # of receiving them. Both clusters share the IDs. The rewritten declare_id!s are never
+      # committed.
       - name: Derive program IDs
         if: steps.dry.outputs.new_release_published == 'true'
         env:
           PROGRAM_KEYPAIR_SECRET: ${{ secrets.PROGRAM_KEYPAIR_SECRET }}
-          VERSION: ${{ steps.dry.outputs.new_release_version }}
         run: |
           rm -rf target/deploy
-          mkdir -p target
           # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
-          node scripts/program-keypairs.mjs "$VERSION" target/deploy $RELEASED_PROGRAMS \
-            > target/program-ids.txt
+          node scripts/program-keypairs.mjs release target/placeholder target/deploy $RELEASED_PROGRAMS \
+            > target/program-ids.json
+          jq -r 'to_entries[] | "\(.key) \(.value.address)"' target/program-ids.json > target/program-ids.txt
           cat target/program-ids.txt
           while read -r program address; do
             lib="programs/${program//_/-}/src/lib.rs"
@@ -94,34 +109,23 @@ jobs:
 
       # Every program's bytecode and three IDLs (hyper_prover, polymer_prover, proof_helper)
       # embed feature-gated addresses, so each cluster gets its own .so and IDL set.
-      - name: Build mainnet programs
+      - name: Build release programs
         if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          VERSION: ${{ steps.dry.outputs.new_release_version }}
         run: |
-          rm -rf target/idl target/deploy/*.so
-          anchor run build-mainnet
-          mkdir -p dist/idl/mainnet dist/program/mainnet
-          while read -r program address; do
-            test "$(jq -r .address "target/idl/${program}.json")" = "$address"
-            cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.mainnet.json"
-            cp "target/deploy/${program}.so" "dist/program/mainnet/${program}.mainnet.so"
-          done < target/program-ids.txt
-
-      - name: Assert on-chain compiler
-        if: steps.dry.outputs.new_release_published == 'true'
-        run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
-
-      - name: Build devnet programs
-        if: steps.dry.outputs.new_release_published == 'true'
-        run: |
-          rm -rf target/idl target/deploy/*.so
-          anchor run build-devnet
-          mkdir -p dist/idl/devnet dist/program/devnet
-          while read -r program address; do
-            test "$(jq -r .address "target/idl/${program}.json")" = "$address"
-            cp "target/idl/${program}.json" "dist/idl/devnet/${program}.devnet.json"
-            cp "target/deploy/${program}.so" "dist/program/devnet/${program}.devnet.so"
-          done < target/program-ids.txt
-          # Deployers derive the same keypairs with the script this release ran.
+          for cluster in mainnet devnet; do
+            rm -rf target/idl target/deploy/*.so
+            anchor run "build-${cluster}"
+            mkdir -p "dist/idl/${cluster}" "dist/program/${cluster}"
+            while read -r program address; do
+              test "$(jq -r .address "target/idl/${program}.json")" = "$address"
+              jq --arg version "$VERSION" '.metadata.version = $version' "target/idl/${program}.json" \
+                > "dist/idl/${cluster}/${program}.${cluster}.json"
+              cp "target/deploy/${program}.so" "dist/program/${cluster}/${program}.${cluster}.so"
+            done < target/program-ids.txt
+          done
+          cp target/program-ids.json dist/program-ids.json
           cp scripts/program-keypairs.mjs dist/program-keypairs.mjs
 
       - name: Discard program keypairs

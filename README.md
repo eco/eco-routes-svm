@@ -548,33 +548,38 @@ dist/program/mainnet/<program>.mainnet.so    dist/idl/mainnet/<program>.mainnet.
 dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.json
 ```
 
+plus `program-ids.json` and `program-keypairs.mjs` (see [Program IDs](#program-ids)).
+
 `<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper` and `polymer_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 
 ### Program IDs
 
-Every release deploys under new program IDs (programs are redeployed, never upgraded). Each ID is derived from the release secret, the release version and the program's lib name by `scripts/program-keypairs.mjs` (zero-dependency, Node 22), ground to an `Eco` prefix (about 57,000 attempts, ~1.5 s per program), and shared by the mainnet and devnet builds. The release job rewrites every `declare_id!` with the derived IDs before building (never committed), so the binaries, the cross-program references and the IDLs' `address` fields all carry them. The `declare_id!`s in source are localnet/test IDs only.
+The `declare_id!`s in source are placeholders and never change. A release's real IDs are derived by `scripts/program-keypairs.mjs` (zero-dependency, Node 22) from the release secret, the program's lib name and a seed, then ground to an `Eco` prefix (about 57,000 attempts, ~1.5 s per program). The seed hashes the program's placeholder build on both clusters, plus those of every released program whose ID it compiles in (its Cargo dependencies, transitively) and, for the aggregator, its members. So a program keeps its address while its bytecode is unchanged, and moves together with everything that depends on it. Mainnet and devnet share the IDs.
 
-The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl rand -hex 32`), stored in the `release` GitHub environment and the team vault. Anyone holding it can deploy at a release's addresses, so restrict the environment to `main` / `releases/*` with required reviewers. Changing it re-keys every future release.
+The release job builds the placeholders, derives the IDs, rewrites every `declare_id!` (never committed), rebuilds, and checks each IDL's `address`. It publishes `program-ids.json` (`{ program: { address, seed } }`) and the script it ran. Cargo.toml versions are not bumped before building, because a bump changes the bytecode of every dependent of `eco-svm-std`; the IDLs' `metadata.version` is set afterwards.
+
+The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl rand -hex 32`), stored in the `release` GitHub environment and the team vault. Anyone holding it can deploy at a release's addresses, so restrict the environment to `main` / `releases/*` with required reviewers. Changing it moves every program.
+
+Deployed bytecode carries IDs that no commit contains, so `solana-verify verify-from-repo` cannot reproduce it. To reproduce a release by hand, check out its tag, apply `program-ids.json` to the `declare_id!`s and build.
 
 ### Deploying a release
 
-Keypairs are never shipped; derive them with the `program-keypairs.mjs` attached to the release (the same file the release ran):
+Keypairs are never shipped; re-derive them from the release's assets:
 
 ```bash
 gh release download v<version> --repo eco/eco-routes-svm
 export PROGRAM_KEYPAIR_SECRET=<from the vault>
-node program-keypairs.mjs <version> keys \
-  aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover
+node program-keypairs.mjs deploy program-ids.json keys
 ```
 
-It writes `keys/<program>-keypair.json` (`/keys` is gitignored) and prints each `<program> <address>`. Before deploying anything:
+It refuses to write anything unless every derived address matches `program-ids.json`, then writes `keys/<program>-keypair.json` (`/keys` is gitignored). For each program:
 
-- every printed address must equal the `address` in that release's `<program>.<cluster>.json`;
-- every address must still be empty (`solana account <address>` fails). If any is taken, deploy nothing: the other programs would trust whoever holds it.
+- if its address is already deployed, its bytecode is unchanged since an earlier release; skip it (`solana program dump <address>` must equal the release's `.so`);
+- otherwise deploy `<program>.<cluster>.so` with `solana program deploy --program-id keys/<program>-keypair.json` and make it immutable (`solana program set-upgrade-authority <address> --final`).
 
-Then deploy each `<program>.<cluster>.so` with `solana program deploy --program-id keys/<program>-keypair.json`, make it immutable (`solana program set-upgrade-authority <address> --final`), and delete `keys/`.
+Delete `keys/` afterwards.
 
 The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
@@ -591,7 +596,7 @@ Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conve
 
 If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
 
-The `version` field in each released crate's `Cargo.toml` (the 7 production programs + `eco-svm-std`) is bumped on the CI runner *before* the program builds by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
+Cargo.toml `version` fields are never bumped; the canonical version is the git tag. The release writes it into each IDL's `metadata.version` after building.
 
 ### First release
 
