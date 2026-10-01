@@ -135,7 +135,6 @@ fn cleanup_rejects_forged_markers_and_wrong_closer() {
         .close_proof_instruction(CHAIN_ID, route_hash, reward, accounts);
     instruction.accounts[2].pubkey = Pubkey::new_unique();
     assert!(context
-        .aggregator_prover()
         .send_instruction(instruction)
         .is_err_and(common::is_error(PortalError::InvalidProofCloser)));
 }
