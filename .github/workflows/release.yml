@@ -139,6 +139,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Verifiable builds rebuild a commit, so tag one carrying the real program IDs (public
+      # keys only) on top of the release commit. main and the maintenance branch never see
+      # it, and CI does not test it: the PDA goldens are pinned to the placeholder IDs.
+      - name: Tag program IDs
+        if: steps.semantic.outputs.new_release_published == 'true'
+        env:
+          VERSION: ${{ steps.semantic.outputs.new_release_version }}
+        run: |
+          git add programs/*/src/lib.rs
+          test "$(git diff --cached --name-only | wc -l)" -eq "$(wc -l < target/program-ids.txt)"
+          commit=$(git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit-tree "$(git write-tree)" -p HEAD -m "chore: program IDs for v${VERSION}")
+          git tag "deploy/v${VERSION}" "$commit"
+          git push origin "refs/tags/deploy/v${VERSION}"
+
       - name: Create maintenance branch
         if: steps.semantic.outputs.new_release_published == 'true'
         run: |

@@ -562,7 +562,7 @@ The release job builds the placeholders, derives the IDs, rewrites every `declar
 
 The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl rand -hex 32`), stored in the `release` GitHub environment and the team vault. Anyone holding it can deploy at a release's addresses, so restrict the environment to `main` / `releases/*` with required reviewers. Changing it moves every program.
 
-Deployed bytecode carries IDs that no commit contains, so `solana-verify verify-from-repo` cannot reproduce it. To reproduce a release by hand, check out its tag, apply `program-ids.json` to the `declare_id!`s and build.
+For verifiable builds, the release also pushes a `deploy/v<version>` tag: one commit on top of `v<version>` that only rewrites the `declare_id!`s (public keys). `solana-verify verify-from-repo` rebuilds that commit. `main` and the `releases/*` branches never contain it, and CI does not test it, since the PDA goldens are pinned to the placeholder IDs.
 
 ### Deploying a release
 
@@ -577,7 +577,16 @@ node program-keypairs.mjs deploy program-ids.json keys
 It refuses to write anything unless every derived address matches `program-ids.json`, then writes `keys/<program>-keypair.json` (`/keys` is gitignored). For each program:
 
 - if its address is already deployed, its bytecode is unchanged since an earlier release; skip it (`solana program dump <address>` must equal the release's `.so`);
-- otherwise deploy `<program>.<cluster>.so` with `solana program deploy --program-id keys/<program>-keypair.json` and make it immutable (`solana program set-upgrade-authority <address> --final`).
+- otherwise deploy `<program>.<cluster>.so` with `solana program deploy --program-id keys/<program>-keypair.json`, then verify it while you still hold the upgrade authority (OtterSec only accepts a verify PDA uploaded by it), and only then make it immutable:
+
+```bash
+commit=$(git ls-remote https://github.com/eco/eco-routes-svm "refs/tags/deploy/v<version>" | cut -f1)
+solana-verify verify-from-repo -u <rpc> --program-id <address> https://github.com/eco/eco-routes-svm \
+  --commit-hash "$commit" --library-name <program> -k <upgrade-authority-keypair> -- --features mainnet
+# answer yes to upload the verify PDA; on devnet drop `-- --features mainnet`
+solana-verify remote submit-job --program-id <address> --uploader <upgrade-authority-address>
+solana program set-upgrade-authority <address> --final
+```
 
 Delete `keys/` afterwards.
 
