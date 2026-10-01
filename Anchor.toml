@@ -6,34 +6,34 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
+aggregator-prover = "EcoACmxgWf3v4o3UBqro2qBaYxgidaXnqdAT55ue1UFe"
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 malicious-proof-closer = "3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp"
 malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"
 mock-polymer-prover = "FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3"
-flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
-hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
-local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
-polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
-portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
+flash-fulfiller = "EcoFPd5rxoSdvW3sdkrx3DLAmATfVaibfNvLq3ZUh9ge"
+hyper-prover = "EcoHjwFYKtiHp5ZuFQBc87GDikm9Lc5EYapKywjNAQQF"
+local-prover = "EcoLGDxv2hnDijPfHX9fAbFeMmUmGQ1XzLNUfCHyEw91"
+polymer-prover = "EcoPSkJe6BYMwkuYmpsEbhHX3ikDbnG2BdwavGquSwRV"
+portal = "EcoowmRRrMyYtQCuh5fCvMDWcD6B9ZDZkpgedf2bWKXi"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.devnet]
-aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
-flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
-hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
-portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
-local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
-polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
+aggregator-prover = "EcoACmxgWf3v4o3UBqro2qBaYxgidaXnqdAT55ue1UFe"
+flash-fulfiller = "EcoFPd5rxoSdvW3sdkrx3DLAmATfVaibfNvLq3ZUh9ge"
+hyper-prover = "EcoHjwFYKtiHp5ZuFQBc87GDikm9Lc5EYapKywjNAQQF"
+portal = "EcoowmRRrMyYtQCuh5fCvMDWcD6B9ZDZkpgedf2bWKXi"
+local-prover = "EcoLGDxv2hnDijPfHX9fAbFeMmUmGQ1XzLNUfCHyEw91"
+polymer-prover = "EcoPSkJe6BYMwkuYmpsEbhHX3ikDbnG2BdwavGquSwRV"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
-aggregator-prover = "Cg6hCaRjtPJNb7PPjGi9BMLmyoLCNatbVifaQffcQhLE"
-flash-fulfiller = "EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ"
-hyper-prover = "EcoHgBEV6nVQttvDZF6y3k6t481GLHaigae5KXo4JUY9"
-portal = "EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F"
-local-prover = "EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV"
-polymer-prover = "EcotL2wbUqtRAjnf1p6aa842dM4fc8ZX6JhygibtBreo"
+aggregator-prover = "EcoACmxgWf3v4o3UBqro2qBaYxgidaXnqdAT55ue1UFe"
+flash-fulfiller = "EcoFPd5rxoSdvW3sdkrx3DLAmATfVaibfNvLq3ZUh9ge"
+hyper-prover = "EcoHjwFYKtiHp5ZuFQBc87GDikm9Lc5EYapKywjNAQQF"
+portal = "EcoowmRRrMyYtQCuh5fCvMDWcD6B9ZDZkpgedf2bWKXi"
+local-prover = "EcoLGDxv2hnDijPfHX9fAbFeMmUmGQ1XzLNUfCHyEw91"
+polymer-prover = "EcoPSkJe6BYMwkuYmpsEbhHX3ikDbnG2BdwavGquSwRV"
 proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [registry]
