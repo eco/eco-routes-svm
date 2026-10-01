@@ -23,7 +23,7 @@ Accounts are `[config, member_program_0, member_accounts_0..., member_program_1,
 
 `get_proof` takes any subset of configured members, each at most once, in caller-supplied order, and returns the first `Some(proof)`. `None` requires every configured member to be supplied and return `None`; a subset that finds no proof fails with `IncompleteProverSet`, since an omitted member may hold the proof. A member execution error reached before a proof is found propagates. Where members disagree, caller order determines which proof is returned, retaining selected-member settlement. There is no aggregate proof PDA or proof event.
 
-`close_proof` forwards only the first member group's accounts and data, with the inherited Portal signer. Following groups are permitted, so cancellation cleanup can reuse a querying tail; the selected member group alone suffices, with or without a withdrawal marker.
+`close_proof` closes every supplied member group, each with its own accounts and data and the inherited Portal signer. Any supplied member without a proof fails the whole cleanup.
 
 Account framing does not impose a single-account restriction on members. Solana CPI depth and reentrancy restrictions still apply; nesting the same deployed aggregator program is not supported.
 
@@ -33,7 +33,7 @@ Account framing does not impose a single-account restriction on members. Solana 
 - `refund`: payer (writable signer), creator (writable), vault (writable), optional prover, withdrawn marker (writable), Token, Token-2022, System. Remaining: caller-selected token triples, then query tail. Arguments: `RefundArgs { destination, route_hash, reward, prover_data, prover_account_count }`. The count separates the tails. The prover may be omitted after withdrawal; any supplied prover must equal `reward.prover`.
 - `close_proof`: withdrawn marker (read-only, may be absent), prover (executable, equals `reward.prover`), proof closer (read-only). Remaining: cleanup tail. Arguments: `CloseProofArgs { destination, route_hash, reward, prover_data }`.
 
-Portal forwards `prover_data` unchanged. Concrete query tails are `[proof]`; concrete cleanup tails are `[proof, rent_recipient]`. For cancellation cleanup the same tail must support both `get_proof` and `close_proof`; concrete getters ignore the cleanup recipient. Put the selected member first for aggregate cleanup. A payable proof from that member blocks cancellation cleanup even if another member holds cancellation evidence.
+Portal forwards `prover_data` unchanged. Concrete query tails are `[proof]`; concrete cleanup tails are `[proof, rent_recipient]`. For cancellation cleanup the same tail must support both `get_proof` and `close_proof`; concrete getters ignore the cleanup recipient. Cancellation cleanup queries the tail and closes every supplied member only if the first returned proof is a cancellation; a payable first proof blocks it.
 
 Token triples remain `[from, to, mint]`. Cleanup marks the proof and recipient writable; Local/Polymer require a signing recipient, Hyperlane requires its PDA payer. Every prover's close instruction takes the Portal closer signer before its tail. Flash-Fulfiller retains prove/withdraw/fulfill/sweep order and the 256-KiB heap requirement, and leaves its proof for later cleanup.
 
@@ -45,4 +45,4 @@ Withdrawal creates the permanent `WithdrawnMarker`; refunds create no state. Nei
 
 Portal recomputes the intent hash and signs `[b"proof_closer", intent_hash, bump]`. Every leaf requires both that Portal signer and its own canonical proof PDA for the same hash. The hash already commits to `reward.prover`.
 
-Close each member independently. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.
+Members can be closed together or in separate cleanups. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.

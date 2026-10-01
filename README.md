@@ -341,7 +341,7 @@ A helper program used by Hyperlane message construction in tests and off-chain t
 
 - `init()` — the upgrade authority initializes immutable `Config` once with 1–8 unique executable prover IDs. A different set requires another deployment.
 - `get_proof(args)` — query any subset of configured members in caller order using variable-length account groups; return the first proof, or `None` only if every configured member was queried and has none.
-- `close_proof(args)` — forward Portal's intent-scoped signer to the selected member; the leaf closes its own proof and applies its rent-recipient policy.
+- `close_proof(args)` — forward Portal's intent-scoped signer to every supplied member; each leaf closes its own proof and applies its rent-recipient policy.
 
 The aggregator has no `aggregate`, `prove`, proof account or proof event. Destination dispatch and source delivery use concrete provers. A returned fulfillment proof blocks refund until withdrawal; cancellation evidence permits immediate refund. Listeners track concrete prover events and identify the member when requesting settlement.
 

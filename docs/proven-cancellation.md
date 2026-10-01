@@ -56,9 +56,9 @@ Uses `cpi::get_proof` and requires `Proof::is_payable_to` for the payout claiman
 
 ### `close_proof`
 
-Separate Portal instruction taking the intent preimage: `CloseProofArgs { destination, route_hash, reward, prover_data }`. With an authentic withdrawal marker, any member proof for that intent can be closed. Otherwise require `now >= reward.deadline` and a returned proof with `is_cancelled() == true` for the same selected proof. A prior refund is not required. Before the deadline the cancellation evidence remains available for early refunds; after cleanup use remaining cancellation evidence or the timeout path if all members have no applicable proof.
+Separate Portal instruction taking the intent preimage: `CloseProofArgs { destination, route_hash, reward, prover_data }`. With an authentic withdrawal marker, any supplied member proofs for that intent can be closed. Otherwise require `now >= reward.deadline` and a first returned proof with `is_cancelled() == true`; the aggregator then closes every supplied member. A prior refund is not required. Before the deadline the cancellation evidence remains available for early refunds; after cleanup use remaining cancellation evidence or the timeout path if all members have no applicable proof.
 
-Hyperlane rent goes to its PDA payer; Local/Polymer rent goes to the supplied writable signing payer. Validation does not forward signer privileges. Cleanup preserves its rent-recipient privileges, so clients should only supply signers to trusted provers. Cleanup can be submitted later, once per member, including for late-arriving proofs. Bundling it with settlement shares the transaction rollback boundary.
+Hyperlane rent goes to its PDA payer; Local/Polymer rent goes to the supplied writable signing payer. Validation does not forward signer privileges. Cleanup preserves its rent-recipient privileges, so clients should only supply signers to trusted provers. Cleanup can be submitted later, for any subset of members, including for late-arriving proofs. Bundling it with settlement shares the transaction rollback boundary.
 
 ## Errors and Events
 

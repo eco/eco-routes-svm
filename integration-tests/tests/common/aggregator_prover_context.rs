@@ -95,23 +95,21 @@ impl AggregatorProver<'_> {
         })
     }
 
-    /// The first member is cleaned; following members are only queried.
     pub fn cleanup_accounts(&self, intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
-        let (selected, others) = provers.split_first().expect("cleanup must select a member");
-        let recipient = if *selected == hyper_prover::ID {
-            hyper_prover::state::pda_payer_pda().0
-        } else {
-            self.payer.pubkey()
-        };
-        let cleanup = [
-            AccountMeta::new(Proof::pda(intent_hash, selected).0, false),
-            AccountMeta::new(recipient, *selected != hyper_prover::ID),
-        ]
-        .into();
-        let others = others
-            .iter()
-            .map(|member| (*member, proof_query(intent_hash, member)));
-        let query = member_queries(std::iter::once((*selected, cleanup)).chain(others));
+        let query = member_queries(provers.iter().map(|prover| {
+            let recipient = if *prover == hyper_prover::ID {
+                hyper_prover::state::pda_payer_pda().0
+            } else {
+                self.payer.pubkey()
+            };
+            let cleanup = [
+                AccountMeta::new(Proof::pda(intent_hash, prover).0, false),
+                AccountMeta::new(recipient, *prover != hyper_prover::ID),
+            ]
+            .into();
+
+            (*prover, cleanup)
+        }));
 
         ProverQuery {
             accounts: std::iter::once(AccountMeta::new_readonly(Config::pda().0, false))

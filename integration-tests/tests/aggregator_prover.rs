@@ -523,7 +523,7 @@ fn every_member_and_late_proofs_can_be_cleaned_after_withdrawal() {
     let route_hash = test_intent_hash();
     let hash = intent_hash(DESTINATION, &route_hash, &reward.hash());
     let claimant = Pubkey::new_unique();
-    for prover in PROVERS {
+    for prover in [hyper_prover::ID, polymer_prover::ID] {
         set_prover_proof(&mut context, &hash, prover, DESTINATION, claimant);
     }
     let query = common::aggregator_query(&hash, &PROVERS);
@@ -541,28 +541,51 @@ fn every_member_and_late_proofs_can_be_cleaned_after_withdrawal() {
             query,
         )
         .unwrap();
-    for prover in PROVERS.into_iter().chain([local_prover::ID]) {
+    let accounts = context.aggregator_prover().cleanup_accounts(&hash, &[]);
+    assert!(context
+        .portal()
+        .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
+        .is_err_and(common::is_program_error(
+            aggregator_prover::ID,
+            AggregatorProverError::InvalidProverSet
+        )));
+    let accounts = context
+        .aggregator_prover()
+        .cleanup_accounts(&hash, &[hyper_prover::ID, local_prover::ID]);
+    // a member without a proof fails the whole cleanup
+    assert!(context
+        .portal()
+        .close_proof(DESTINATION, route_hash, reward.clone(), accounts.clone())
+        .is_err_and(common::is_program_error(
+            local_prover::ID,
+            ErrorCode::AccountNotInitialized
+        )));
+    assert!(context
+        .get_account(&Proof::pda(&hash, &hyper_prover::ID).0)
+        .is_some());
+    set_prover_proof(&mut context, &hash, local_prover::ID, DESTINATION, claimant);
+    context
+        .portal()
+        .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
+        .unwrap();
+    for prover in [polymer_prover::ID, local_prover::ID] {
         if context.get_account(&Proof::pda(&hash, &prover).0).is_none() {
             set_prover_proof(&mut context, &hash, prover, DESTINATION, claimant);
         }
-        let mut accounts = context
+        let accounts = context
             .aggregator_prover()
             .cleanup_accounts(&hash, &[prover]);
-        accounts.accounts.truncate(4);
-        accounts.data = borsh::to_vec(&vec![aggregator_prover::instructions::MemberQuery {
-            account_count: 2,
-            data: vec![],
-        }])
-        .unwrap();
         context
             .portal()
             .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
             .unwrap();
-        assert!(context.get_account(&Proof::pda(&hash, &prover).0).is_none());
-        assert!(context
-            .get_account(&WithdrawnMarker::pda(&hash).0)
-            .is_some());
     }
+    for prover in PROVERS {
+        assert!(context.get_account(&Proof::pda(&hash, &prover).0).is_none());
+    }
+    assert!(context
+        .get_account(&WithdrawnMarker::pda(&hash).0)
+        .is_some());
 }
 
 #[test]
@@ -591,12 +614,10 @@ fn cancellation_cleanup_waits_for_deadline_and_does_not_require_refund() {
         .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
         .is_err_and(common::is_error(PortalError::RewardNotExpired)));
     context.warp_to_timestamp(reward.deadline.try_into().unwrap());
-    // a lone member and a member followed by the others both query and close it
-    for (index, prover) in PROVERS.into_iter().enumerate() {
-        let members = std::iter::once(prover)
-            .chain(PROVERS.into_iter().filter(|member| *member != prover))
-            .take(if index == 0 { 1 } else { PROVERS.len() })
-            .collect::<Vec<_>>();
+    for members in [
+        vec![hyper_prover::ID],
+        vec![local_prover::ID, polymer_prover::ID],
+    ] {
         let accounts = context
             .aggregator_prover()
             .cleanup_accounts(&hash, &members);
@@ -604,7 +625,9 @@ fn cancellation_cleanup_waits_for_deadline_and_does_not_require_refund() {
             .portal()
             .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
             .unwrap();
-        assert!(context.get_account(&Proof::pda(&hash, &prover).0).is_none());
+        for prover in members {
+            assert!(context.get_account(&Proof::pda(&hash, &prover).0).is_none());
+        }
     }
     assert!(context
         .get_account(&WithdrawnMarker::pda(&hash).0)
@@ -826,7 +849,7 @@ fn member_queries_forward_variable_account_lists_and_data() {
 }
 
 #[test]
-fn cancellation_from_another_member_does_not_authorize_closing_a_payable_proof() {
+fn cancellation_cleanup_follows_the_first_returned_proof_and_closes_every_member() {
     let mut context = initialized();
     let (_, _, mut reward) = context.rand_intent();
     reward.prover = aggregator_prover::ID;
@@ -848,16 +871,31 @@ fn cancellation_from_another_member_does_not_authorize_closing_a_payable_proof()
         eco_svm_std::claimant::cancelled(),
     );
     context.warp_to_timestamp(reward.deadline.try_into().unwrap());
+    for members in [
+        vec![local_prover::ID],
+        vec![local_prover::ID, hyper_prover::ID],
+    ] {
+        let accounts = context
+            .aggregator_prover()
+            .cleanup_accounts(&hash, &members);
+        assert!(context
+            .portal()
+            .close_proof(DESTINATION, route_hash, reward.clone(), accounts)
+            .is_err_and(common::is_error(PortalError::IntentNotCancelled)));
+        for prover in members {
+            assert!(context.get_account(&Proof::pda(&hash, &prover).0).is_some());
+        }
+    }
     let accounts = context
         .aggregator_prover()
-        .cleanup_accounts(&hash, &[local_prover::ID]);
-    assert!(context
+        .cleanup_accounts(&hash, &[hyper_prover::ID, local_prover::ID]);
+    context
         .portal()
         .close_proof(DESTINATION, route_hash, reward, accounts)
-        .is_err_and(common::is_error(PortalError::IntentNotCancelled)));
-    assert!(context
-        .get_account(&Proof::pda(&hash, &local_prover::ID).0)
-        .is_some());
+        .unwrap();
+    for prover in [hyper_prover::ID, local_prover::ID] {
+        assert!(context.get_account(&Proof::pda(&hash, &prover).0).is_none());
+    }
 }
 
 #[test]

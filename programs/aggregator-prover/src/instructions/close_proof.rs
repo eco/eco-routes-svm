@@ -21,20 +21,21 @@ pub fn close_proof<'info>(
     let CloseProofArgs { intent_hash, data } = args;
     let queries = Vec::<MemberQuery>::try_from_slice(&data)?;
     let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, queries)?;
-    let Member {
-        prover,
-        accounts,
-        query,
-    } = members
-        .into_iter()
-        .next()
-        .ok_or(AggregatorProverError::InvalidProverSet)?;
+    require!(!members.is_empty(), AggregatorProverError::InvalidProverSet);
 
-    cpi::close_proof(
-        prover,
-        &ctx.accounts.portal_proof_closer,
-        accounts,
-        CloseProofArgs::new(intent_hash, query.data),
-        &[],
-    )
+    members.into_iter().try_for_each(|member| {
+        let Member {
+            prover,
+            accounts,
+            query,
+        } = member;
+
+        cpi::close_proof(
+            prover,
+            &ctx.accounts.portal_proof_closer,
+            accounts,
+            CloseProofArgs::new(intent_hash, query.data),
+            &[],
+        )
+    })
 }
