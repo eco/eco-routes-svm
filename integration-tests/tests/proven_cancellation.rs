@@ -213,8 +213,8 @@ fn cancel_prove_withdraw_via_local_prover_fail() {
 }
 
 /// P0: every account a successful payout to `CANCELLED` would need is
-/// supplied, including existing `CANCELLED` ATAs, so only the
-/// `IntentCancelled` guard stands between the vault and that key.
+/// supplied, including existing `CANCELLED` ATAs, so only `is_payable_to`
+/// stands between the vault and that key.
 #[test]
 fn cancel_prove_withdraw_tokens_via_local_prover_fail() {
     let mut ctx = common::Context::default();

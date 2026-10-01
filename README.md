@@ -273,7 +273,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `fund` - Fund an intent with reward tokens
 - `fulfill` - Execute intent operations and mark as fulfilled
 - `prove` - Submit proof of fulfillment from destination chain
-- `refund` - Refund after the reward deadline with no applicable proof, on a proven cancellation, or after withdrawal. Portal determines the refund path from the withdrawal marker or returned proof. Refund creates no marker and leaves proofs intact. Before the deadline cancellation refunds still sweep every reward mint; after it partial sweeps are allowed.
+- `refund` - Refund after the reward deadline with no applicable proof, on a proven cancellation, or after withdrawal. Portal determines the refund path from the withdrawal marker or returned proof. Refund creates no marker and leaves proofs intact. Each refund sweeps the token triples it is given; repeated refunds sweep the rest.
 - `withdraw` - Validate the payout claimant through the prover, transfer rewards, and create the permanent withdrawal marker. Leaves proofs intact
 - `close_proof` - Independently reclaim proof rent after withdrawal, or for a validated cancellation at/after the reward deadline
 - `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes a permanent `FulfillMarker` holding the `CANCELLED` sentinel (a hash-derived, unowned EVM address, byte-identical to EVM `Inbox.CANCELLED`) at the intent's fulfill-marker PDA; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
@@ -290,7 +290,7 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `init` - Initialize prover with whitelisted senders
 - `handle` - Process incoming Hyperlane messages and create proof accounts
 - `prove` - Send proof message via Hyperlane
-- `get_proof` - Return `Option<Proof>` for the requested intent hash
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
@@ -305,7 +305,7 @@ A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobo
 - `init` - Initialize prover with whitelisted emitters
 - `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
 - `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse. Capped at 24 intents per call because Solana truncates a transaction's logs at 10 KB while the transaction still succeeds; that budget is shared by every instruction in the transaction, so submit `portal::prove` as the only log-emitting instruction in its transaction, then count the `Program log: Prove: program: <polymer_prover id>, ` lines in `meta.logMessages` against the hashes sent and resubmit any shortfall (`prove` writes no state, so the retry is safe)
-- `get_proof` - Return `Option<Proof>` for the requested intent hash
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
@@ -318,7 +318,7 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 #### Key Instructions:
 - `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
-- `get_proof` - Return `Option<Proof>` for the requested intent hash
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization; rent goes to the signing payer
 
 ### Flash-Fulfiller Program

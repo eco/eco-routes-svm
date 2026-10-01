@@ -139,4 +139,6 @@ pub enum PortalError {
     /// Retired: negative withdrawal validation now returns IntentNotFulfilled.
     IntentCancelled,
     IntentNotCancelled,
+    /// A refund path that queries no prover received prover accounts or data.
+    UnexpectedProverQuery,
 }

@@ -14,6 +14,7 @@ pub fn get_proof<'info>(
     accounts: &[AccountInfo<'info>],
     args: GetProofArgs,
 ) -> Result<Option<Proof>> {
+    let destination = args.destination;
     let mut data = GET_PROOF_DISCRIMINATOR.to_vec();
     args.serialize(&mut data)?;
 
@@ -27,7 +28,7 @@ pub fn get_proof<'info>(
     };
     invoke(&instruction, accounts)?;
 
-    read_proof_return_data(&prover.key())
+    read_proof_return_data(&prover.key(), destination)
 }
 
 pub fn close_proof<'info>(
@@ -116,16 +117,16 @@ pub fn prove<'info>(
     invoke_signed(&instruction, &infos, &[caller_seeds]).map_err(Into::into)
 }
 
-fn read_proof_return_data(prover: &Pubkey) -> Result<Option<Proof>> {
+fn read_proof_return_data(prover: &Pubkey, destination: u64) -> Result<Option<Proof>> {
     let (program, data) = get_return_data().ok_or(ProverError::InvalidReturnData)?;
     require_keys_eq!(program, *prover, ProverError::InvalidReturnData);
 
     let proof =
         Option::<Proof>::try_from_slice(&data).map_err(|_| ProverError::InvalidReturnData)?;
     require!(
-        proof
-            .as_ref()
-            .is_none_or(|proof| proof.claimant != Pubkey::default()),
+        proof.as_ref().is_none_or(
+            |proof| proof.destination == destination && proof.claimant != Pubkey::default()
+        ),
         ProverError::InvalidReturnData
     );
 

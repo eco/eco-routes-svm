@@ -78,11 +78,11 @@ pub fn withdraw_intent<'info>(
     let proof = cpi::get_proof(
         &ctx.accounts.prover,
         prover_accounts,
-        GetProofArgs::new(intent_hash, prover_data),
+        GetProofArgs::new(intent_hash, destination, prover_data),
     )?
     .ok_or(PortalError::IntentNotFulfilled)?;
     require!(
-        proof.destination == destination && proof.is_payable_to(&ctx.accounts.claimant.key()),
+        proof.is_payable_to(&ctx.accounts.claimant.key()),
         PortalError::IntentNotFulfilled
     );
 

@@ -46,8 +46,8 @@ The account ABI now delegates validation to the configured prover; see [Proof qu
 
 - Pass `RefundArgs { destination, route_hash, reward, prover_data, prover_account_count }`. The final count separates prover accounts from caller-selected token triples.
 - No proof: require the reward deadline and `None` from the prover (every configured member for an aggregator). A supplied non-executable root still permits timeout refund; an omitted root or failed CPI does not.
-- Cancellation: require the returned proof’s `is_cancelled()` predicate. Before the reward deadline every reward mint must be swept; at/after it partial sweeps are allowed. Proofs remain intact, so subsequent refunds can reuse them.
-- Withdrawn: require the authentic withdrawal marker and an empty prover tail; refund the supplied assets without executing a prover.
+- Cancellation: require the returned proof’s `is_cancelled()` predicate. Refunds sweep the token triples they are given, before or after the deadline. Proofs remain intact, so subsequent refunds can sweep the rest. A cancellation for another destination is not evidence for this intent and answers `None`.
+- Withdrawn: require the authentic withdrawal marker and an empty prover tail (`UnexpectedProverQuery` otherwise); refund the supplied assets without executing a prover.
 - Refund creates no marker and performs no proof cleanup. Validation accounts are read-only and unsigned. Larger requests may need a versioned transaction with a lookup table; the five-mint timeout test covers this path.
 
 ### `withdraw`
@@ -63,7 +63,8 @@ Hyperlane rent goes to its PDA payer; Local/Polymer rent goes to the supplied wr
 ## Errors and Events
 
 - `ReservedClaimant`: destination fulfillment attempted to use the cancellation claimant.
-- `IntentNotCancelled`: cleanup did not receive a cancellation proof.
+- `IntentNotCancelled`: cleanup did not receive a cancellation proof for this destination.
+- `UnexpectedProverQuery`: a refund path that queries no prover (withdrawn, or a non-executable `reward.prover`) received prover accounts or data.
 - `RewardNotExpired`: timeout refund, or cancellation cleanup without withdrawal, preceded the reward deadline.
 - `IntentCancelled { intent_hash: Bytes32 }`: destination cancellation event, unchanged.
 

@@ -1,9 +1,6 @@
-use std::collections::BTreeSet;
-
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::solana_program::system_instruction;
-use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token_interface::{close_account, CloseAccount};
 use anchor_spl::{token, token_2022};
 use eco_svm_std::prover::{cpi, GetProofArgs, Proof};
@@ -67,10 +64,8 @@ pub fn refund_intent<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs
     authorize_refund(
         &ctx,
         &reward,
-        destination,
-        GetProofArgs::new(intent_hash, prover_data),
+        GetProofArgs::new(intent_hash, destination, prover_data),
         prover_accounts,
-        &token_transfer_accounts,
     )?;
 
     refund_native(&ctx, &signer_seeds)?;
@@ -91,7 +86,7 @@ impl<'info> Refund<'info> {
         if !prover.executable {
             require!(
                 accounts.is_empty() && args.data.is_empty(),
-                PortalError::InvalidProof
+                PortalError::UnexpectedProverQuery
             );
 
             return Ok(None);
@@ -104,66 +99,25 @@ impl<'info> Refund<'info> {
 fn authorize_refund<'info>(
     ctx: &Context<'info, Refund<'info>>,
     reward: &Reward,
-    destination: u64,
     query: GetProofArgs,
     prover_accounts: &[AccountInfo<'info>],
-    token_transfer_accounts: &VecTokenTransferAccounts,
 ) -> Result<()> {
     if WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &query.intent_hash)? {
         require!(
             prover_accounts.is_empty() && query.data.is_empty(),
-            PortalError::InvalidProof
+            PortalError::UnexpectedProverQuery
         );
 
         return Ok(());
     }
 
-    let proof = ctx.accounts.get_proof(prover_accounts, query)?;
-    match proof {
-        Some(proof) => {
-            require!(proof.destination == destination, PortalError::InvalidProof);
-            require!(
-                proof.is_cancelled(),
-                PortalError::IntentFulfilledAndNotWithdrawn
-            );
-
-            if reward.deadline > now()? {
-                require_reward_mints_swept(ctx, reward, token_transfer_accounts)?;
-            }
-        }
-        None => {
-            require!(reward.deadline <= now()?, PortalError::RewardNotExpired);
-        }
+    match ctx.accounts.get_proof(prover_accounts, query)? {
+        Some(proof) => require!(
+            proof.is_cancelled(),
+            PortalError::IntentFulfilledAndNotWithdrawn
+        ),
+        None => require!(reward.deadline <= now()?, PortalError::RewardNotExpired),
     }
-
-    Ok(())
-}
-
-fn require_reward_mints_swept(
-    ctx: &Context<Refund>,
-    reward: &Reward,
-    accounts: &VecTokenTransferAccounts,
-) -> Result<()> {
-    let swept_mints = accounts
-        .iter()
-        .filter(|accounts| {
-            accounts.from.key()
-                == get_associated_token_address_with_program_id(
-                    ctx.accounts.vault.key,
-                    accounts.mint.key,
-                    accounts.token_program_id(),
-                )
-        })
-        .map(|accounts| accounts.mint.key())
-        .collect::<BTreeSet<_>>();
-
-    require!(
-        reward
-            .token_amounts()?
-            .keys()
-            .all(|mint| swept_mints.contains(mint)),
-        PortalError::InvalidMint
-    );
 
     Ok(())
 }

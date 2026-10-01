@@ -14,6 +14,7 @@ const PROOF_ACCOUNT_DISCRIMINATOR: [u8; 8] = [54, 244, 192, 233, 218, 58, 44, 24
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
 pub struct GetProofArgs {
     pub intent_hash: Bytes32,
+    pub destination: u64,
     pub data: Vec<u8>,
 }
 
@@ -23,7 +24,7 @@ pub struct CloseProofArgs {
     pub data: Vec<u8>,
 }
 
-#[error_code]
+#[error_code(offset = 7000)]
 pub enum ProverError {
     InvalidProof,
     InvalidReturnData,
@@ -50,11 +51,18 @@ impl Proof {
         self.claimant == *claimant && claimant::is_payable(&self.claimant)
     }
 
+    /// A proof for another destination answers `None`: it is not evidence for this intent, and
+    /// answering it would let it shadow another aggregator member's proof.
     pub fn get(
         account: &AccountInfo,
         prover: &Pubkey,
-        intent_hash: &Bytes32,
+        args: &GetProofArgs,
     ) -> Result<Option<Self>> {
+        let GetProofArgs {
+            intent_hash,
+            destination,
+            ..
+        } = args;
         require_keys_eq!(
             account.key(),
             Self::pda(intent_hash, prover).0,
@@ -65,10 +73,11 @@ impl Proof {
         if account.owner != prover || !data.starts_with(&PROOF_ACCOUNT_DISCRIMINATOR) {
             return Ok(None);
         }
+        let proof = Self::try_from_slice(&data[8..]).map_err(|_| ProverError::InvalidProof)?;
 
-        Ok(Self::try_from_slice(&data[8..])
-            .ok()
-            .filter(|proof| proof.claimant != Pubkey::default()))
+        Ok(Some(proof).filter(|proof| {
+            proof.destination == *destination && proof.claimant != Pubkey::default()
+        }))
     }
 
     pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {

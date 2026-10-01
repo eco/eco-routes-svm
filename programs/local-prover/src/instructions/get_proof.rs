@@ -8,7 +8,5 @@ pub struct GetProof<'info> {
 }
 
 pub fn get_proof(ctx: Context<GetProof>, args: GetProofArgs) -> Result<Option<Proof>> {
-    let GetProofArgs { intent_hash, .. } = args;
-
-    Proof::get(&ctx.accounts.proof, &crate::ID, &intent_hash)
+    Proof::get(&ctx.accounts.proof, &crate::ID, &args)
 }

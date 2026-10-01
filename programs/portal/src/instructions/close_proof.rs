@@ -48,13 +48,10 @@ pub fn close_proof<'info>(
         let proof = cpi::get_proof(
             &ctx.accounts.prover,
             ctx.remaining_accounts,
-            GetProofArgs::new(intent_hash, prover_data.clone()),
+            GetProofArgs::new(intent_hash, destination, prover_data.clone()),
         )?
         .ok_or(PortalError::IntentNotCancelled)?;
-        require!(
-            proof.destination == destination && proof.is_cancelled(),
-            PortalError::IntentNotCancelled
-        );
+        require!(proof.is_cancelled(), PortalError::IntentNotCancelled);
     }
 
     cpi::close_proof(

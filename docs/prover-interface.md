@@ -6,14 +6,14 @@ This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Deploy
 
 | Instruction | Arguments | Result |
 | --- | --- | --- |
-| `get_proof` | `GetProofArgs { intent_hash, data: Vec<u8> }` | `Option<Proof>` |
+| `get_proof` | `GetProofArgs { intent_hash, destination, data: Vec<u8> }` | `Option<Proof>` |
 | `close_proof` | `CloseProofArgs { intent_hash, data: Vec<u8> }` | Unit |
 
-`data` belongs to the invoked prover. Local, Hyper and Polymer need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, invalid contents or zero claimants. Substituted/omitted accounts and execution errors remain errors.
+`data` belongs to the invoked prover. Local, Hyper and Polymer need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, another destination or zero claimants. Substituted/omitted accounts, a prover-owned proof that does not decode exactly, and execution errors remain errors.
 
 `Proof::is_cancelled()` identifies cancellation; `Proof::is_payable_to(&claimant)` checks a nonzero, non-cancellation payout recipient. Portal applies settlement policy to the returned proof.
 
-`eco_svm_std::prover::cpi::get_proof` passes all accounts read-only and unsigned. It requires the invoked program as return-data producer and an exact Borsh `Option<Proof>` encoding, with no trailing bytes. A returned proof must have a nonzero claimant. Portal checks its destination against the intent; a mismatch is rejected, never treated as absence for refund. CPI/decoding errors never become `None`. The aggregator republishes the result under its own program ID.
+`eco_svm_std::prover::cpi::get_proof` passes all accounts read-only and unsigned. It requires the invoked program as return-data producer and an exact Borsh `Option<Proof>` encoding, with no trailing bytes. A returned proof must have a nonzero claimant and the queried destination. Every prover filters by destination itself, so a proof for another destination answers `None` and cannot shadow another aggregator member's proof. CPI/decoding errors never become `None`. `ProverError` codes start at 7000, clear of each program's own 6000-based errors. The aggregator republishes the result under its own program ID.
 
 ## Aggregator framing
 
@@ -39,10 +39,10 @@ Token triples remain `[from, to, mint]`. Cleanup marks the proof and recipient w
 
 ## Refund and cleanup policy
 
-Refund chooses its path from state: an authentic withdrawal marker permits sweeping without querying a prover; a cancellation proof permits refund immediately; any other proof blocks refund; `None` requires the reward deadline. A supplied non-executable root permits timeout refund, but an omitted root or failed CPI cannot establish absence. Before the deadline cancellation refunds must sweep every reward mint; at/after it partial sweeps are allowed.
+Refund chooses its path from state: an authentic withdrawal marker permits sweeping without querying a prover; a cancellation proof permits refund immediately; any other proof blocks refund; `None` requires the reward deadline. A supplied non-executable root permits timeout refund, but an omitted root or failed CPI cannot establish absence. Refunds sweep whatever token triples they are given, before or after the deadline; repeated refunds sweep the remainder.
 
 Withdrawal creates the permanent `WithdrawnMarker`; refunds create no state. Neither closes a proof. Independent cleanup requires either that marker or cancellation evidence at/after the reward deadline. Timeout, an empty vault or a refund event alone never authorizes closure of fulfillment evidence.
 
 Portal recomputes the intent hash and signs `[b"proof_closer", intent_hash, bump]`. Every leaf requires both that Portal signer and its own canonical proof PDA for the same hash. The hash already commits to `reward.prover`.
 
-Members can be closed together or in separate cleanups. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.
+Members can be closed together or in separate cleanups. `close_proof` is permissionless and Local/Polymer pay rent to the supplied signer, so a solver that wants its proof rent back should bundle `close_proof` with `withdraw`. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.

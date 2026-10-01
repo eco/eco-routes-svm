@@ -37,7 +37,7 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
         let hash: Bytes32 = [12; 32].into();
         let proof = Proof::pda(&hash, &prover).0;
         let claimant = Pubkey::new_unique();
-        let args = GetProofArgs::new(hash, vec![]);
+        let args = GetProofArgs::new(hash, CHAIN_ID, vec![]);
         assert_eq!(
             query(&mut context, prover, proof, args.clone())
                 .unwrap()
@@ -55,7 +55,7 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
         );
         for (destination, actual_claimant, expected) in [
             (CHAIN_ID, claimant, true),
-            (CHAIN_ID + 1, claimant, true),
+            (CHAIN_ID + 1, claimant, false),
             (CHAIN_ID, Pubkey::new_unique(), true),
             (CHAIN_ID, Pubkey::default(), false),
         ] {
@@ -79,15 +79,11 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
         );
         context.set_proof(proof, Proof::new(CHAIN_ID, claimant), prover);
         let valid = context.get_account(&proof).unwrap();
-        for mutation in 0..4 {
+        for mutation in 0..2 {
             let mut invalid = valid.clone();
             match mutation {
                 0 => invalid.owner = Pubkey::new_unique(),
-                1 => invalid.data[0] ^= 1,
-                2 => {
-                    invalid.data.pop();
-                }
-                _ => invalid.data.push(0),
+                _ => invalid.data[0] ^= 1,
             }
             context.set_account(proof, invalid).unwrap();
             assert_eq!(
@@ -97,6 +93,18 @@ fn concrete_provers_return_only_valid_canonical_proofs() {
                     .data,
                 vec![0]
             );
+        }
+        // an owned proof that does not decode is an error, never an absent proof
+        for truncate in [true, false] {
+            let mut invalid = valid.clone();
+            if truncate {
+                invalid.data.pop();
+            } else {
+                invalid.data.push(0);
+            }
+            context.set_account(proof, invalid).unwrap();
+            assert!(query(&mut context, prover, proof, args.clone())
+                .is_err_and(common::is_error(ProverError::InvalidProof)));
         }
         assert!(query(&mut context, prover, Pubkey::new_unique(), args)
             .is_err_and(common::is_error(ProverError::InvalidProof)));
@@ -150,9 +158,7 @@ fn invalid_proof_responses_never_authorize_timeout_refund() {
             assert_eq!(context.balance(&vault), 0);
             continue;
         }
-        if mode == 6 {
-            assert!(result.is_err_and(common::is_error(PortalError::InvalidProof)));
-        } else if mode == 4 {
+        if mode == 4 {
             assert!(result.is_err());
         } else {
             assert!(result.is_err_and(common::is_error(ProverError::InvalidReturnData)));
@@ -189,7 +195,7 @@ fn cancellation_cleanup_rejects_wrong_destination() {
 
 #[test]
 fn shared_instruction_discriminators_and_generated_idls_match() {
-    let args = GetProofArgs::new([0; 32].into(), vec![]);
+    let args = GetProofArgs::new([0; 32].into(), 0, vec![]);
     for data in [
         local_prover::instruction::GetProof { args: args.clone() }.data(),
         hyper_prover::instruction::GetProof { args: args.clone() }.data(),
@@ -220,7 +226,7 @@ fn shared_instruction_discriminators_and_generated_idls_match() {
                 .iter()
                 .map(|field| field["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["intent_hash", "data"]
+            vec!["intent_hash", "destination", "data"]
         );
         let instructions = idl["instructions"].as_array().unwrap();
         let validate = instructions

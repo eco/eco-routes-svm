@@ -15,7 +15,11 @@ pub fn get_proof<'info>(
     ctx: Context<'info, GetProof<'info>>,
     args: GetProofArgs,
 ) -> Result<Option<Proof>> {
-    let GetProofArgs { intent_hash, data } = args;
+    let GetProofArgs {
+        intent_hash,
+        destination,
+        data,
+    } = args;
     let queries = Vec::<MemberQuery>::try_from_slice(&data)?;
     let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, queries)?;
     let complete = members.len() == ctx.accounts.config.provers.len();
@@ -29,7 +33,12 @@ pub fn get_proof<'info>(
                 query,
             } = member;
 
-            cpi::get_proof(prover, accounts, GetProofArgs::new(intent_hash, query.data)).transpose()
+            cpi::get_proof(
+                prover,
+                accounts,
+                GetProofArgs::new(intent_hash, destination, query.data),
+            )
+            .transpose()
         })
         .transpose()?;
     // absence is only established by every member; an omitted member may hold the proof
