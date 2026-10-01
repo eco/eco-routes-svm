@@ -552,6 +552,30 @@ dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.js
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 
+### Program IDs
+
+Every release deploys under new program IDs (programs are redeployed, never upgraded). Each ID is derived from the release secret, the release version and the program's lib name by `scripts/program-keypairs.mjs` (zero-dependency, Node 22), ground to an `Eco` prefix (about 57,000 attempts, ~1.5 s per program), and shared by the mainnet and devnet builds. The release job rewrites every `declare_id!` with the derived IDs before building (never committed), so the binaries, the cross-program references and the IDLs' `address` fields all carry them. The `declare_id!`s in source are localnet/test IDs only.
+
+The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl rand -hex 32`), stored in the `release` GitHub environment and the team vault. Anyone holding it can deploy at a release's addresses, so restrict the environment to `main` / `releases/*` with required reviewers. Changing it re-keys every future release.
+
+### Deploying a release
+
+Keypairs are never shipped; derive them with the `program-keypairs.mjs` attached to the release (the same file the release ran):
+
+```bash
+gh release download v<version> --repo eco/eco-routes-svm
+export PROGRAM_KEYPAIR_SECRET=<from the vault>
+node program-keypairs.mjs <version> keys \
+  aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover
+```
+
+It writes `keys/<program>-keypair.json` (`/keys` is gitignored) and prints each `<program> <address>`. Before deploying anything:
+
+- every printed address must equal the `address` in that release's `<program>.<cluster>.json`;
+- every address must still be empty (`solana account <address>` fails). If any is taken, deploy nothing: the other programs would trust whoever holds it.
+
+Then deploy each `<program>.<cluster>.so` with `solana program deploy --program-id keys/<program>-keypair.json`, make it immutable (`solana program set-upgrade-authority <address> --final`), and delete `keys/`.
+
 The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
 ### Versioning

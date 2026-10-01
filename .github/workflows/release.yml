@@ -30,6 +30,8 @@ env:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Holds PROGRAM_KEYPAIR_SECRET; anyone with it can claim a release's program addresses.
+    environment: release
     permissions:
       contents: write
       issues: write
@@ -55,7 +57,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Compute next version (dry run)
         id: dry
@@ -69,6 +71,27 @@ jobs:
         if: steps.dry.outputs.new_release_published == 'true'
         run: scripts/bump-cargo-versions.sh ${{ steps.dry.outputs.new_release_version }}
 
+      # Program IDs are derived from the release secret, version and program name, so the
+      # deployer re-derives the same keypairs instead of receiving them. Both clusters share
+      # them. Like the version bump, the rewritten declare_id!s are never committed.
+      - name: Derive program IDs
+        if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          PROGRAM_KEYPAIR_SECRET: ${{ secrets.PROGRAM_KEYPAIR_SECRET }}
+          VERSION: ${{ steps.dry.outputs.new_release_version }}
+        run: |
+          rm -rf target/deploy
+          mkdir -p target
+          # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
+          node scripts/program-keypairs.mjs "$VERSION" target/deploy $RELEASED_PROGRAMS \
+            > target/program-ids.txt
+          cat target/program-ids.txt
+          while read -r program address; do
+            lib="programs/${program//_/-}/src/lib.rs"
+            sed -i "s/declare_id!(\"[^\"]*\")/declare_id!(\"${address}\")/" "$lib"
+            grep -q "declare_id!(\"${address}\")" "$lib"
+          done < target/program-ids.txt
+
       # Every program's bytecode and three IDLs (hyper_prover, polymer_prover, proof_helper)
       # embed feature-gated addresses, so each cluster gets its own .so and IDL set.
       - name: Build mainnet programs
@@ -77,10 +100,11 @@ jobs:
           rm -rf target/idl target/deploy/*.so
           anchor run build-mainnet
           mkdir -p dist/idl/mainnet dist/program/mainnet
-          for program in $RELEASED_PROGRAMS; do
+          while read -r program address; do
+            test "$(jq -r .address "target/idl/${program}.json")" = "$address"
             cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.mainnet.json"
             cp "target/deploy/${program}.so" "dist/program/mainnet/${program}.mainnet.so"
-          done
+          done < target/program-ids.txt
 
       - name: Assert on-chain compiler
         if: steps.dry.outputs.new_release_published == 'true'
@@ -92,10 +116,17 @@ jobs:
           rm -rf target/idl target/deploy/*.so
           anchor run build-devnet
           mkdir -p dist/idl/devnet dist/program/devnet
-          for program in $RELEASED_PROGRAMS; do
+          while read -r program address; do
+            test "$(jq -r .address "target/idl/${program}.json")" = "$address"
             cp "target/idl/${program}.json" "dist/idl/devnet/${program}.devnet.json"
             cp "target/deploy/${program}.so" "dist/program/devnet/${program}.devnet.so"
-          done
+          done < target/program-ids.txt
+          # Deployers derive the same keypairs with the script this release ran.
+          cp scripts/program-keypairs.mjs dist/program-keypairs.mjs
+
+      - name: Discard program keypairs
+        if: always()
+        run: rm -f target/deploy/*-keypair.json
 
       - name: Release
         id: semantic
