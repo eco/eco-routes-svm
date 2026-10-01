@@ -61,7 +61,7 @@ cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml -
 
 If proof-helper / pay_for_gas integration tests fail with a missing `.so`, run that command.
 
-The confused-deputy PoC programs `malicious-prover` and `malicious-proof-closer`, and the localnet mock `mock-polymer-prover`, **are** Anchor programs (in `programs/`, like `dummy-ism`), so a bare `anchor build` builds them. What keeps them out of devnet/mainnet artifacts is **not** the `[programs.localnet]` registration — `[programs.<cluster>]` only maps names to IDs. It is the explicit `--program-name` enumeration in the `build-devnet` / `build-mainnet` scripts (`Anchor.toml`) and the named IDL loops in `release.yml`. **Never replace those enumerations with a bare `anchor build`** — doing so would ship the PoC programs.
+The confused-deputy PoC programs `malicious-prover` and `malicious-proof-closer`, and the localnet mock `mock-polymer-prover`, **are** Anchor programs (in `programs/`, like `dummy-ism`), so a bare `anchor build` builds them. What keeps them out of devnet/mainnet artifacts is **not** the `[programs.localnet]` registration — `[programs.<cluster>]` only maps names to IDs. It is the explicit `--program-name` enumeration in the `build-devnet` / `build-mainnet` scripts (`Anchor.toml`) and the `RELEASED_PROGRAMS` list `release.yml` copies assets by. **Never replace those enumerations with a bare `anchor build`** — doing so would ship the PoC programs.
 
 ## Architecture
 

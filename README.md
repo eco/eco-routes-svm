@@ -488,7 +488,7 @@ The `Anchor.toml` file includes network-specific program configurations:
 - **Localnet**: Includes the localnet-only test programs — `dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`
 - **Devnet** / **Mainnet**: Exclude the localnet-only test programs (production-like / production only)
 
-What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]` registration — that only maps names to IDs — but the explicit `--program-name` enumeration in `Anchor.toml`'s `build-devnet` / `build-mainnet` scripts and the named IDL loops in `release.yml`.
+What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]` registration — that only maps names to IDs — but the explicit `--program-name` enumeration in `Anchor.toml`'s `build-devnet` / `build-mainnet` scripts and the `RELEASED_PROGRAMS` list `release.yml` copies assets by.
 
 ```toml
 [programs.localnet]
@@ -541,14 +541,16 @@ Releases are published via the manual `Release` GitHub Actions workflow (`.githu
 
 ### What gets published
 
-Each release attaches mainnet and devnet IDLs as downloadable assets on the GitHub Release:
+Each release attaches every production program's bytecode and IDL, built once per cluster, as downloadable assets on the GitHub Release:
 
 ```
-dist/idl/mainnet/{portal,hyper_prover,local_prover,aggregator_prover,flash_fulfiller,proof_helper,polymer_prover}.mainnet.json
-dist/idl/devnet/{portal,hyper_prover,local_prover,aggregator_prover,flash_fulfiller,proof_helper,polymer_prover}.devnet.json
+dist/program/mainnet/<program>.mainnet.so    dist/idl/mainnet/<program>.mainnet.json
+dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.json
 ```
 
-Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.json`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
+`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper` and `polymer_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
+
+Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 
 The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
@@ -565,7 +567,7 @@ Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conve
 
 If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
 
-The `version` field in each released crate's `Cargo.toml` (the 7 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
+The `version` field in each released crate's `Cargo.toml` (the 7 production programs + `eco-svm-std`) is bumped on the CI runner *before* the program builds by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
 
 ### First release
 

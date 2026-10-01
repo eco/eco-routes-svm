@@ -23,6 +23,9 @@ env:
   # The platform-tools version anchor-cli hard-codes in `cargo build-sbf --tools-version`
   # (BUILD_SUBCOMMAND in its cli/src/lib.rs). Asserted together with SBF_RUSTC_VERSION.
   SBF_TOOLS_VERSION: "v1.52"
+  # Production programs only. The localnet test programs (dummy-ism, mock-polymer-prover,
+  # malicious-*) must never reach a release, so assets are copied by name, never by glob.
+  RELEASED_PROGRAMS: "aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover"
 
 jobs:
   release:
@@ -66,28 +69,32 @@ jobs:
         if: steps.dry.outputs.new_release_published == 'true'
         run: scripts/bump-cargo-versions.sh ${{ steps.dry.outputs.new_release_version }}
 
-      - name: Build mainnet IDLs
+      # Every program's bytecode and three IDLs (hyper_prover, polymer_prover, proof_helper)
+      # embed feature-gated addresses, so each cluster gets its own .so and IDL set.
+      - name: Build mainnet programs
         if: steps.dry.outputs.new_release_published == 'true'
         run: |
-          rm -rf target/idl
+          rm -rf target/idl target/deploy/*.so
           anchor run build-mainnet
-          mkdir -p dist/idl/mainnet
-          for program in aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover; do
+          mkdir -p dist/idl/mainnet dist/program/mainnet
+          for program in $RELEASED_PROGRAMS; do
             cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.mainnet.json"
+            cp "target/deploy/${program}.so" "dist/program/mainnet/${program}.mainnet.so"
           done
 
       - name: Assert on-chain compiler
         if: steps.dry.outputs.new_release_published == 'true'
         run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
 
-      - name: Build devnet IDLs
+      - name: Build devnet programs
         if: steps.dry.outputs.new_release_published == 'true'
         run: |
-          rm -rf target/idl
+          rm -rf target/idl target/deploy/*.so
           anchor run build-devnet
-          mkdir -p dist/idl/devnet
-          for program in aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover; do
+          mkdir -p dist/idl/devnet dist/program/devnet
+          for program in $RELEASED_PROGRAMS; do
             cp "target/idl/${program}.json" "dist/idl/devnet/${program}.devnet.json"
+            cp "target/deploy/${program}.so" "dist/program/devnet/${program}.devnet.so"
           done
 
       - name: Release
