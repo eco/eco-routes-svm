@@ -58,9 +58,10 @@ impl WithdrawnMarker {
 /// `fulfill_marker_layout_deterministic` pins the encoding.
 ///
 /// Growing or reordering it is only safe because the portal is redeployed under
-/// a new program ID rather than upgraded in place: markers are PDAs of the
-/// program, so a redeploy starts on a disjoint namespace and no account written
-/// under an older layout is ever read back. Under an in-place upgrade the same
+/// a new program ID rather than upgraded in place: a layout change changes the
+/// bytecode its release ID is derived from, and markers are PDAs of the program,
+/// so the redeploy starts on a disjoint namespace and no account written under
+/// an older layout is ever read back. Under an in-place upgrade the same
 /// change would strand every fulfilled-but-unproven intent — `prove`'s
 /// `try_deserialize` of a shorter account fails with `InvalidFulfillMarker`,
 /// and the claimant it holds has no other source.

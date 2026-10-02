@@ -1,37 +1,40 @@
 #!/usr/bin/env node
 // Derives a release's Eco-prefixed program keypairs from the release secret.
 //
-//   PROGRAM_KEYPAIR_SECRET=<hex> node program-keypairs.mjs release <placeholder-dir> <out-dir> <program>...
+//   PROGRAM_KEYPAIR_SECRET=<hex> node program-keypairs.mjs release <placeholder-dir> <program>...
 //   PROGRAM_KEYPAIR_SECRET=<hex> node program-keypairs.mjs deploy <program-ids.json> <out-dir>
 //
-// A program's keypair is derived from the secret, its lib name and a seed: the hash of
-// its bytecode built with the committed placeholder IDs, together with that of every
-// program whose ID it compiles in. Unchanged code keeps its address; a change moves the
-// program and everything that depends on it, since their bytecode embeds the new ID.
+// A program's keypair is derived from the secret, its lib name and a seed. The seed hashes
+// the program's salt (program-salts.json), its bytecode built with the committed placeholder
+// IDs on every cluster, and the seed of every released program whose ID it compiles in or
+// configures. Unchanged code keeps its address; a change or a salt bump moves the program
+// and, through their seeds, everything that depends on it.
 //
-// `release` (CI) reads <placeholder-dir>/<cluster>/<program>.so, writes
-// <out-dir>/<program>-keypair.json and prints the program-ids.json manifest.
-// `deploy` re-derives the keypairs from that manifest and checks every address.
+// `release` (CI) reads <placeholder-dir>/<cluster>/<program>.so and prints the
+// program-ids.json manifest; it writes no keys. `deploy` re-derives the keypairs from that
+// manifest, checks every address, and writes <out-dir>/<program>-keypair.json.
 // Anyone holding the secret can deploy at a release's addresses. Zero dependencies; Node 22.
 
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, createPrivateKey, createPublicKey } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const ADDRESS_PREFIX = "Eco";
-export const CLUSTERS = ["mainnet", "devnet"];
+const CLUSTERS = ["mainnet", "devnet"];
 // The aggregator's members are fixed in its on-chain config at `init`, so it must move
-// whenever any of them does, although it does not compile their IDs in.
-export const AGGREGATOR = "aggregator_prover";
-export const AGGREGATOR_MEMBERS = ["hyper_prover", "local_prover", "polymer_prover"];
+// whenever any of them does, although it does not compile their IDs in. Keep this equal to
+// the set the deployer passes to `init`.
+const AGGREGATOR = "aggregator_prover";
+const AGGREGATOR_MEMBERS = ["hyper_prover", "local_prover", "polymer_prover"];
 // Changing the domain re-keys every program; add a new version instead of editing it.
 const DOMAIN = "eco-routes-svm/program-keypair/v1";
 const MIN_SECRET_BYTES = 32;
 const SECRET_VARIABLE = "PROGRAM_KEYPAIR_SECRET";
+const SALTS = fileURLToPath(new URL("./program-salts.json", import.meta.url));
 const USAGE = [
-  "usage: program-keypairs.mjs release <placeholder-dir> <out-dir> <program>...",
+  "usage: program-keypairs.mjs release <placeholder-dir> <program>...",
   "       program-keypairs.mjs deploy <program-ids.json> <out-dir>",
 ].join("\n");
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -41,6 +44,7 @@ const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "he
 // second keypair.
 const PROGRAM_NAME = /^[a-z0-9_]+$/;
 const SEED = /^[0-9a-f]{64}$/;
+const NUL = Buffer.of(0);
 
 export const parseSecret = (hex) => {
   const trimmed = hex.trim();
@@ -71,55 +75,97 @@ export const parseSeed = (seed) => {
   return seed;
 };
 
-// For each program, the released programs whose IDs its bytecode depends on, directly or
-// transitively: its Cargo dependencies, plus the aggregator's members. Cargo forbids
-// dependency cycles, so the closure terminates.
+// For each released program, the released programs whose IDs its bytecode depends on
+// directly: Cargo dependencies, followed through unreleased workspace crates, plus the
+// aggregator's members. Cargo forbids dependency cycles.
 export const dependencies = (metadata, programs) => {
   const libName = (name) => name.replaceAll("-", "_");
-  const direct = Object.fromEntries(
+  const workspace = new Map(metadata.packages.map((manifest) => [libName(manifest.name), manifest]));
+  const cargoDependencies = (crate) =>
+    workspace
+      .get(crate)
+      .dependencies.filter(({ kind }) => kind === null)
+      .map(({ name }) => libName(name))
+      .filter((name) => workspace.has(name));
+  const released = (crate) =>
+    cargoDependencies(crate).flatMap((name) => (programs.includes(name) ? [name] : released(name)));
+
+  return Object.fromEntries(
     programs.map((program) => {
-      const manifest = metadata.packages.find(({ name }) => libName(name) === program);
-      if (!manifest) {
+      if (!workspace.has(program)) {
         throw new Error(`program ${program} is not a workspace package`);
       }
-      const cargoDependencies = manifest.dependencies
-        .filter(({ kind }) => kind === null)
-        .map(({ name }) => libName(name));
-      const configured = program === AGGREGATOR ? AGGREGATOR_MEMBERS : [];
+      const configured = program === AGGREGATOR ? aggregatorMembers(programs) : [];
 
-      return [program, [...cargoDependencies, ...configured].filter((name) => programs.includes(name))];
+      return [program, [...new Set([...released(program), ...configured])].toSorted()];
     }),
   );
-  const closure = (program) => direct[program].flatMap((dependency) => [dependency, ...closure(dependency)]);
-
-  return Object.fromEntries(programs.map((program) => [program, [...new Set(closure(program))].toSorted()]));
 };
 
-// `binaries[program][cluster]` is the placeholder build's bytecode. Each seed covers the
-// program and its dependencies on every cluster, since both clusters share one address.
-export const seeds = (binaries, programDependencies) =>
-  Object.fromEntries(
-    Object.entries(programDependencies).map(([program, members]) => [
-      program,
-      [program, ...members]
-        .toSorted()
-        .reduce(
-          (hash, member) =>
-            CLUSTERS.reduce(
-              (memberHash, cluster) => memberHash.update(sha256(binary(binaries, member, cluster))),
-              hash.update(member).update(Buffer.of(0)),
-            ),
-          createHash("sha256"),
-        )
-        .digest("hex"),
-    ]),
-  );
+// `binaries[program][cluster]` is the placeholder build's bytecode; `salts[program]` defaults
+// to 0. A dependency's seed, not just its bytecode, feeds each seed, so any move propagates.
+export const seeds = (binaries, programDependencies, salts = {}) => {
+  const cache = new Map();
+  const seedOf = (program, path = []) => {
+    if (path.includes(program)) {
+      throw new Error(`dependency cycle: ${[...path, program].join(" -> ")}`);
+    }
+    if (!cache.has(program)) {
+      cache.set(program, programSeed(program, [...path, program]));
+    }
+
+    return cache.get(program);
+  };
+  const programSeed = (program, path) => {
+    const salted = createHash("sha256").update(program).update(NUL).update(u64(salt(salts, program)));
+    const built = CLUSTERS.reduce(
+      (hash, cluster) => hash.update(sha256(binary(binaries, program, cluster))),
+      salted,
+    );
+
+    return programDependencies[program]
+      .toSorted()
+      .reduce(
+        (hash, dependency) =>
+          hash.update(dependency).update(NUL).update(Buffer.from(seedOf(dependency, path), "hex")),
+        built,
+      )
+      .digest("hex");
+  };
+
+  return Object.fromEntries(Object.keys(programDependencies).map((program) => [program, seedOf(program)]));
+};
 
 // The first candidate whose address starts with ADDRESS_PREFIX; about 57,000 attempts.
 export const derive = (secret, program, seed) =>
   attempts()
     .map((attempt) => keypair(candidateSeed(secret, program, seed, attempt)))
     .find(({ address }) => address.startsWith(ADDRESS_PREFIX));
+
+const aggregatorMembers = (programs) => {
+  const missing = AGGREGATOR_MEMBERS.filter((member) => !programs.includes(member));
+  if (missing.length > 0) {
+    throw new Error(`${AGGREGATOR} is released without its members: ${missing.join(", ")}`);
+  }
+
+  return AGGREGATOR_MEMBERS;
+};
+
+const salt = (salts, program) => {
+  const value = salts[program] ?? 0;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`salt of ${program} must be a non-negative integer, got ${JSON.stringify(value)}`);
+  }
+
+  return value;
+};
+
+const u64 = (value) => {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(BigInt(value));
+
+  return bytes;
+};
 
 const binary = (binaries, program, cluster) => {
   const bytes = binaries[program]?.[cluster];
@@ -144,7 +190,7 @@ const candidateSeed = (secret, program, seed, attempt) => {
   counter.writeBigUInt64LE(attempt);
 
   return [DOMAIN, program, seed]
-    .reduce((mac, part) => mac.update(part).update(Buffer.of(0)), createHmac("sha256", secret))
+    .reduce((mac, part) => mac.update(part).update(NUL), createHmac("sha256", secret))
     .update(counter)
     .digest();
 };
@@ -170,17 +216,28 @@ const base58 = (bytes) => {
 
 const digits = (value) => (value === 0n ? "" : digits(value / 58n) + BASE58[Number(value % 58n)]);
 
-const writeKeypair = (outDir, program, { bytes }) =>
-  writeFileSync(join(outDir, `${program}-keypair.json`), JSON.stringify([...bytes]), { mode: 0o600 });
+// `mode` only applies when the file is created, so an existing file is narrowed explicitly.
+const writeKeypair = (outDir, program, { bytes }) => {
+  const file = join(outDir, `${program}-keypair.json`);
+  writeFileSync(file, JSON.stringify([...bytes]), { mode: 0o600 });
+  chmodSync(file, 0o600);
+};
 
-const release = (secret, [placeholderDir, outDir, ...programs]) => {
-  if (!placeholderDir || !outDir || programs.length === 0) {
+// Cargo runs nothing of ours here, but it has no business seeing the secret either.
+const workspaceMetadata = () => {
+  const { [SECRET_VARIABLE]: _secret, ...env } = process.env;
+
+  return JSON.parse(
+    execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], { encoding: "utf8", env }),
+  );
+};
+
+const release = (secret, [placeholderDir, ...programs]) => {
+  if (!placeholderDir || programs.length === 0) {
     throw new Error(USAGE);
   }
   const released = programs.map(parseProgram);
-  const metadata = JSON.parse(
-    execFileSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], { encoding: "utf8" }),
-  );
+  const salts = JSON.parse(readFileSync(SALTS, "utf8"));
   const binaries = Object.fromEntries(
     released.map((program) => [
       program,
@@ -189,20 +246,17 @@ const release = (secret, [placeholderDir, outDir, ...programs]) => {
       ),
     ]),
   );
-  const programSeeds = seeds(binaries, dependencies(metadata, released));
-  const keypairs = released.map((program) => [program, derive(secret, program, programSeeds[program])]);
+  const programSeeds = seeds(binaries, dependencies(workspaceMetadata(), released), salts);
+  const manifest = released.map((program) => [
+    program,
+    {
+      address: derive(secret, program, programSeeds[program]).address,
+      seed: programSeeds[program],
+      salt: salt(salts, program),
+    },
+  ]);
 
-  mkdirSync(outDir, { recursive: true });
-  keypairs.forEach(([program, programKeypair]) => writeKeypair(outDir, program, programKeypair));
-  console.log(
-    JSON.stringify(
-      Object.fromEntries(
-        keypairs.map(([program, { address }]) => [program, { address, seed: programSeeds[program] }]),
-      ),
-      null,
-      2,
-    ),
-  );
+  console.log(JSON.stringify(Object.fromEntries(manifest), null, 2));
 };
 
 const deploy = (secret, [manifestPath, outDir]) => {
@@ -226,6 +280,16 @@ const deploy = (secret, [manifestPath, outDir]) => {
   });
 };
 
+// GitHub Actions expands a missing secret to an empty string, so blank counts as unset.
+const secretFromEnvironment = () => {
+  const value = process.env[SECRET_VARIABLE] ?? "";
+  if (value.trim() === "") {
+    throw new Error(`${SECRET_VARIABLE} must be set`);
+  }
+
+  return parseSecret(value);
+};
+
 const COMMANDS = { release, deploy };
 
 const main = ([command, ...args]) => {
@@ -233,17 +297,15 @@ const main = ([command, ...args]) => {
   if (!run) {
     throw new Error(USAGE);
   }
-  const secret = parseSecret(
-    process.env[SECRET_VARIABLE] ??
-      (() => {
-        throw new Error(`${SECRET_VARIABLE} must be set`);
-      })(),
-  );
 
-  run(secret, args);
+  run(secretFromEnvironment(), args);
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Resolve symlinks on both sides, so a linked entry point still runs.
+const invokedDirectly = () =>
+  Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+
+if (invokedDirectly()) {
   Promise.resolve(process.argv.slice(2))
     .then(main)
     .catch((error) => {

@@ -318,9 +318,9 @@ the local-prover model: rent returns to whoever pays for `withdraw`.
   consistent with the redeploy-never-upgrade policy. Residual: `init` is unauthenticated, so
   the first caller after deploy owns the whitelist forever (see Rollout step 4 for the gate);
   and rotating the EVM emitter set later strands in-flight intents that named this program
-  ID, the escape hatch being a program upgrade that adds a set-emitters instruction — the
-  programs are deployed upgradeable (`deploy-mainnet` in `Anchor.toml` uses plain
-  `anchor deploy`, no `--final`).
+  ID. Releases deploy programs immutable (README "Deploying a release"), so a rotation raises
+  the program's salt in `scripts/program-salts.json`, which moves it to a new address
+  initialized with the new set.
 - **No reentrancy surface.** Polymer's program performs no CPIs back into callers.
 - **Atomic release.** `polymer-prover` joins the set that must ship from one tree with
   Portal, since its authorities derive from Portal's ID.
