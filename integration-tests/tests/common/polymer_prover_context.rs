@@ -279,7 +279,10 @@ impl PolymerProver<'_> {
                 payer: self.payer.pubkey(),
             }
             .to_account_metas(None),
-            data: polymer_prover::instruction::CloseProof {}.data(),
+            data: polymer_prover::instruction::CloseProof {
+                args: eco_svm_std::prover::CloseProofArgs::new([1; 32].into(), vec![]),
+            }
+            .data(),
         };
         let transaction = Transaction::new(
             &[&self.payer, portal_proof_closer],

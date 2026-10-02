@@ -1,20 +1,41 @@
 use anchor_lang::prelude::*;
+use eco_svm_std::prover::{cpi, CloseProofArgs};
 
-use crate::instructions::AggregatorProverError;
-use crate::state::ProofAccount;
+use crate::instructions::member::{member_accounts, Member};
+use crate::instructions::{AggregatorProverError, MemberQuery};
+use crate::state::Config;
 
 #[derive(Accounts)]
+#[instruction(args: CloseProofArgs)]
 pub struct CloseProof<'info> {
-    #[account(address = portal::state::proof_closer_pda(&crate::ID).0 @ AggregatorProverError::InvalidPortalProofCloser)]
+    #[account(address = portal::state::proof_closer_pda(&args.intent_hash).0 @ AggregatorProverError::InvalidPortalProofCloser)]
     pub portal_proof_closer: Signer<'info>,
-    #[account(mut)]
-    pub proof: Account<'info, ProofAccount>,
-    #[account(mut)]
-    pub payer: Signer<'info>,
+    #[account(address = Config::pda().0 @ AggregatorProverError::InvalidConfig)]
+    pub config: Account<'info, Config>,
 }
 
-pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
-    ctx.accounts
-        .proof
-        .close(ctx.accounts.payer.to_account_info())
+pub fn close_proof<'info>(
+    ctx: Context<'info, CloseProof<'info>>,
+    args: CloseProofArgs,
+) -> Result<()> {
+    let CloseProofArgs { intent_hash, data } = args;
+    let queries = Vec::<MemberQuery>::try_from_slice(&data)?;
+    let members = member_accounts(&ctx.accounts.config, ctx.remaining_accounts, queries)?;
+    require!(!members.is_empty(), AggregatorProverError::InvalidProverSet);
+
+    members.into_iter().try_for_each(|member| {
+        let Member {
+            prover,
+            accounts,
+            query,
+        } = member;
+
+        cpi::close_proof(
+            prover,
+            &ctx.accounts.portal_proof_closer,
+            accounts,
+            CloseProofArgs::new(intent_hash, query.data),
+            &[],
+        )
+    })
 }

@@ -1,8 +1,10 @@
+use aggregator_prover::instructions::MemberQuery;
 use aggregator_prover::state::Config;
+use anchor_lang::prelude::borsh;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::prover::Proof;
-use eco_svm_std::{event_authority_pda, Bytes32};
+use eco_svm_std::prover::{GetProofArgs, Proof};
+use eco_svm_std::Bytes32;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
@@ -11,7 +13,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{Context, TransactionResult};
+use crate::common::{Context, ProverQuery, TransactionResult};
 
 const AGGREGATOR_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/aggregator_prover.so");
 
@@ -76,39 +78,82 @@ impl AggregatorProver<'_> {
         self.send_transaction(transaction)
     }
 
-    pub fn build_aggregate_instruction(&self, intent_hash: Bytes32, prover: Pubkey) -> Instruction {
-        let accounts = aggregator_prover::accounts::Aggregate {
-            payer: self.payer.pubkey(),
-            config: Config::pda().0,
-            prover,
-            prover_proof: Proof::pda(&intent_hash, &prover).0,
-            proof: Proof::pda(&intent_hash, &aggregator_prover::ID).0,
-            system_program: anchor_lang::system_program::ID,
-            event_authority: event_authority_pda(&aggregator_prover::ID).0,
-            program: aggregator_prover::ID,
-        }
-        .to_account_metas(None);
-
-        Instruction {
+    pub fn get_proof(&mut self, args: GetProofArgs, provers: &[Pubkey]) -> TransactionResult {
+        let query = query_accounts(&args.intent_hash, provers);
+        self.send_instruction(Instruction {
             program_id: aggregator_prover::ID,
-            accounts,
-            data: aggregator_prover::instruction::Aggregate { intent_hash }.data(),
+            accounts: std::iter::once(AccountMeta::new_readonly(Config::pda().0, false))
+                .chain(query.accounts)
+                .collect(),
+            data: aggregator_prover::instruction::GetProof {
+                args: GetProofArgs {
+                    data: query.data,
+                    ..args
+                },
+            }
+            .data(),
+        })
+    }
+
+    pub fn cleanup_accounts(&self, intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
+        let query = member_queries(provers.iter().map(|prover| {
+            let recipient = if *prover == hyper_prover::ID {
+                hyper_prover::state::pda_payer_pda().0
+            } else {
+                self.payer.pubkey()
+            };
+            let cleanup = [
+                AccountMeta::new(Proof::pda(intent_hash, prover).0, false),
+                AccountMeta::new(recipient, *prover != hyper_prover::ID),
+            ]
+            .into();
+
+            (*prover, cleanup)
+        }));
+
+        ProverQuery {
+            accounts: std::iter::once(AccountMeta::new_readonly(Config::pda().0, false))
+                .chain(query.accounts)
+                .collect(),
+            data: query.data,
         }
     }
+}
 
-    pub fn aggregate(&mut self, intent_hash: Bytes32, prover: Pubkey) -> TransactionResult {
-        let instruction = self.build_aggregate_instruction(intent_hash, prover);
+pub fn query_accounts(intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
+    member_queries(
+        provers
+            .iter()
+            .map(|prover| (*prover, proof_query(intent_hash, prover))),
+    )
+}
 
-        self.send_instruction(instruction)
-    }
+fn proof_query(intent_hash: &Bytes32, prover: &Pubkey) -> ProverQuery {
+    [AccountMeta::new_readonly(
+        Proof::pda(intent_hash, prover).0,
+        false,
+    )]
+    .into()
+}
 
-    pub fn send_instruction(&mut self, instruction: Instruction) -> TransactionResult {
-        let transaction = Transaction::new(
-            &[&self.payer],
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
-            self.latest_blockhash(),
-        );
+fn member_queries(members: impl IntoIterator<Item = (Pubkey, ProverQuery)>) -> ProverQuery {
+    let (queries, accounts): (Vec<_>, Vec<_>) = members
+        .into_iter()
+        .map(|(prover, query)| {
+            let ProverQuery { accounts, data } = query;
+            let query = MemberQuery {
+                account_count: accounts.len().try_into().unwrap(),
+                data,
+            };
+            let accounts =
+                std::iter::once(AccountMeta::new_readonly(prover, false)).chain(accounts);
 
-        self.send_transaction(transaction)
+            (query, accounts)
+        })
+        .unzip();
+
+    ProverQuery {
+        accounts: accounts.into_iter().flatten().collect(),
+        data: borsh::to_vec(&queries).unwrap(),
     }
 }

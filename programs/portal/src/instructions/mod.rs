@@ -18,6 +18,7 @@ mod refund;
 mod withdraw;
 
 pub use cancel::*;
+pub use close_proof::*;
 pub use fulfill::*;
 pub use fund::*;
 pub use prove::*;
@@ -33,7 +34,7 @@ pub fn now() -> Result<u64> {
 }
 
 /// Claims the intent's fulfill-marker PDA, the one record both `fulfill` (the
-/// solver's claimant) and `cancel` (the `CANCELLED` sentinel) write: whichever
+/// solver's claimant) and `cancel` (the cancellation claimant) write: whichever
 /// creates it first owns the intent, and every later attempt fails with
 /// `IntentAlreadyFulfilledOrCancelled` because the PDA is occupied.
 pub(crate) fn claim_fulfill_marker<'info>(
@@ -133,8 +134,11 @@ pub enum PortalError {
     ClaimantSignatureRequired,
     ExecutorCorrupted,
     ExecutorAtaCorrupted,
-    /// `claimant` is the reserved `CANCELLED` sentinel, which only `cancel` may write.
+    /// `claimant` is the reserved cancellation claimant, which only `cancel` may write.
     ReservedClaimant,
-    /// The intent's proof records a cancellation, which never pays a claimant.
+    /// Retired: negative withdrawal validation now returns IntentNotFulfilled.
     IntentCancelled,
+    IntentNotCancelled,
+    /// A refund path that queries no prover received prover accounts or data.
+    UnexpectedProverQuery,
 }

@@ -80,20 +80,30 @@ fn close_proof_should_succeed() {
     ctx.portal()
         .withdraw_intent(
             destination,
-            reward,
+            reward.clone(),
             vault_pda,
             route_hash,
             claimant_pubkey,
             proof,
             withdrawn_marker,
-            state::proof_closer_pda(&local_prover::ID).0,
             vec![],
             iter::once(AccountMeta::new(payer, true)),
         )
         .unwrap();
 
-    let proof_account = ctx.account::<ProofAccount>(&proof);
-    assert!(proof_account.is_none());
+    assert!(ctx.account::<ProofAccount>(&proof).is_some());
+    ctx.portal()
+        .close_proof(
+            destination,
+            route_hash,
+            reward,
+            vec![
+                AccountMeta::new(proof, false),
+                AccountMeta::new(payer, true),
+            ],
+        )
+        .unwrap();
+    assert!(ctx.account::<ProofAccount>(&proof).is_none());
 }
 
 #[test]

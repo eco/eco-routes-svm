@@ -1,11 +1,13 @@
 use anchor_lang::prelude::*;
 
 mod close_proof;
+mod get_proof;
 mod init;
 mod prove;
 mod validate;
 
 pub use close_proof::*;
+pub use get_proof::*;
 pub use init::*;
 pub use prove::*;
 pub use validate::*;

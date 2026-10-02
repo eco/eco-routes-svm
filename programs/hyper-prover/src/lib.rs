@@ -17,8 +17,15 @@ pub mod hyper_prover {
         instructions::init(ctx, args)
     }
 
-    pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
-        instructions::close_proof(ctx)
+    pub fn get_proof(
+        ctx: Context<GetProof>,
+        args: prover::GetProofArgs,
+    ) -> Result<Option<prover::Proof>> {
+        instructions::get_proof(ctx, args)
+    }
+
+    pub fn close_proof(ctx: Context<CloseProof>, args: prover::CloseProofArgs) -> Result<()> {
+        instructions::close_proof(ctx, args)
     }
 
     pub fn prove(ctx: Context<Prove>, args: prover::ProveArgs) -> Result<()> {

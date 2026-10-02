@@ -60,7 +60,7 @@ A pull-based prover backed by Polymer's proof network:
 #### **Local-Prover Program** (`programs/local-prover/`)
 A prover for same-chain intents (Solana source and destination):
 
-- **Proof Creation**: Accepts either Portal's dispatcher PDA or Flash-Fulfiller's vault PDA as the authorized caller
+- **Proof Creation**: Accepts either Portal's or Flash-Fulfiller's prover-scoped prove authority as the authorized caller
 - **Proof Cleanup**: Called back by Portal during `withdraw` to close the Proof PDA and reclaim rent
 
 #### **Flash-Fulfiller Program** (`programs/flash-fulfiller/`)
@@ -72,7 +72,7 @@ An atomic orchestrator that lets solvers fulfill intents with zero capital — t
 
 ### How They Work Together
 
-The optional **Aggregator-Prover** (`programs/aggregator-prover/`) creates a standard proof from an immutable prover set. Solvers deliver through a concrete prover, aggregate on the source chain, then withdraw using the aggregator program ID as `reward.prover`. Portal needs no changes.
+The optional **Aggregator-Prover** (`programs/aggregator-prover/`) forwards proof validation and cleanup to an immutable set of concrete provers. Solvers deliver a concrete proof and withdraw through the aggregator, with no aggregation transaction or aggregate proof PDA.
 
 ```mermaid
 sequenceDiagram
@@ -273,8 +273,9 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `fund` - Fund an intent with reward tokens
 - `fulfill` - Execute intent operations and mark as fulfilled
 - `prove` - Submit proof of fulfillment from destination chain
-- `refund` - Refund intent after `reward.deadline`, or immediately once its cancellation is proven. The cancellation path always closes the proof through the prover's `close_proof` (provers must be finalized); before `reward.deadline` it must also sweep every reward mint, from `reward.deadline` it sweeps whatever token chunks it is given. The `proof_closer` and `prover` accounts are optional and required only on the cancellation path
-- `withdraw` - Withdraw rewards after successful proof validation
+- `refund` - Refund after the reward deadline with no applicable proof, on a proven cancellation, or after withdrawal. Portal determines the refund path from the withdrawal marker or returned proof. Refund creates no marker and leaves proofs intact. Each refund sweeps the token triples it is given; repeated refunds sweep the rest.
+- `withdraw` - Validate the payout claimant through the prover, transfer rewards, and create the permanent withdrawal marker. Leaves proofs intact
+- `close_proof` - Independently reclaim proof rent after withdrawal, or for a validated cancellation at/after the reward deadline
 - `cancel` - After `route.deadline`, permanently cancel an unfulfilled intent on its destination. Permissionless. Writes a permanent `FulfillMarker` holding the `CANCELLED` sentinel (a hash-derived, unowned EVM address, byte-identical to EVM `Inbox.CANCELLED`) at the intent's fulfill-marker PDA; `prove` then carries it to the source, where `refund` succeeds before `reward.deadline`.
 
 #### Key Accounts:
@@ -289,7 +290,8 @@ Proven cancellation changes the `refund` account layout and several errors and e
 - `init` - Initialize prover with whitelisted senders
 - `handle` - Process incoming Hyperlane messages and create proof accounts
 - `prove` - Send proof message via Hyperlane
-- `close_proof` - Clean up proof accounts after validation
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
+- `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
 - `ProofAccount` - Stores proof data for intent fulfillment
@@ -303,7 +305,8 @@ A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobo
 - `init` - Initialize prover with whitelisted emitters
 - `validate` - CPI Polymer's `validate_event`, mirror the Solidity `PolymerProver.validate` checks, and create a `Proof` PDA idempotently
 - `prove` - Emit a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse. Capped at 24 intents per call because Solana truncates a transaction's logs at 10 KB while the transaction still succeeds; that budget is shared by every instruction in the transaction, so submit `portal::prove` as the only log-emitting instruction in its transaction, then count the `Program log: Prove: program: <polymer_prover id>, ` lines in `meta.logMessages` against the hashes sent and resubmit any shortfall (`prove` writes no state, so the retry is safe)
-- `close_proof` - Clean up proof accounts after successful withdrawal (called by Portal during `withdraw`)
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
+- `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization
 
 #### Key Accounts:
 - `ProofAccount` - Stores proof data for intent fulfillment
@@ -315,7 +318,8 @@ A prover implementation for same-chain intents (e.g., Solana to Solana transacti
 
 #### Key Instructions:
 - `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
-- `close_proof` - Close Proof accounts after successful withdrawal or a proven-cancellation refund (called by Portal during `withdraw` and `refund`); the proof's rent goes to the signing `payer`
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
+- `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization; rent goes to the signing payer
 
 ### Flash-Fulfiller Program
 
@@ -335,23 +339,15 @@ A helper program used by Hyperlane message construction in tests and off-chain t
 
 ### Aggregator-Prover Program
 
-- `init()` — the program's upgrade authority initializes the singleton `Config` PDA once. The prover list comes directly from `remaining_accounts`; it must be nonempty, unique, capped at eight, and limited to executable programs other than the aggregator itself. There is no prover configuration setter or configuration close instruction. Initialize before advertising the program ID; a different set requires a separate program deployment.
-- `aggregate(intent_hash)` — permissionless source-chain aggregation for one intent. The only argument is the intent hash. The destination and claimant are copied from the caller-selected configured prover’s proof.
-- `close_proof()` — accepts Portal's `proof_closer_pda(aggregator_program_id)` signer, the aggregate proof, and a writable signer receiving rent. It leaves underlying proofs untouched.
+- `init()` — the upgrade authority initializes immutable `Config` once with 1–8 unique executable prover IDs. A different set requires another deployment.
+- `get_proof(args)` — query any subset of configured members in caller order using variable-length account groups; return the first proof, or `None` only if every configured member was queried and has none.
+- `close_proof(args)` — forward Portal's intent-scoped signer to every supplied member; each leaf closes its own proof and applies its rent-recipient policy.
 
-`aggregate` accounts, in order: payer writable signer, Config, selected prover program, selected prover’s proof PDA, writable aggregate proof PDA, system program, event authority, aggregator program. The caller chooses a prover off-chain. The program checks that it is configured and executable, and that its proof has the canonical PDA, correct owner, discriminator, data shape, and nonzero claimant. The proof’s destination and claimant are copied unchanged; no other prover accounts are required.
+The aggregator has no `aggregate`, `prove`, proof account or proof event. Destination dispatch and source delivery use concrete provers. A returned fulfillment proof blocks refund until withdrawal; cancellation evidence permits immediate refund. Listeners track concrete prover events and identify the member when requesting settlement.
 
-There is no `prove` instruction. Relay through a concrete prover: for Hyperlane, destination `Portal.prove → HyperProver.prove` dispatches the message, source `HyperProver.handle` records the underlying proof, then `AggregatorProver.aggregate` creates the proof used by `Portal.withdraw`. For Polymer, a relayer loads the bridge proof and calls `PolymerProver.validate` on the source chain, then aggregates its proof PDA. A single-intent `validate` and `aggregate` can share one transaction. Portal and provers are unchanged.
+The trust floor is the weakest configured prover. Initialize and review the exact member set before finalizing deployment; executable status alone does not establish trust or interface compatibility. Members supply their own account layouts and query data; account groups have explicit lengths.
 
-The aggregate proof uses the existing `Proof` layout and PDA seeds and emits the standard `IntentProven` CPI event. Aggregation always initializes a new proof PDA; an existing PDA causes initialization to fail, even for an identical proof. Prover order has no priority semantics; the first successfully aggregated proof is retained. There is no challenge interface or destination-preimage validation. The aggregator trusts configured provers for destination correctness; an incorrect destination copied into the aggregate proof cannot be replaced by a later proof.
-
-**Solver integration is required before enabling these routes.** Portal sees only the aggregate proof. A proof delivered to a prover does not block an expired refund until aggregation succeeds. Aggregate before `reward.deadline`, ideally in the same transaction as proof delivery, then withdraw. Merely combining aggregation with withdrawal does not remove the earlier refund race. This source-chain aggregation step differs from EVM's read-only union. The aggregator sends no bridge messages; destination-chain dispatch and source-chain delivery must use a concrete prover. Listeners should track the aggregator's `IntentProven` event for settlement readiness.
-
-The trust floor is the weakest prover. Deployment must review the exact prover list and each prover's proof semantics; executable-account validation does not establish trust. Program upgrade authorities retain the usual ability to replace code until revoked. Underlying proof rent is not reclaimed by aggregate withdrawal.
-
-### Dummy ISM Program
-
-A simplified ISM implementation used as the mailbox's default ISM in local test environments, standing in for Hyperlane's real default ISM.
+See [Proof queries and cleanup](docs/prover-interface.md) for account order, proof query semantics, refund paths and the breaking client changes.
 
 ## Testing
 
