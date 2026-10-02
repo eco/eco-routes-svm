@@ -566,29 +566,80 @@ For verifiable builds, the release also pushes a `deploy/v<version>` tag: one co
 
 ### Deploying a release
 
-Keypairs are never shipped; re-derive them from the release's assets:
+Deploying is manual. Run the steps in order; each new program ends up deployed, initialized, verified and immutable.
+
+**You need:** Solana CLI 4.1.1, Anchor CLI 1.1.2, Node 22, Docker (running), [`solana-verify`](https://github.com/Ellipsis-Labs/solana-verifiable-build) (`cargo install solana-verify`), `gh`, `PROGRAM_KEYPAIR_SECRET` from the vault, a funded deployer keypair (it pays and is every new program's upgrade authority until the last step), an RPC URL, and the `init` values: the EVM HyperProver and PolymerProver addresses for this cluster.
+
+The examples use mainnet. For devnet, use a devnet RPC and drop every `-- --features mainnet`.
+
+**1. Check out the release and derive its keypairs.** `deploy/v<version>` is the release commit plus its real `declare_id!`s.
 
 ```bash
-gh release download v<version> --repo eco/eco-routes-svm
+git clone https://github.com/eco/eco-routes-svm && cd eco-routes-svm
+git checkout deploy/v<version>
+gh release download v<version> --pattern program-ids.json
 export PROGRAM_KEYPAIR_SECRET=<from the vault>
-node program-keypairs.mjs deploy program-ids.json keys
+node scripts/program-keypairs.mjs deploy program-ids.json keys
 ```
 
-It refuses to write anything unless every derived address matches `program-ids.json`, then writes `keys/<program>-keypair.json` (`/keys` is gitignored). For each program:
+The script refuses to write anything unless every derived address matches `program-ids.json`, then writes `keys/<program>-keypair.json` (`/keys` is gitignored).
 
-- if its address is already deployed, its bytecode is unchanged since an earlier release; skip it (`solana program dump <address>` must equal the release's `.so`);
-- otherwise deploy `<program>.<cluster>.so` with `solana program deploy --program-id keys/<program>-keypair.json`, then verify it while you still hold the upgrade authority (OtterSec only accepts a verify PDA uploaded by it), and only then make it immutable:
+**2. Build every program reproducibly.** `solana-verify build` compiles in the same Docker image `verify-from-repo` uses, so what you deploy is what verification rebuilds:
 
 ```bash
-commit=$(git ls-remote https://github.com/eco/eco-routes-svm "refs/tags/deploy/v<version>" | cut -f1)
-solana-verify verify-from-repo -u <rpc> --program-id <address> https://github.com/eco/eco-routes-svm \
-  --commit-hash "$commit" --library-name <program> -k <upgrade-authority-keypair> -- --features mainnet
-# answer yes to upload the verify PDA; on devnet drop `-- --features mainnet`
-solana-verify remote submit-job --program-id <address> --uploader <upgrade-authority-address>
-solana program set-upgrade-authority <address> --final
+for program in $(jq -r 'keys[]' program-ids.json); do
+  solana-verify build --library-name "$program" -- --features mainnet
+done
 ```
 
-Delete `keys/` afterwards.
+**3. Decide what to deploy.** For each program, with `address=$(jq -r ".${program}.address" program-ids.json)`:
+
+- `solana program show "$address" -u <rpc>` reports no account: the program is new; deploy it below.
+- The account exists: the program is unchanged since an earlier release and already live. Confirm `solana-verify get-program-hash -u <rpc> "$address"` equals `solana-verify get-executable-hash target/deploy/<program>.so` and skip it.
+- Anything else, such as a hash mismatch or a different upgrade authority: someone else holds the address. Deploy nothing, since the other programs would trust it.
+
+**4. Deploy each new program:**
+
+```bash
+solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deployer-keypair> \
+  --program-id keys/<program>-keypair.json target/deploy/<program>.so
+```
+
+**5. Initialize.** Deploy every new program before this step: the aggregator only accepts members that are already deployed. Send each `init` with your own tooling, using the release IDL (`<program>.mainnet.json`) for the instruction layout. `hyper_prover` and `polymer_prover` can be initialized by anyone until they are, so send theirs right after the deploy.
+
+| Program | `init` arguments | Signers |
+|---|---|---|
+| `hyper_prover` | `whitelisted_senders`: the EVM HyperProver addresses, each left-padded to 32 bytes | payer |
+| `polymer_prover` | `whitelisted_emitters`: the EVM PolymerProver addresses, each left-padded to 32 bytes | payer |
+| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `local_prover`, `polymer_prover` from `program-ids.json`) as remaining accounts | payer and the upgrade authority |
+
+Every config is permanent. Read each one back and compare it with what you sent:
+
+```bash
+config=$(solana find-program-derived-address "$address" string:config | head -1)
+anchor account <program>.Config "$config" --idl <program>.mainnet.json --provider.cluster <rpc>
+```
+
+If a config is wrong, stop: that address can never be fixed, and replacing it needs a release that changes the program's bytecode.
+
+**6. Verify each new program** while you still hold its upgrade authority, since OtterSec only accepts a verify PDA uploaded by it:
+
+```bash
+commit=$(git rev-parse "deploy/v<version>^{commit}")
+solana-verify verify-from-repo -u <rpc> --program-id "$address" https://github.com/eco/eco-routes-svm \
+  --commit-hash "$commit" --library-name <program> -k <deployer-keypair> -y -- --features mainnet
+solana-verify remote submit-job --program-id "$address" --uploader <deployer-address>
+```
+
+`-y` uploads the verify PDA without prompting; `<deployer-address>` is `solana-keygen pubkey <deployer-keypair>`.
+
+**7. Make each new program immutable**, last, because `init` and verification both need the upgrade authority:
+
+```bash
+solana program set-upgrade-authority -u <rpc> -k <deployer-keypair> "$address" --final
+```
+
+Then delete `keys/`.
 
 The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
