@@ -4,6 +4,13 @@ edition = "2021"
 name = "polymer-prover"
 version = "0.1.0"
 
+# Pins the platform-tools for a plain `cargo build-sbf`, which is what `solana-verify build`
+# (and the remote verify-from-repo) runs: that path cannot pass `--tools-version`, and without
+# this it would compile with the Solana CLI's default instead of the v1.52 that anchor-cli 1.1.2
+# hard-codes and CI asserts (SBF_TOOLS_VERSION). Keep the two in step.
+[package.metadata.solana]
+tools-version = "v1.52"
+
 [lib]
 crate-type = ["cdylib", "lib"]
 name = "polymer_prover"
