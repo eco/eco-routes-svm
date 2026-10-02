@@ -8,9 +8,9 @@ declare_id!("HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE");
 /// Test-only stand-in "prover" for the per-prover dispatcher scoping regression
 /// (localnet only; excluded from devnet/mainnet builds). `portal::prove` invokes
 /// it with the dispatcher PDA as an inherited signer, then it re-CPIs the real
-/// local-prover with `ProofData` taken from `portal::prove`'s verbatim `data`
-/// passthrough. With the dispatcher scoped per-prover, local-prover rejects the
-/// forwarded signer.
+/// prover named in its account tail (local-prover or polymer-prover) with
+/// `ProofData` taken from `portal::prove`'s verbatim `data` passthrough. With the
+/// dispatcher scoped per-prover, the real prover rejects the forwarded signer.
 ///
 /// `prove` shares the standard Anchor discriminator with the real provers'
 /// instruction (`sha256("global:prove")[..8]`), so `portal::prove`'s CPI
@@ -24,13 +24,14 @@ pub mod malicious_prover {
         let payer = &ctx.accounts.payer;
         let system_program = &ctx.accounts.system_program;
         let event_authority = &ctx.accounts.event_authority;
-        // tail: the real local-prover program, then the proofs to mint
+        // tail: the prover named in the tail (local-prover or polymer-prover),
+        // then the proofs to mint (none for polymer-prover, which mints a log)
         let (local_prover, proofs) = ctx
             .remaining_accounts
             .split_first()
             .ok_or(ProgramError::NotEnoughAccountKeys)?;
 
-        msg!("malicious-prover: re-CPI local-prover via forwarded caller signer");
+        msg!("malicious-prover: re-CPI the prover named in the tail via forwarded caller signer");
 
         // `args.data` is a caller-supplied borsh local-prover `ProveArgs`. local-prover
         // `Prove` order: caller, payer, system_program, event_authority, program,

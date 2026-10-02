@@ -1,0 +1,20 @@
+use anchor_lang::prelude::*;
+
+use crate::instructions::AggregatorProverError;
+use crate::state::ProofAccount;
+
+#[derive(Accounts)]
+pub struct CloseProof<'info> {
+    #[account(address = portal::state::proof_closer_pda(&crate::ID).0 @ AggregatorProverError::InvalidPortalProofCloser)]
+    pub portal_proof_closer: Signer<'info>,
+    #[account(mut)]
+    pub proof: Account<'info, ProofAccount>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
+}
+
+pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
+    ctx.accounts
+        .proof
+        .close(ctx.accounts.payer.to_account_info())
+}

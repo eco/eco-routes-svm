@@ -1,0 +1,292 @@
+use anchor_lang::prelude::{borsh, AccountMeta};
+use anchor_lang::{InstructionData, ToAccountMetas};
+use derive_more::{Deref, DerefMut};
+use eco_svm_std::prover::{ProofData, ProveArgs};
+use eco_svm_std::{event_authority_pda, Bytes32};
+use mock_polymer_prover::ValidationResultAccount;
+use polymer_prover::event::{abi_encode_bytes, INTENT_FULFILLED_FROM_SOURCE_SELECTOR};
+use polymer_prover::polymer;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_sdk::instruction::Instruction;
+use solana_sdk::message::Message;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Keypair;
+use solana_sdk::signer::Signer;
+use solana_sdk::transaction::Transaction;
+
+use crate::common::{Context, TransactionResult};
+
+/// Polymer's `load_proof` chunk size recommendation.
+const LOAD_PROOF_CHUNK: usize = 800;
+
+#[derive(Deref, DerefMut)]
+pub struct PolymerProver<'a>(&'a mut Context);
+
+impl Context {
+    pub fn polymer_prover(&mut self) -> PolymerProver<'_> {
+        PolymerProver(self)
+    }
+}
+
+/// Builds the result Polymer would write for an `IntentFulfilledFromSource`
+/// event emitted by `emitter` on EVM chain `chain_id`, with `source` in the
+/// indexed topic and `encoded_proofs` ABI-encoded as the `bytes` argument.
+pub fn intent_fulfilled_result(
+    emitter: [u8; 20],
+    source: u64,
+    chain_id: u32,
+    encoded_proofs: Vec<u8>,
+) -> ValidationResultAccount {
+    let mut topics = INTENT_FULFILLED_FROM_SOURCE_SELECTOR.to_vec();
+    topics.extend_from_slice(&[0u8; 24]);
+    topics.extend_from_slice(&source.to_be_bytes());
+
+    ValidationResultAccount {
+        is_valid: true,
+        error_message: String::new(),
+        chain_id,
+        emitting_contract: emitter,
+        topics,
+        unindexed_data: abi_encode_bytes(&encoded_proofs),
+    }
+}
+
+impl PolymerProver<'_> {
+    /// Compute limit for `validate`, and for a full-batch `portal::prove` into
+    /// polymer-prover: the maximum a transaction can request. Polymer's real
+    /// `validate_event` (secp256k1 recovery plus SHA-256 IAVL paths) is heavy
+    /// enough that relayers simply request the maximum; its actual cost is
+    /// measured by the weekly drift test (`validate_polymer_prover_real.rs`),
+    /// not assumed here. The mock's `validate_event` is nearly free.
+    pub const VALIDATE_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+    /// Ceiling on polymer-prover's own share of a `validate` transaction at a
+    /// full `MAX_INTENTS_PER_PROVE` batch (measured ~252k through the mock: the
+    /// account checks, result decode, 24 Proof creations and 24 `emit_cpi!`).
+    /// A regression guard on our marginal cost, and the headroom the real
+    /// `validate_event` must leave below `VALIDATE_COMPUTE_UNIT_LIMIT`.
+    pub const OUR_VALIDATE_CU_BUDGET: u32 = 400_000;
+    /// Ceiling on the marginal cost of one pair in `validate` (measured
+    /// ~9-10k: one `create_account` CPI, one Proof write, one `emit_cpi!`).
+    /// Deliberately loose — CU counts move on Anchor and toolchain bumps.
+    pub const PER_PAIR_CU_BOUND: u64 = 15_000;
+
+    pub fn init(
+        &mut self,
+        whitelisted_emitters: Vec<Bytes32>,
+        config: Pubkey,
+    ) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: polymer_prover::ID,
+            accounts: polymer_prover::accounts::Init {
+                config,
+                payer: self.payer.pubkey(),
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None),
+            data: polymer_prover::instruction::Init {
+                args: polymer_prover::instructions::InitArgs {
+                    whitelisted_emitters,
+                },
+            }
+            .data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    /// The canonical fixed-account slots for `validate` under `authority`. Tests
+    /// that pin one of `Validate`'s `address =` gates take this and override a
+    /// single field.
+    pub fn validate_accounts(authority: &Pubkey) -> polymer_prover::accounts::Validate {
+        polymer_prover::accounts::Validate {
+            authority: *authority,
+            config: polymer_prover::state::Config::pda().0,
+            cache_account: polymer::cache_pda(authority).0,
+            result_account: polymer::result_pda(authority).0,
+            internal: polymer::internal_pda().0,
+            polymer_prover_program: polymer::POLYMER_PROVER_ID,
+            system_program: anchor_lang::system_program::ID,
+            event_authority: event_authority_pda(&polymer_prover::ID).0,
+            program: polymer_prover::ID,
+        }
+    }
+
+    /// `validate` for the proof loaded under `authority`; `proof_accounts` are
+    /// the Proof PDAs in payload order.
+    pub fn validate(
+        &mut self,
+        authority: &Keypair,
+        proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        self.validate_with_accounts(
+            authority,
+            Self::validate_accounts(&authority.pubkey()),
+            proof_accounts,
+        )
+    }
+
+    /// The legacy message every `validate` transaction here is built from:
+    /// compute budget plus `validate` with `proof_accounts` appended to the
+    /// fixed slots. Exposed so the packet-size test measures the exact shape
+    /// the suite sends (litesvm does not enforce the 1232-byte limit).
+    pub fn validate_message(
+        authority: &Pubkey,
+        accounts: polymer_prover::accounts::Validate,
+        proof_accounts: Vec<AccountMeta>,
+    ) -> Message {
+        let accounts = accounts
+            .to_account_metas(None)
+            .into_iter()
+            .chain(proof_accounts)
+            .collect();
+        let instruction = Instruction {
+            program_id: polymer_prover::ID,
+            accounts,
+            data: polymer_prover::instruction::Validate {}.data(),
+        };
+        Message::new(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(Self::VALIDATE_COMPUTE_UNIT_LIMIT),
+                instruction,
+            ],
+            Some(authority),
+        )
+    }
+
+    /// `validate` with the fixed slots supplied verbatim, on the same
+    /// transaction shape (compute budget included) as the canonical path.
+    pub fn validate_with_accounts(
+        &mut self,
+        authority: &Keypair,
+        accounts: polymer_prover::accounts::Validate,
+        proof_accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        let transaction = Transaction::new(
+            &[authority],
+            Self::validate_message(&authority.pubkey(), accounts, proof_accounts),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    /// Polymer's `create_accounts` for `authority`; funds the authority first.
+    pub fn polymer_create_accounts(&mut self, authority: &Keypair) -> TransactionResult {
+        if self.balance(&authority.pubkey()) == 0 {
+            self.airdrop(&authority.pubkey(), super::sol_amount(5.0))
+                .unwrap();
+        }
+        let instruction = Instruction {
+            program_id: polymer::POLYMER_PROVER_ID,
+            accounts: mock_polymer_prover::accounts::CreateAccounts {
+                authority: authority.pubkey(),
+                cache_account: polymer::cache_pda(&authority.pubkey()).0,
+                result_account: polymer::result_pda(&authority.pubkey()).0,
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None),
+            data: mock_polymer_prover::instruction::CreateAccounts {}.data(),
+        };
+        let transaction = Transaction::new(
+            &[authority],
+            Message::new(&[instruction], Some(&authority.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    /// Loads `result` into the mock's cache in 800-byte chunks, one
+    /// transaction each, exactly as a relayer loads a real proof.
+    pub fn polymer_load_result(
+        &mut self,
+        authority: &Keypair,
+        result: &ValidationResultAccount,
+    ) -> TransactionResult {
+        let body = borsh::to_vec(result).unwrap();
+        let mut last = None;
+        for chunk in body.chunks(LOAD_PROOF_CHUNK) {
+            let instruction = Instruction {
+                program_id: polymer::POLYMER_PROVER_ID,
+                accounts: mock_polymer_prover::accounts::LoadProof {
+                    authority: authority.pubkey(),
+                    cache_account: polymer::cache_pda(&authority.pubkey()).0,
+                }
+                .to_account_metas(None),
+                data: mock_polymer_prover::instruction::LoadProof {
+                    proof_chunk: chunk.to_vec(),
+                }
+                .data(),
+            };
+            let transaction = Transaction::new(
+                &[authority],
+                Message::new(&[instruction], Some(&authority.pubkey())),
+                self.latest_blockhash(),
+            );
+            last = Some(self.send_transaction(transaction)?);
+        }
+
+        Ok(last.expect("result body is never empty"))
+    }
+
+    /// Direct call to `prove` (bypassing Portal) with an arbitrary signer in the
+    /// dispatcher slot; used to pin the dispatcher gate.
+    pub fn prove(
+        &mut self,
+        portal_dispatcher: &Keypair,
+        domain_id: u64,
+        proof_data: ProofData,
+    ) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: polymer_prover::ID,
+            accounts: polymer_prover::accounts::Prove {
+                portal_dispatcher: portal_dispatcher.pubkey(),
+            }
+            .to_account_metas(None),
+            data: polymer_prover::instruction::Prove {
+                args: ProveArgs {
+                    domain_id,
+                    proof_data,
+                    data: vec![],
+                },
+            }
+            .data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, portal_dispatcher],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn close_proof(
+        &mut self,
+        portal_proof_closer: &Keypair,
+        proof: Pubkey,
+    ) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: polymer_prover::ID,
+            accounts: polymer_prover::accounts::CloseProof {
+                portal_proof_closer: portal_proof_closer.pubkey(),
+                proof,
+                payer: self.payer.pubkey(),
+            }
+            .to_account_metas(None),
+            data: polymer_prover::instruction::CloseProof {}.data(),
+        };
+        let transaction = Transaction::new(
+            &[&self.payer, portal_proof_closer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+}
