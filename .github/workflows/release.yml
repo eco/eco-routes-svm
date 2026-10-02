@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute the version and program IDs and build every asset, but publish nothing"
+        type: boolean
+        default: true
 
 concurrency:
   group: release
@@ -132,9 +137,36 @@ jobs:
         if: always()
         run: rm -f target/deploy/*-keypair.json
 
+      - name: Summarize no release
+        if: steps.dry.outputs.new_release_published != 'true'
+        run: |
+          echo "## No release: no releasable commits since the last tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize
+        if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          VERSION: ${{ steps.dry.outputs.new_release_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## v${VERSION}$([ "$DRY_RUN" = true ] && echo " (dry run: nothing published)")"
+            echo
+            echo "| Program | Address |"
+            echo "|---|---|"
+            jq -r 'to_entries[] | "| `\(.key)` | `\(.value.address)` |"' target/program-ids.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dry-run assets
+        if: inputs.dry_run && steps.dry.outputs.new_release_published == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-v${{ steps.dry.outputs.new_release_version }}-dry-run
+          path: dist/
+          if-no-files-found: error
+
       - name: Release
         id: semantic
-        if: steps.dry.outputs.new_release_published == 'true'
+        if: steps.dry.outputs.new_release_published == 'true' && !inputs.dry_run
         uses: cycjimmy/semantic-release-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

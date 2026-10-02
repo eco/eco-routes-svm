@@ -537,7 +537,7 @@ wallet = "~/.config/solana/id.json"
 
 ## Release
 
-Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub and click **Run workflow**.
+Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub, click **Run workflow** and untick **dry_run**. A dry run (the default) computes the version, derives the program IDs and builds every asset, but publishes nothing: no release, tags or branches. Either way the run summary shows the version and each program's address, and a dry run uploads the would-be assets (`.so` files, IDLs, `program-ids.json`, the script; never keypairs) as a workflow artifact. A dry run uses the same secret, so it needs the same `release` environment approval, and its addresses are exactly what a real release from that commit would publish.
 
 ### What gets published
 
