@@ -2,7 +2,6 @@ use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::prover::Proof;
 use eco_svm_std::Bytes32;
-use tiny_keccak::{Hasher, Keccak};
 
 use crate::constants::MAX_INTENTS_PER_PROVE;
 use crate::instructions::LayerZeroProverError;
@@ -107,21 +106,16 @@ pub struct PendingSend {
 
 impl PendingSend {
     pub fn key(dst_eid: u32, receiver: &Bytes32, payload: &[u8]) -> [u8; 32] {
-        let mut hasher = Keccak::v256();
-        hasher.update(&dst_eid.to_le_bytes());
-        hasher.update(receiver.as_ref());
-        hasher.update(payload);
-        let mut key = [0u8; 32];
-        hasher.finalize(&mut key);
-
-        key
+        solana_keccak_hasher::hashv(&[&dst_eid.to_le_bytes(), receiver.as_ref(), payload])
+            .to_bytes()
     }
 
     pub fn pda(dst_eid: u32, receiver: &Bytes32, payload: &[u8]) -> (Pubkey, u8) {
-        Pubkey::find_program_address(
-            &[PENDING_SEND_SEED, &Self::key(dst_eid, receiver, payload)],
-            &crate::ID,
-        )
+        Self::pda_from_key(&Self::key(dst_eid, receiver, payload))
+    }
+
+    pub fn pda_from_key(key: &[u8; 32]) -> (Pubkey, u8) {
+        Pubkey::find_program_address(&[PENDING_SEND_SEED, key], &crate::ID)
     }
 
     pub fn intent_count(&self) -> usize {

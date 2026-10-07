@@ -26,7 +26,11 @@ no-log-ix-name = []
 anchor-lang = { workspace = true, features = ["event-cpi"] }
 eco-svm-std = { workspace = true }
 portal = { workspace = true, features = ["no-entrypoint"] }
-tiny-keccak = { workspace = true }
+# Syscall-backed keccak on-chain (as portal); the host build needs `sha3` to hash at all.
+solana-keccak-hasher = "3.1"
+
+[target.'cfg(not(target_os = "solana"))'.dependencies]
+solana-keccak-hasher = { version = "3.1", features = ["sha3"] }
 
 # The k256 → getrandom path (via anchor's solana-secp256k1-recover) needs a
 # getrandom backend for the SBF target; enable the custom backend there only.

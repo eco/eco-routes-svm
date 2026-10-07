@@ -59,7 +59,8 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
     check_intent_count(proof_data.intent_hashes_claimants.len())?;
 
     let payload = proof_data.to_bytes();
-    let (address, bump) = PendingSend::pda(dst_eid, &receiver, &payload);
+    let key = PendingSend::key(dst_eid, &receiver, &payload);
+    let (address, bump) = PendingSend::pda_from_key(&key);
     require_keys_eq!(
         ctx.accounts.pending_send.key(),
         address,
@@ -71,7 +72,6 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
         return Ok(());
     }
 
-    let key = PendingSend::key(dst_eid, &receiver, &payload);
     PendingSend {
         dst_eid,
         receiver,

@@ -80,15 +80,19 @@ pub fn lz_receive<'info>(
         LayerZeroProverError::InvalidProof
     );
 
+    let (_, payer_bump) = pda_payer_pda();
     proofs
         .iter()
         .zip(proof_data.intent_hashes_claimants)
-        .try_for_each(|(proof, pair)| mark_intent_hash_proven(&ctx, proof, destination, pair))
+        .try_for_each(|(proof, pair)| {
+            mark_intent_hash_proven(&ctx, proof, payer_bump, destination, pair)
+        })
 }
 
 fn mark_intent_hash_proven<'info>(
     ctx: &Context<'info, LzReceive<'info>>,
     proof: &AccountInfo<'info>,
+    payer_bump: u8,
     destination: u64,
     pair: IntentHashClaimant,
 ) -> Result<()> {
@@ -100,7 +104,6 @@ fn mark_intent_hash_proven<'info>(
 
     let (proof_pda, proof_bump) = prover::Proof::pda(&intent_hash, &crate::ID);
     require_keys_eq!(proof.key(), proof_pda, LayerZeroProverError::InvalidProof);
-    let (_, payer_bump) = pda_payer_pda();
 
     // A `Proof` can already exist for a duplicate pair earlier in this batch,
     // or from a later message (new nonce, e.g. a re-prove) carrying the same
