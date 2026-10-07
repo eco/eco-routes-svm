@@ -164,7 +164,7 @@ fn set_path_config_pins_send_receive_and_executor() {
 
 #[test]
 fn set_path_config_rejects_anything_left_on_layerzero_defaults() {
-    let mutations: [fn(&mut PathConfig); 6] = [
+    let mutations: [fn(&mut PathConfig); 10] = [
         |c| c.send_uln.confirmations = 0,
         |c| c.receive_uln.required_dvn_count = 0,
         |c| c.receive_uln.required_dvn_count = NIL_DVN_COUNT,
@@ -173,6 +173,17 @@ fn set_path_config_rejects_anything_left_on_layerzero_defaults() {
         },
         |c| c.executor.max_message_size = 0,
         |c| c.executor.executor = Pubkey::default(),
+        |c| c.receive_uln.optional_dvn_count = 0,
+        |c| c.send_uln.optional_dvns.push(Pubkey::new_unique()),
+        |c| {
+            c.send_uln.optional_dvn_count = 1;
+            c.send_uln.optional_dvns = vec![Pubkey::new_unique()];
+        },
+        |c| {
+            c.receive_uln.optional_dvn_count = 1;
+            c.receive_uln.optional_dvn_threshold = 2;
+            c.receive_uln.optional_dvns = vec![Pubkey::new_unique()];
+        },
     ];
     mutations.into_iter().for_each(|mutate| {
         let (mut context, authority) = installed();

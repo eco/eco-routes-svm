@@ -11,7 +11,7 @@ use crate::layerzero::{
 use crate::state::{pda_payer_pda, Store, PDA_PAYER_SEED};
 
 /// The path's full security config. Nothing may resolve to a LayerZero default
-/// (count/confirmations 0, executor default), or LayerZero governance would
+/// (required or optional DVN count 0, confirmations 0, executor default), or LayerZero governance would
 /// control our DVN set after we finalize.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
 pub struct PathConfig {
@@ -32,6 +32,23 @@ impl PathConfig {
                         && uln.required_dvns.len() == uln.required_dvn_count as usize,
                     LayerZeroProverError::UnpinnedConfig
                 );
+                // Optional DVNs: 0 means "LayerZero default", NIL means "none".
+                require!(
+                    uln.optional_dvn_count != 0,
+                    LayerZeroProverError::UnpinnedConfig
+                );
+                if uln.optional_dvn_count == NIL_DVN_COUNT {
+                    require!(
+                        uln.optional_dvns.is_empty() && uln.optional_dvn_threshold == 0,
+                        LayerZeroProverError::UnpinnedConfig
+                    );
+                } else {
+                    require!(
+                        uln.optional_dvns.len() == uln.optional_dvn_count as usize
+                            && (1..=uln.optional_dvn_count).contains(&uln.optional_dvn_threshold),
+                        LayerZeroProverError::UnpinnedConfig
+                    );
+                }
                 Ok(())
             })?;
         require!(

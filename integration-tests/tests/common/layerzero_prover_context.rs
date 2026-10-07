@@ -5,7 +5,7 @@ use derive_more::{Deref, DerefMut};
 use eco_svm_std::Bytes32;
 use layerzero_prover::instructions::{InitArgs, PathConfig, ADDRESS_LOOKUP_TABLE_PROGRAM_ID};
 use layerzero_prover::layerzero::{
-    self, ExecutorConfig, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID, ULN_ID,
+    self, ExecutorConfig, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID, NIL_DVN_COUNT, ULN_ID,
 };
 use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, Store};
 use portal::types::Reward;
@@ -178,7 +178,7 @@ pub fn path_config() -> PathConfig {
     let uln = UlnConfig {
         confirmations: 15,
         required_dvn_count: 2,
-        optional_dvn_count: 0,
+        optional_dvn_count: NIL_DVN_COUNT,
         optional_dvn_threshold: 0,
         required_dvns: dvns,
         optional_dvns: vec![],
