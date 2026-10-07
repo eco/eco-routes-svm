@@ -613,8 +613,8 @@ The manual `Deploy` workflow (`.github/workflows/deploy.yml`) takes a published 
 
 - The release exists (`v<version>` and its `deploy/v<version>` tag) and the EVM provers it will trust are deployed, since their addresses are `init` inputs.
 - The workflow builds the deployer and runs `scripts/deploy-step.sh` from that `deploy/v<version>` tag, not from `main`: a release cut before this pipeline existed cannot use it, and a fix to the pipeline reaches deploys only through a new release.
-- GitHub environment `deploy-<cluster>` (`deploy-devnet`, `deploy-mainnet`): required reviewers, self-review prevented, `main` only. Its approval is the second pair of eyes on every run, dry runs included.
-- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until the last step, so it needs SOL for the deploys and reserves), `RPC_URL`. The RPC URL is treated as a secret and redacted from logs and the uploaded artifact.
+- GitHub environment `release` (shared with the release workflow and both clusters): required reviewers, self-review prevented, `main` only. Its approval is the second pair of eyes on every run, dry runs included.
+- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until the last step, so it needs SOL on each cluster for the deploys and reserves), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
 
 **Inputs**
 
