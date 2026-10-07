@@ -1,8 +1,6 @@
 use std::iter;
 
-use anchor_lang::{
-    system_program, AccountSerialize, AnchorDeserialize, InstructionData, ToAccountMetas,
-};
+use anchor_lang::{system_program, AnchorDeserialize, InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::{GetProofArgs, IntentHashClaimant, Proof, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
@@ -16,6 +14,7 @@ use layerzero_prover::layerzero::{
 use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, PendingSend, Store};
 use portal::state::FulfillMarker;
 use portal::types::Reward;
+use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::account::Account;
 use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -25,17 +24,15 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{sol_amount, Context, TransactionResult};
-
-const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
+use crate::common::{
+    cleanup_recipient, program_data_address, sol_amount, Context, TransactionResult,
+};
 
 pub const BASE_EID: u32 = 30184;
 pub const BASE_CHAIN_ID: u64 = 8453;
 pub const OP_EID: u32 = 30111;
 pub const OP_CHAIN_ID: u64 = 10;
 pub const COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
-/// Size of a lookup table's serialized meta; addresses follow it.
-pub const LOOKUP_TABLE_META_SIZE: usize = 56;
 /// Receives the mock endpoint's flat fee in `send_message` tests.
 pub const TREASURY: Pubkey = Pubkey::new_from_array([0x7e; 32]);
 
@@ -68,11 +65,10 @@ impl Context {
 }
 
 impl LayerZeroProver<'_> {
-    /// Adds the program with `authority` as upgrade authority, initializes the
-    /// mock endpoint's settings account and funds `pda_payer`.
+    /// Makes `authority` the program's upgrade authority (the program itself
+    /// is loaded by `Context::default`), initializes the mock endpoint's
+    /// settings account and funds `pda_payer`.
     pub fn install(&mut self, authority: Pubkey) {
-        self.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
-            .unwrap();
         self.set_upgrade_authority(&layerzero_prover::ID, Some(authority));
 
         let payer = self.payer.pubkey();
@@ -95,8 +91,7 @@ impl LayerZeroProver<'_> {
     }
 
     pub fn program_data(&self) -> Pubkey {
-        let program = self.get_account(&layerzero_prover::ID).unwrap();
-        Pubkey::find_program_address(&[layerzero_prover::ID.as_ref()], &program.owner).0
+        program_data_address(&layerzero_prover::ID)
     }
 
     /// Simulates `solana program set-upgrade-authority --final`.
@@ -112,12 +107,23 @@ impl LayerZeroProver<'_> {
         signers: &[&Keypair],
     ) -> TransactionResult {
         let payer = self.payer.insecure_clone();
+
+        self.send_as(&payer, instructions, signers)
+    }
+
+    /// [`Self::send`] with `payer` paying the fee instead of the context payer.
+    pub fn send_as(
+        &mut self,
+        payer: &Keypair,
+        instructions: Vec<Instruction>,
+        signers: &[&Keypair],
+    ) -> TransactionResult {
         let instructions: Vec<_> = iter::once(ComputeBudgetInstruction::set_compute_unit_limit(
             COMPUTE_UNIT_LIMIT,
         ))
         .chain(instructions)
         .collect();
-        let signers: Vec<&Keypair> = iter::once(&payer).chain(signers.iter().copied()).collect();
+        let signers: Vec<&Keypair> = iter::once(payer).chain(signers.iter().copied()).collect();
         let transaction = Transaction::new(
             &signers,
             Message::new(&instructions, Some(&payer.pubkey())),
@@ -154,13 +160,6 @@ impl LayerZeroProver<'_> {
 
         (reward, route_hash, hash)
     }
-}
-
-/// Serializes an Anchor account (mock or ours) for `set_account`.
-pub fn anchor_account_data<T: AccountSerialize>(account: &T) -> Vec<u8> {
-    let mut data = Vec::new();
-    account.try_serialize(&mut data).unwrap();
-    data
 }
 
 /// A fully pinned path config: two required DVNs (sorted, as ULN302 requires),
@@ -296,16 +295,16 @@ impl LayerZeroProver<'_> {
         addresses: Vec<Pubkey>,
     ) -> Pubkey {
         let alt = Pubkey::new_unique();
-        let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
-        data[..4].copy_from_slice(&1u32.to_le_bytes());
-        data[4..12].copy_from_slice(&deactivation_slot.to_le_bytes());
-        if let Some(authority) = authority {
-            data[21] = 1;
-            data[22..54].copy_from_slice(authority.as_ref());
+        let data = AddressLookupTable {
+            meta: LookupTableMeta {
+                deactivation_slot,
+                authority,
+                ..LookupTableMeta::default()
+            },
+            addresses: addresses.into(),
         }
-        addresses
-            .iter()
-            .for_each(|address| data.extend_from_slice(address.as_ref()));
+        .serialize_for_tests()
+        .unwrap();
         self.set_account(
             alt,
             Account {
@@ -387,32 +386,70 @@ impl LayerZeroProver<'_> {
         dst_eid: u64,
         data: Vec<u8>,
     ) -> TransactionResult {
-        let fulfill_markers = intent_hashes
-            .iter()
-            .map(|hash| FulfillMarker::pda(hash).0)
-            .collect();
         let receiver: Bytes32 = <[u8; 32]>::try_from(data.as_slice())
             .unwrap_or([0; 32])
             .into();
         let pending = self.pending_send_for(dst_eid as u32, &receiver, &intent_hashes);
-        let payer = self.payer.pubkey();
+        let instruction =
+            build_prove_instruction(self.payer.pubkey(), intent_hashes, dst_eid, data, pending);
 
-        self.portal().prove_intent_via_program_with_compute_limit(
-            layerzero_prover::ID,
-            intent_hashes,
-            dst_eid,
-            fulfill_markers,
-            portal::state::dispatcher_pda(&layerzero_prover::ID).0,
-            data,
-            vec![
-                AccountMeta::new(payer, true),
-                AccountMeta::new_readonly(Store::pda().0, false),
-                AccountMeta::new(pending, false),
-                AccountMeta::new_readonly(system_program::ID, false),
-            ],
-            COMPUTE_UNIT_LIMIT,
-        )
+        self.send(vec![instruction], &[])
     }
+}
+
+/// `portal::prove` targeting this prover, with the `PendingSend` it commits to.
+/// Free function so the batch-size tests can build it without a context.
+pub fn build_prove_instruction(
+    payer: Pubkey,
+    intent_hashes: Vec<Bytes32>,
+    dst_eid: u64,
+    data: Vec<u8>,
+    pending: Pubkey,
+) -> Instruction {
+    let fulfill_markers = intent_hashes.iter().map(|hash| FulfillMarker::pda(hash).0);
+    let accounts = portal::accounts::Prove {
+        prover: layerzero_prover::ID,
+        dispatcher: portal::state::dispatcher_pda(&layerzero_prover::ID).0,
+    }
+    .to_account_metas(None)
+    .into_iter()
+    .chain(fulfill_markers.map(|marker| AccountMeta::new_readonly(marker, false)))
+    .chain([
+        AccountMeta::new(payer, true),
+        AccountMeta::new_readonly(Store::pda().0, false),
+        AccountMeta::new(pending, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+    ])
+    .collect();
+
+    Instruction {
+        program_id: portal::ID,
+        accounts,
+        data: portal::instruction::Prove {
+            args: portal::instructions::ProveArgs {
+                prover: layerzero_prover::ID,
+                source_chain_domain_id: dst_eid,
+                intent_hashes,
+                data,
+            },
+        }
+        .data(),
+    }
+}
+
+/// The read-only head `send` and `quote` share: ULN302, the path's send
+/// libraries, the library record and the endpoint settings.
+fn library_head(store: Pubkey, dst_eid: u32) -> [AccountMeta; 5] {
+    [
+        AccountMeta::new_readonly(ULN_ID, false),
+        AccountMeta::new_readonly(layerzero::send_library_config_pda(&store, dst_eid).0, false),
+        AccountMeta::new_readonly(layerzero::default_send_library_config_pda(dst_eid).0, false),
+        AccountMeta::new_readonly(
+            layerzero::message_lib_info_pda(&layerzero::uln_settings_pda().0).0,
+            false,
+        ),
+        AccountMeta::new_readonly(layerzero::endpoint_settings_pda().0, false),
+    ]
 }
 
 /// Endpoint `send` accounts after `[program, sender]`, then the ULN302 send
@@ -423,41 +460,35 @@ pub fn send_accounts(
     dst_eid: u32,
     receiver: &Bytes32,
 ) -> Vec<AccountMeta> {
-    let uln = layerzero::uln_settings_pda().0;
-    vec![
-        AccountMeta::new_readonly(ULN_ID, false),
-        AccountMeta::new_readonly(layerzero::send_library_config_pda(&store, dst_eid).0, false),
-        AccountMeta::new_readonly(layerzero::default_send_library_config_pda(dst_eid).0, false),
-        AccountMeta::new_readonly(layerzero::message_lib_info_pda(&uln).0, false),
-        AccountMeta::new_readonly(layerzero::endpoint_settings_pda().0, false),
-        AccountMeta::new(layerzero::nonce_pda(&store, dst_eid, receiver).0, false),
-        AccountMeta::new_readonly(layerzero::endpoint_event_authority().0, false),
-        AccountMeta::new_readonly(ENDPOINT_ID, false),
-        AccountMeta::new_readonly(uln, false),
-        AccountMeta::new_readonly(layerzero::uln_send_config_pda(dst_eid, &store).0, false),
-        AccountMeta::new_readonly(layerzero::uln_default_send_config_pda(dst_eid).0, false),
-        AccountMeta::new(payer, true),
-        AccountMeta::new(TREASURY, false),
-        AccountMeta::new_readonly(system_program::ID, false),
-        AccountMeta::new_readonly(layerzero::uln_event_authority().0, false),
-        AccountMeta::new_readonly(ULN_ID, false),
-    ]
+    library_head(store, dst_eid)
+        .into_iter()
+        .chain([
+            AccountMeta::new(layerzero::nonce_pda(&store, dst_eid, receiver).0, false),
+            AccountMeta::new_readonly(layerzero::endpoint_event_authority().0, false),
+            AccountMeta::new_readonly(ENDPOINT_ID, false),
+            AccountMeta::new_readonly(layerzero::uln_settings_pda().0, false),
+            AccountMeta::new_readonly(layerzero::uln_send_config_pda(dst_eid, &store).0, false),
+            AccountMeta::new_readonly(layerzero::uln_default_send_config_pda(dst_eid).0, false),
+            AccountMeta::new(payer, true),
+            AccountMeta::new(TREASURY, false),
+            AccountMeta::new_readonly(system_program::ID, false),
+            AccountMeta::new_readonly(layerzero::uln_event_authority().0, false),
+            AccountMeta::new_readonly(ULN_ID, false),
+        ])
+        .collect()
 }
 
 /// Endpoint `quote` accounts plus the ULN302 quote head, all read-only.
 pub fn quote_accounts(store: Pubkey, dst_eid: u32, receiver: &Bytes32) -> Vec<AccountMeta> {
-    let uln = layerzero::uln_settings_pda().0;
-    vec![
-        AccountMeta::new_readonly(ULN_ID, false),
-        AccountMeta::new_readonly(layerzero::send_library_config_pda(&store, dst_eid).0, false),
-        AccountMeta::new_readonly(layerzero::default_send_library_config_pda(dst_eid).0, false),
-        AccountMeta::new_readonly(layerzero::message_lib_info_pda(&uln).0, false),
-        AccountMeta::new_readonly(layerzero::endpoint_settings_pda().0, false),
-        AccountMeta::new_readonly(layerzero::nonce_pda(&store, dst_eid, receiver).0, false),
-        AccountMeta::new_readonly(uln, false),
-        AccountMeta::new_readonly(layerzero::uln_send_config_pda(dst_eid, &store).0, false),
-        AccountMeta::new_readonly(layerzero::uln_default_send_config_pda(dst_eid).0, false),
-    ]
+    library_head(store, dst_eid)
+        .into_iter()
+        .chain([
+            AccountMeta::new_readonly(layerzero::nonce_pda(&store, dst_eid, receiver).0, false),
+            AccountMeta::new_readonly(layerzero::uln_settings_pda().0, false),
+            AccountMeta::new_readonly(layerzero::uln_send_config_pda(dst_eid, &store).0, false),
+            AccountMeta::new_readonly(layerzero::uln_default_send_config_pda(dst_eid).0, false),
+        ])
+        .collect()
 }
 
 /// Free function (no context needed) so the batch-size tests can build it too.
@@ -490,7 +521,6 @@ pub fn build_send_message_instruction(
 }
 
 impl LayerZeroProver<'_> {
-    #[allow(clippy::too_many_arguments)]
     pub fn send_message(
         &mut self,
         pending_send: Pubkey,
@@ -508,17 +538,8 @@ impl LayerZeroProver<'_> {
             receiver,
             max_native_fee,
         );
-        let instructions = vec![
-            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-            instruction,
-        ];
-        let transaction = Transaction::new(
-            &[fee_payer],
-            Message::new(&instructions, Some(&fee_payer.pubkey())),
-            self.latest_blockhash(),
-        );
 
-        self.send_transaction(transaction)
+        self.send_as(fee_payer, vec![instruction], &[])
     }
 
     pub fn quote_message(
@@ -571,17 +592,71 @@ impl LayerZeroProver<'_> {
         self.send(vec![instruction], &[])
     }
 
+    /// `lz_receive_types_v2` with the accounts `lz_receive_types_info` names:
+    /// the store and the lookup table it records.
     pub fn lz_receive_types_v2(&mut self, params: LzReceiveParams) -> TransactionResult {
+        let alt = self.account::<Store>(&Store::pda().0).unwrap().alt;
+        self.lz_receive_types_v2_with_alt(params, alt)
+    }
+
+    pub fn lz_receive_types_v2_with_alt(
+        &mut self,
+        params: LzReceiveParams,
+        alt: Pubkey,
+    ) -> TransactionResult {
         let instruction = Instruction {
             program_id: layerzero_prover::ID,
             accounts: layerzero_prover::accounts::LzReceiveTypesV2 {
                 store: Store::pda().0,
+                alt,
             }
             .to_account_metas(None),
             data: layerzero_prover::instruction::LzReceiveTypesV2 { params }.data(),
         };
         self.send(vec![instruction], &[])
     }
+
+    /// The addresses of the lookup table staged at `alt`, in table order.
+    pub fn lookup_table(&self, alt: &Pubkey) -> Vec<Pubkey> {
+        let account = self.get_account(alt).unwrap();
+        AddressLookupTable::deserialize(&account.data)
+            .unwrap()
+            .addresses
+            .to_vec()
+    }
+
+    /// Resolves `lz_receive_types_v2`'s locators the way the executor does,
+    /// reading each of `alts` from its staged lookup table.
+    pub fn resolve_locators(
+        &self,
+        alts: &[Pubkey],
+        accounts: Vec<AccountMetaRef>,
+    ) -> Vec<AccountMetaRef> {
+        let tables: Vec<Vec<Pubkey>> = alts.iter().map(|alt| self.lookup_table(alt)).collect();
+        resolve_locators(&tables, accounts)
+    }
+}
+
+/// The executor's `AltIndex` resolution: `AltIndex(table, index)` becomes the
+/// `Address` at `tables[table][index]`; `Address` passes through. Any other
+/// locator panics (`lz_receive_types_v2` never returns one).
+pub fn resolve_locators(
+    tables: &[Vec<Pubkey>],
+    accounts: Vec<AccountMetaRef>,
+) -> Vec<AccountMetaRef> {
+    accounts
+        .into_iter()
+        .map(|meta| AccountMetaRef {
+            pubkey: match meta.pubkey {
+                AddressLocator::AltIndex(table, index) => {
+                    AddressLocator::Address(tables[table as usize][index as usize])
+                }
+                AddressLocator::Address(pubkey) => AddressLocator::Address(pubkey),
+                other => panic!("unexpected locator {other:?}"),
+            },
+            is_writable: meta.is_writable,
+        })
+        .collect()
 }
 
 /// `lz_receive` as the executor would build it from `accounts` (all
@@ -612,15 +687,22 @@ pub fn build_lz_receive_instruction(
     }
 }
 
+/// The hash the endpoint stores for a verified message: `keccak(guid || message)`.
+pub fn payload_hash(params: &LzReceiveParams) -> [u8; 32] {
+    let mut hasher = tiny_keccak::Keccak::v256();
+    tiny_keccak::Hasher::update(&mut hasher, &params.guid);
+    tiny_keccak::Hasher::update(&mut hasher, &params.message);
+    let mut hash = [0u8; 32];
+    tiny_keccak::Hasher::finalize(hasher, &mut hash);
+
+    hash
+}
+
 impl LayerZeroProver<'_> {
     /// Stands in for DVN verification: writes the PayloadHash and advances the
     /// path's inbound nonce on the mock endpoint.
     pub fn verify(&mut self, params: &LzReceiveParams) -> TransactionResult {
-        let mut hasher = tiny_keccak::Keccak::v256();
-        tiny_keccak::Hasher::update(&mut hasher, &params.guid);
-        tiny_keccak::Hasher::update(&mut hasher, &params.message);
-        let mut payload_hash = [0u8; 32];
-        tiny_keccak::Hasher::finalize(hasher, &mut payload_hash);
+        let payload_hash = payload_hash(params);
         let store = Store::pda().0;
         let instruction = Instruction {
             program_id: ENDPOINT_ID,
@@ -661,8 +743,28 @@ impl LayerZeroProver<'_> {
     }
 
     pub fn lz_receive(&mut self, params: &LzReceiveParams) -> TransactionResult {
+        self.lz_receive_with(params, |_| {})
+    }
+
+    /// Verifies `params`, then sends `lz_receive` with the canonical account
+    /// list after `mutate` tampered with it.
+    pub fn deliver_with(
+        &mut self,
+        params: &LzReceiveParams,
+        mutate: impl FnOnce(&mut Vec<AccountMetaRef>),
+    ) -> TransactionResult {
+        self.verify(params)?;
+        self.lz_receive_with(params, mutate)
+    }
+
+    fn lz_receive_with(
+        &mut self,
+        params: &LzReceiveParams,
+        mutate: impl FnOnce(&mut Vec<AccountMetaRef>),
+    ) -> TransactionResult {
         let proof_data = ProofData::from_bytes(&params.message).unwrap();
-        let accounts = layerzero_prover::instructions::lz_receive_accounts(params, &proof_data);
+        let mut accounts = layerzero_prover::instructions::lz_receive_accounts(params, &proof_data);
+        mutate(&mut accounts);
         let instruction = self.lz_receive_instruction(params, accounts);
         self.send(vec![instruction], &[])
     }
@@ -677,22 +779,15 @@ impl LayerZeroProver<'_> {
     pub fn force_nonce(&mut self, src_eid: u32, sender: [u8; 32]) {
         let store = Store::pda().0;
         let (address, bump) = layerzero::nonce_pda(&store, src_eid, &sender);
-        let data = anchor_account_data(&mock_layerzero_endpoint::Nonce {
-            bump,
-            outbound_nonce: 0,
-            inbound_nonce: 0,
-        });
-        self.set_account(
+        self.set_anchor_account(
             address,
-            Account {
-                lamports: 1_000_000_000,
-                data,
-                owner: ENDPOINT_ID,
-                executable: false,
-                rent_epoch: 0,
+            ENDPOINT_ID,
+            &mock_layerzero_endpoint::Nonce {
+                bump,
+                outbound_nonce: 0,
+                inbound_nonce: 0,
             },
-        )
-        .unwrap();
+        );
     }
 }
 
@@ -701,7 +796,7 @@ impl LayerZeroProver<'_> {
 pub fn cleanup_tail(intent_hash: &Bytes32) -> Vec<AccountMeta> {
     vec![
         AccountMeta::new(Proof::pda(intent_hash, &layerzero_prover::ID).0, false),
-        AccountMeta::new(pda_payer_pda().0, false),
+        cleanup_recipient(&layerzero_prover::ID, Pubkey::default()),
     ]
 }
 

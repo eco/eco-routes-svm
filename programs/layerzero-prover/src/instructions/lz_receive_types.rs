@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use eco_svm_std::event_authority_pda;
 use eco_svm_std::prover::{Proof, ProofData};
 
-use crate::instructions::LayerZeroProverError;
+use crate::instructions::{lookup_table_addresses, LayerZeroProverError};
 use crate::layerzero::{
     endpoint_event_authority, endpoint_settings_pda, nonce_pda, oapp_registry_pda,
     payload_hash_pda, AccountMetaRef, AddressLocator, LzInstruction, LzReceiveParams,
@@ -16,7 +16,8 @@ use crate::state::{pda_payer_pda, LzReceiveTypesAccount, Store};
 /// hash (mut), endpoint settings (mut), endpoint event authority, endpoint program.
 pub const CLEAR_ACCOUNTS_LEN: usize = 8;
 
-/// Executor entry point 1: names the accounts `lz_receive_types_v2` takes.
+/// Executor entry point 1: names the accounts `lz_receive_types_v2` takes,
+/// `[store, store.alt]`.
 #[derive(Accounts)]
 pub struct LzReceiveTypesInfo<'info> {
     #[account(address = Store::pda().0 @ LayerZeroProverError::InvalidStore)]
@@ -32,18 +33,22 @@ pub fn lz_receive_types_info(
     Ok(LzReceiveTypesInfoResult {
         version: LZ_RECEIVE_TYPES_VERSION,
         accounts: LzReceiveTypesV2Accounts {
-            accounts: vec![ctx.accounts.store.key()],
+            accounts: vec![ctx.accounts.store.key(), ctx.accounts.store.alt],
         },
     })
 }
 
 /// Executor entry point 2 (simulated): the exact `lz_receive` instruction to
 /// build for this message. Must agree with what `lz_receive` validates, or the
-/// executor halts — both use [`lz_receive_accounts`].
+/// executor halts — both use [`lz_receive_accounts`]; this only rewrites the
+/// locators of accounts in the lookup table to `AltIndex`.
 #[derive(Accounts)]
 pub struct LzReceiveTypesV2<'info> {
     #[account(address = Store::pda().0 @ LayerZeroProverError::InvalidStore)]
     pub store: Account<'info, Store>,
+    /// CHECK: the table `set_alt` validated and recorded; parsed in the handler
+    #[account(address = store.alt @ LayerZeroProverError::InvalidLookupTable)]
+    pub alt: UncheckedAccount<'info>,
 }
 
 pub fn lz_receive_types_v2(
@@ -52,15 +57,40 @@ pub fn lz_receive_types_v2(
 ) -> Result<LzReceiveTypesV2Result> {
     let alt = ctx.accounts.store.alt;
     require!(alt != Pubkey::default(), LayerZeroProverError::AltNotSet);
+    let table = lookup_table_addresses(&ctx.accounts.alt.try_borrow_data()?)?;
     let proof_data = ProofData::from_bytes(&params.message)?;
 
     Ok(LzReceiveTypesV2Result {
         context_version: EXECUTION_CONTEXT_VERSION_1,
         alts: vec![alt],
         instructions: vec![LzInstruction::LzReceive {
-            accounts: lz_receive_accounts(&params, &proof_data),
+            accounts: compact_accounts_with_alt(lz_receive_accounts(&params, &proof_data), &table),
         }],
     })
+}
+
+/// LayerZero's `compact_accounts_with_alts` for our single table (list
+/// index 0): every `Address` found in `table` becomes `AltIndex(0, index)`,
+/// so the executor loads it from the table instead of as a static key.
+pub fn compact_accounts_with_alt(
+    accounts: Vec<AccountMetaRef>,
+    table: &[Pubkey],
+) -> Vec<AccountMetaRef> {
+    accounts
+        .into_iter()
+        .map(|mut meta| {
+            if let AddressLocator::Address(pubkey) = meta.pubkey {
+                if let Some(index) = table
+                    .iter()
+                    .position(|address| *address == pubkey)
+                    .and_then(|index| u8::try_from(index).ok())
+                {
+                    meta.pubkey = AddressLocator::AltIndex(0, index);
+                }
+            }
+            meta
+        })
+        .collect()
 }
 
 /// `lz_receive`'s account list in order: the named accounts (store,
@@ -139,10 +169,7 @@ mod tests {
     use super::*;
     use crate::state::Peer;
 
-    /// Everything `lz_receive_accounts` lists except the per-message
-    /// `PayloadHash` and `Proof` PDAs must be in the required table contents.
-    #[test]
-    fn required_alt_addresses_cover_every_static_lz_receive_account() {
+    fn fixture() -> (Store, LzReceiveParams, ProofData, [Pubkey; 2]) {
         let peer = Peer {
             eid: 30184,
             address: [0xba; 32].into(),
@@ -165,15 +192,60 @@ mod tests {
             payload_hash_pda(&Store::pda().0, peer.eid, &params.sender, params.nonce).0,
             Proof::pda(&[1; 32].into(), &crate::ID).0,
         ];
+
+        (store, params, proof_data, per_message)
+    }
+
+    fn address(locator: &AddressLocator) -> Pubkey {
+        match locator {
+            AddressLocator::Address(pubkey) => *pubkey,
+            other => panic!("unexpected locator {other:?}"),
+        }
+    }
+
+    /// Everything `lz_receive_accounts` lists except the per-message
+    /// `PayloadHash` and `Proof` PDAs must be in the required table contents.
+    #[test]
+    fn required_alt_addresses_cover_every_static_lz_receive_account() {
+        let (store, params, proof_data, per_message) = fixture();
         let required = required_alt_addresses(&store);
 
         lz_receive_accounts(&params, &proof_data)
-            .into_iter()
-            .map(|meta| match meta.pubkey {
-                AddressLocator::Address(pubkey) => pubkey,
-                other => panic!("unexpected locator {other:?}"),
-            })
+            .iter()
+            .map(|meta| address(&meta.pubkey))
             .filter(|pubkey| !per_message.contains(pubkey))
             .for_each(|pubkey| assert!(required.contains(&pubkey), "{pubkey} missing"));
+    }
+
+    /// Compaction turns every table member into an `AltIndex` that resolves
+    /// back to the same account, and leaves everything else (the per-message
+    /// PDAs) as a plain `Address`.
+    #[test]
+    fn compact_accounts_with_alt_indexes_table_members_only() {
+        let (store, params, proof_data, per_message) = fixture();
+        // An unrelated leading entry, so indices are not trivially positions
+        // in `required_alt_addresses`.
+        let table: Vec<Pubkey> = [Pubkey::new_unique()]
+            .into_iter()
+            .chain(required_alt_addresses(&store))
+            .collect();
+        let plain = lz_receive_accounts(&params, &proof_data);
+        let compacted = compact_accounts_with_alt(plain.clone(), &table);
+
+        assert_eq!(compacted.len(), plain.len());
+        plain.iter().zip(&compacted).for_each(|(plain, compacted)| {
+            let pubkey = address(&plain.pubkey);
+            assert_eq!(plain.is_writable, compacted.is_writable);
+            match compacted.pubkey {
+                AddressLocator::AltIndex(0, index) => {
+                    assert_eq!(table[index as usize], pubkey);
+                }
+                AddressLocator::Address(address) => {
+                    assert_eq!(address, pubkey);
+                    assert!(per_message.contains(&pubkey), "{pubkey} not compacted");
+                }
+                ref other => panic!("unexpected locator {other:?}"),
+            }
+        });
     }
 }

@@ -28,7 +28,7 @@ pub fn lz_receive<'info>(
 ) -> Result<()> {
     require!(
         ctx.remaining_accounts.len() >= CLEAR_ACCOUNTS_LEN,
-        LayerZeroProverError::InvalidEndpoint
+        LayerZeroProverError::MissingClearAccounts
     );
     let (clear_accounts, proofs) = ctx.remaining_accounts.split_at(CLEAR_ACCOUNTS_LEN);
     let store = ctx.accounts.store.key();
@@ -63,10 +63,8 @@ pub fn lz_receive<'info>(
         .store
         .peer(params.src_eid)
         .ok_or(LayerZeroProverError::UnknownPeer)?;
-    require!(
-        peer.address == Bytes32::from(params.sender),
-        LayerZeroProverError::InvalidSender
-    );
+    let sender: Bytes32 = params.sender.into();
+    require!(peer.address == sender, LayerZeroProverError::InvalidSender);
     // The endpoint authenticates `src_eid`, so the self-reported header cannot
     // claim a chain other than the peer's (EVM `_handleCrossChainMessage` rule).
     let proof_data = ProofData::from_bytes(&params.message)?;
@@ -80,15 +78,19 @@ pub fn lz_receive<'info>(
         LayerZeroProverError::InvalidProof
     );
 
+    let (_, payer_bump) = pda_payer_pda();
     proofs
         .iter()
         .zip(proof_data.intent_hashes_claimants)
-        .try_for_each(|(proof, pair)| mark_intent_hash_proven(&ctx, proof, destination, pair))
+        .try_for_each(|(proof, pair)| {
+            mark_intent_hash_proven(&ctx, proof, payer_bump, destination, pair)
+        })
 }
 
 fn mark_intent_hash_proven<'info>(
     ctx: &Context<'info, LzReceive<'info>>,
     proof: &AccountInfo<'info>,
+    payer_bump: u8,
     destination: u64,
     pair: IntentHashClaimant,
 ) -> Result<()> {
@@ -100,7 +102,6 @@ fn mark_intent_hash_proven<'info>(
 
     let (proof_pda, proof_bump) = prover::Proof::pda(&intent_hash, &crate::ID);
     require_keys_eq!(proof.key(), proof_pda, LayerZeroProverError::InvalidProof);
-    let (_, payer_bump) = pda_payer_pda();
 
     // A `Proof` can already exist for a duplicate pair earlier in this batch,
     // or from a later message (new nonce, e.g. a re-prove) carrying the same
@@ -111,15 +112,18 @@ fn mark_intent_hash_proven<'info>(
             recorded.destination == destination && recorded.claimant == claimant,
             LayerZeroProverError::IntentAlreadyProven
         ),
-        None => ProofAccount::from(prover::Proof::new(destination, claimant)).init(
-            proof,
-            &ctx.accounts.pda_payer,
-            &ctx.accounts.system_program,
-            &[
-                &[PDA_PAYER_SEED, &[payer_bump]],
-                &[PROOF_SEED, intent_hash.as_ref(), &[proof_bump]],
-            ],
-        )?,
+        None => {
+            let proof_account: ProofAccount = prover::Proof::new(destination, claimant).into();
+            proof_account.init(
+                proof,
+                &ctx.accounts.pda_payer,
+                &ctx.accounts.system_program,
+                &[
+                    &[PDA_PAYER_SEED, &[payer_bump]],
+                    &[PROOF_SEED, intent_hash.as_ref(), &[proof_bump]],
+                ],
+            )?
+        }
     }
 
     emit_cpi!(IntentProven::new(intent_hash, claimant, destination));

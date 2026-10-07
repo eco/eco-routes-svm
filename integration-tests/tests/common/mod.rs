@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
+use anchor_lang::{AccountSerialize, AnchorSerialize, Discriminator, Event, Space};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -51,6 +51,7 @@ const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malic
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
 const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
 const MOCK_POLYMER_PROVER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/mock_polymer_prover.so");
 
@@ -95,6 +96,10 @@ impl Default for Context {
         svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN)
             .unwrap();
         svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
+            .unwrap();
+        // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
+        // can stage the admin that `LayerZeroProver::install` configures.
+        svm.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
             .unwrap();
         // The mock declares Polymer's devnet ID, which is what non-mainnet
         // polymer-prover builds CPI into. Under `--features mainnet` this
@@ -150,21 +155,6 @@ impl Default for Context {
 }
 
 impl Context {
-    /// `None` makes the program immutable.
-    pub fn set_upgrade_authority(&mut self, program: &Pubkey, authority: Option<Pubkey>) {
-        let loader = self.get_account(program).unwrap().owner;
-        let program_data_address = Pubkey::find_program_address(&[program.as_ref()], &loader).0;
-        let mut program_data = self.get_account(&program_data_address).unwrap();
-        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
-            slot: 0,
-            upgrade_authority_address: authority,
-        })
-        .unwrap();
-        program_data.data[..metadata.len()].copy_from_slice(&metadata);
-        self.set_account(program_data_address, program_data)
-            .unwrap();
-    }
-
     pub fn new_with_token_2022() -> Self {
         Self {
             token_program: token_2022::ID,
@@ -405,6 +395,40 @@ impl Context {
         self.set_account(address, account).unwrap();
     }
 
+    /// Sets the upgrade authority recorded in `program_id`'s ProgramData
+    /// (`None` simulates `solana program set-upgrade-authority --final`).
+    pub fn set_upgrade_authority(&mut self, program_id: &Pubkey, authority: Option<Pubkey>) {
+        let address = program_data_address(program_id);
+        let mut program_data = self.get_account(&address).unwrap();
+        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: authority,
+        })
+        .unwrap();
+        program_data.data[..metadata.len()].copy_from_slice(&metadata);
+        self.set_account(address, program_data).unwrap();
+    }
+
+    /// Stages an Anchor `account` at `address`, owned by `owner`.
+    pub fn set_anchor_account<T: AccountSerialize>(
+        &mut self,
+        address: Pubkey,
+        owner: Pubkey,
+        account: &T,
+    ) {
+        self.set_account(
+            address,
+            solana_sdk::account::Account {
+                lamports: 1_000_000_000,
+                data: anchor_account_data(account),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }
@@ -513,6 +537,27 @@ impl Context {
 
         result.map_err(Box::new)
     }
+}
+
+/// The programs a portal `reward.prover` can name, each loaded by
+/// [`Context::default`].
+pub const CONCRETE_PROVERS: [Pubkey; 4] = [
+    local_prover::ID,
+    hyper_prover::ID,
+    polymer_prover::ID,
+    layerzero_prover::ID,
+];
+
+/// The upgradeable-loader ProgramData account of `program_id`.
+pub fn program_data_address(program_id: &Pubkey) -> Pubkey {
+    solana_loader_v3_interface::get_program_data_address(program_id)
+}
+
+/// Serializes an Anchor account (mock or ours) for `set_account`.
+pub fn anchor_account_data<T: AccountSerialize>(account: &T) -> Vec<u8> {
+    let mut data = Vec::new();
+    account.try_serialize(&mut data).unwrap();
+    data
 }
 
 pub fn sol_amount(amount: f64) -> u64 {

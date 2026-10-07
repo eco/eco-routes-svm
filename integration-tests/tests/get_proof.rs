@@ -32,16 +32,8 @@ fn query(
 
 #[test]
 fn concrete_provers_return_only_valid_canonical_proofs() {
-    for prover in [
-        local_prover::ID,
-        hyper_prover::ID,
-        polymer_prover::ID,
-        layerzero_prover::ID,
-    ] {
+    for prover in common::CONCRETE_PROVERS {
         let mut context = common::Context::default();
-        if prover == layerzero_prover::ID {
-            context.layerzero_prover().install(Pubkey::new_unique());
-        }
         let hash: Bytes32 = [12; 32].into();
         let proof = Proof::pda(&hash, &prover).0;
         let claimant = Pubkey::new_unique();

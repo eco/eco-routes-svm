@@ -31,7 +31,7 @@ pub struct SetAlt<'info> {
     #[account(mut, address = Store::pda().0 @ LayerZeroProverError::InvalidStore)]
     pub store: Account<'info, Store>,
     /// CHECK: owner is validated here; layout and contents in `set_alt`
-    #[account(owner = ADDRESS_LOOKUP_TABLE_PROGRAM_ID)]
+    #[account(owner = ADDRESS_LOOKUP_TABLE_PROGRAM_ID @ LayerZeroProverError::InvalidLookupTable)]
     pub alt: UncheckedAccount<'info>,
 }
 
@@ -45,29 +45,40 @@ pub fn set_alt(ctx: Context<SetAlt>) -> Result<()> {
     Ok(())
 }
 
-/// Every failure is `AltNotSet`: the table could not be recorded.
-fn validate_lookup_table(data: &[u8], required: &[Pubkey]) -> Result<()> {
+/// The addresses stored in a lookup table account, in table order (an
+/// address's position is its index for `AddressLocator::AltIndex`).
+/// `InvalidLookupTable` unless `data` is an initialized table.
+pub fn lookup_table_addresses(data: &[u8]) -> Result<Vec<Pubkey>> {
     require!(
         data.len() >= LOOKUP_TABLE_META_SIZE
             && (data.len() - LOOKUP_TABLE_META_SIZE).is_multiple_of(32)
             && data[..4] == LOOKUP_TABLE_TAG,
-        LayerZeroProverError::AltNotSet
+        LayerZeroProverError::InvalidLookupTable
     );
+
+    Ok(data[LOOKUP_TABLE_META_SIZE..]
+        .chunks_exact(32)
+        .map(|address| Pubkey::try_from(address).expect("32-byte chunk"))
+        .collect())
+}
+
+fn validate_lookup_table(data: &[u8], required: &[Pubkey]) -> Result<()> {
+    let addresses = lookup_table_addresses(data)?;
     // Frozen (no authority) and never deactivated. The lookup-table program
     // lets only the authority extend, deactivate or close a table, and refuses
     // to freeze a deactivated one, so this state is permanent: the executor can
     // resolve these addresses for as long as the program lives.
     require!(
-        data[AUTHORITY_OPTION_OFFSET] == 0
-            && data[DEACTIVATION_SLOT_RANGE] == u64::MAX.to_le_bytes(),
-        LayerZeroProverError::AltNotSet
+        data[AUTHORITY_OPTION_OFFSET] == 0,
+        LayerZeroProverError::LookupTableNotFrozen
     );
-    let addresses = data[LOOKUP_TABLE_META_SIZE..].chunks_exact(32);
     require!(
-        required
-            .iter()
-            .all(|key| addresses.clone().any(|address| address == key.as_ref())),
-        LayerZeroProverError::AltNotSet
+        data[DEACTIVATION_SLOT_RANGE] == u64::MAX.to_le_bytes(),
+        LayerZeroProverError::LookupTableDeactivated
+    );
+    require!(
+        required.iter().all(|key| addresses.contains(key)),
+        LayerZeroProverError::LookupTableMissingAddress
     );
 
     Ok(())

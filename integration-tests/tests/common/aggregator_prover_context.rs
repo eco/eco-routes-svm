@@ -12,7 +12,9 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{cleanup_recipient, Context, ProverQuery, TransactionResult};
+use crate::common::{
+    cleanup_recipient, program_data_address, Context, ProverQuery, TransactionResult,
+};
 
 const AGGREGATOR_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/aggregator_prover.so");
 
@@ -33,9 +35,7 @@ impl AggregatorProver<'_> {
     }
 
     pub fn init(&mut self, authority: &Keypair, provers: Vec<Pubkey>) -> TransactionResult {
-        let program = self.get_account(&aggregator_prover::ID).unwrap();
-        let program_data =
-            Pubkey::find_program_address(&[aggregator_prover::ID.as_ref()], &program.owner).0;
+        let program_data = program_data_address(&aggregator_prover::ID);
         let accounts = aggregator_prover::accounts::Init {
             payer: self.payer.pubkey(),
             authority: authority.pubkey(),

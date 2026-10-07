@@ -59,6 +59,8 @@ pub const CONFIG_TYPE_SEND_ULN: u32 = 2;
 pub const CONFIG_TYPE_RECEIVE_ULN: u32 = 3;
 /// `UlnConfig` count meaning "none" (as opposed to 0 = "LayerZero default").
 pub const NIL_DVN_COUNT: u8 = u8::MAX;
+/// UlnConfig confirmations meaning an explicit zero (as opposed to 0 = "LayerZero default").
+pub const NIL_CONFIRMATIONS: u64 = u64::MAX;
 
 pub const LZ_RECEIVE_TYPES_VERSION: u8 = 2;
 pub const EXECUTION_CONTEXT_VERSION_1: u8 = 1;

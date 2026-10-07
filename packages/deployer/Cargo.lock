@@ -2350,7 +2350,7 @@ dependencies = [
  "eco-svm-std",
  "getrandom 0.2.17",
  "portal",
- "tiny-keccak",
+ "solana-keccak-hasher",
 ]
 
 [[package]]

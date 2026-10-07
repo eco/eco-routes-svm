@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::account::AccountExt;
+use eco_svm_std::account::create_account;
 use eco_svm_std::prover::ProveArgs;
 use eco_svm_std::Bytes32;
 
@@ -49,9 +49,10 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
         .store
         .peer(dst_eid)
         .ok_or(LayerZeroProverError::UnknownPeer)?;
-    let receiver: Bytes32 = <[u8; 32]>::try_from(data)
-        .map_err(|_| LayerZeroProverError::InvalidData)?
-        .into();
+    let receiver: Bytes32 = data
+        .try_into()
+        .map(|bytes: [u8; 32]| bytes.into())
+        .map_err(|_| LayerZeroProverError::InvalidData)?;
     require!(
         receiver == peer.address,
         LayerZeroProverError::InvalidReceiver
@@ -59,7 +60,8 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
     check_intent_count(proof_data.intent_hashes_claimants.len())?;
 
     let payload = proof_data.to_bytes();
-    let (address, bump) = PendingSend::pda(dst_eid, &receiver, &payload);
+    let key = PendingSend::key(dst_eid, &receiver, &payload);
+    let (address, bump) = PendingSend::pda_from_key(&key);
     require_keys_eq!(
         ctx.accounts.pending_send.key(),
         address,
@@ -71,19 +73,30 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
         return Ok(());
     }
 
-    let key = PendingSend::key(dst_eid, &receiver, &payload);
+    // Sized to the batch rather than `INIT_SPACE` (a full batch), so the
+    // solver fronts only the rent this batch needs until `send_message`.
+    let mut data = Vec::new();
     PendingSend {
         dst_eid,
         receiver,
         payload,
         rent_payer: ctx.accounts.payer.key(),
     }
-    .init(
+    .try_serialize(&mut data)?;
+    create_account(
         &ctx.accounts.pending_send,
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
+        &crate::ID,
+        data.len(),
         &[&[PENDING_SEND_SEED, &key, &[bump]]],
-    )
+    )?;
+    ctx.accounts
+        .pending_send
+        .try_borrow_mut_data()?
+        .copy_from_slice(&data);
+
+    Ok(())
 }
 
 #[cfg(test)]

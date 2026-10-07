@@ -50,4 +50,9 @@ pub enum LayerZeroProverError {
     InvalidPendingSend,
     InvalidRentPayer,
     InvalidQuote,
+    MissingClearAccounts,
+    InvalidLookupTable,
+    LookupTableNotFrozen,
+    LookupTableDeactivated,
+    LookupTableMissingAddress,
 }
