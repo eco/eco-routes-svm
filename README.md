@@ -321,7 +321,9 @@ A LayerZero V2-backed prover, both directions. It is a liveness member for the 1
 - `send_message` - Permissionless and top-level. It CPIs the endpoint's `send`, which nests endpoint, ULN, worker and pricefeed and already fills Solana's 5-frame invoke stack, so it cannot run under `portal::prove` (SIMD-0268, raising the limit, was not active when this shipped).
 - `quote_message` - Simulate it to get the fee.
 
-Solvers send `[ComputeBudget, portal::prove, layerzero_prover::send_message]` in one v0 transaction with address lookup tables. A batch holds at most `MAX_INTENTS_PER_PROVE` intents (21, measured with that transaction shape). Executor options are computed on-chain with the EVM gas floor (`200_000 + 50_000·n`).
+Solvers send `[ComputeBudget, portal::prove, layerzero_prover::send_message]` in one v0 transaction with address lookup tables. A batch holds at most `MAX_INTENTS_PER_PROVE` intents (21, measured with that transaction shape; it uses 62 of the 64 account locks). Executor options are computed on-chain with the EVM gas floor (`200_000 + 50_000·n`).
+
+The margin is thin. The cap assumes one address lookup table, a compute-unit-limit instruction only (no compute-unit-price instruction) and at most 4 DVNs per path. A second lookup table or a compute-unit-price instruction pushes 21 intents over the 1232-byte packet limit. The fallback is to send `portal::prove` and `send_message` in separate transactions; the `PendingSend` commit persists between them.
 
 #### Inbound (executor V2)
 - `lz_receive_types_info` and `lz_receive_types_v2` - Executor discovery. Both derive from one `lz_receive_accounts` function, which is the single source of the account list.
@@ -329,6 +331,8 @@ Solvers send `[ComputeBudget, portal::prove, layerzero_prover::send_message]` in
 - `close_proof` - Called by Portal during `withdraw`; refunds the proof rent to `pda_payer`.
 
 EVM `Inbox.prove` batches toward Solana must stay at or below `MAX_PAIRS_PER_MESSAGE` (7, measured against a modelled executor delivery transaction; to be confirmed on the devnet E2E). The EVM contract cannot enforce this and an over-cap message can never execute, so re-prove with a smaller batch.
+
+The cap of 7 assumes the executor resolves every static `lz_receive` account through the lookup table recorded by `set_alt`. That table must hold every address `required_alt_addresses` returns: the `Store` PDA, `pda_payer`, the system program, this program's event authority and ID, the endpoint program, the OApp registry, the endpoint settings and event authority, and the endpoint `Nonce` of every configured peer. `set_alt` checks this on-chain and also requires the table to be frozen (no authority) and never deactivated; any failure is `AltNotSet`.
 
 #### Funding
 Proof rent comes from the `pda_payer` reserve because the EVM sender's options carry gas only. An empty reserve makes delivery fail retryably, so monitor its balance. `pda_payer` must also be pre-funded before `init_path` / `set_path_config`, since it pays endpoint and ULN rent as the LayerZero delegate.
@@ -340,7 +344,9 @@ Proof rent comes from the `pda_payer` reserve because the EVM sender's options c
 #### Administration and finalization
 `pda_payer` is the LayerZero delegate. `init`, `init_path`, `set_path_config` and `set_alt` are gated on the program's upgrade authority, so finalizing the program is the delegate revocation. Every path must be fully pinned (ULN302 send/receive library, explicit DVNs, confirmations, executor; `set_path_config` rejects LayerZero defaults) and read back before finalizing. An unpinned path after finalization needs a new program ID.
 - `set_path_config` runs ULN302 `init_config`, which creates the per-OApp Send/ReceiveConfig accounts, so on a real chain it is one-shot per eid. A wrong config must be corrected by a program upgrade before finalizing, then read back again.
-- The lookup table recorded by `set_alt` must be frozen (authority removed) before finalizing, because afterwards `set_alt` can never replace it.
+- The lookup table recorded by `set_alt` must be frozen (authority removed) and complete (`required_alt_addresses`) before `set_alt`, which rejects anything else. After finalizing, `set_alt` can never replace it.
+
+**Finalization gate.** Before finalizing the program, run one real outbound `send_message` and one inbound executor delivery on every configured mainnet path, then read back every path's `Nonce`, send and receive library, and ULN send/receive and executor config. CI verifies the ULN302 `init_config`/`set_config` account tails, `SendParams`/`QuoteParams` and the `send` account head only against the mock endpoint, so these mainnet runs are the only check against the real programs.
 
 `layerzero.rs` hand-mirrors LayerZero-v2@9c741e7f (endpoint and ULN IDs, big-endian seeds, discriminators, V2 executor types). The ignored `layerzero_prover_real` test (needs `LZ_ENDPOINT_SO`) checks it against the dumped endpoint binary. Spec: `docs/superpowers/specs/2026-10-06-layerzero-prover-design.md`.
 

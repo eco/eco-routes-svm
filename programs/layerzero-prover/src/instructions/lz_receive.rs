@@ -38,7 +38,8 @@ pub fn lz_receive<'info>(
         LayerZeroProverError::InvalidStore
     );
 
-    // Clear first: it burns the nonce before any state changes, as LayerZero requires.
+    // Clear first, as LayerZero requires: it checks the payload against the
+    // DVN-verified PayloadHash and closes that account before any state changes.
     let (_, bump) = Store::pda();
     layerzero::invoke(
         ENDPOINT_ID,
@@ -101,8 +102,9 @@ fn mark_intent_hash_proven<'info>(
     require_keys_eq!(proof.key(), proof_pda, LayerZeroProverError::InvalidProof);
     let (_, payer_bump) = pda_payer_pda();
 
-    // A delivered payload is immutable, so every redelivery carries the same
-    // batch. Reaching the recorded state again is a no-op; only a disagreeing
+    // A `Proof` can already exist for a duplicate pair earlier in this batch,
+    // or from a later message (new nonce, e.g. a re-prove) carrying the same
+    // pair. Reaching the recorded state again is a no-op; only a disagreeing
     // state is an error. The event repeats either way.
     match prover::Proof::try_from_account_info(proof)? {
         Some(recorded) => require!(

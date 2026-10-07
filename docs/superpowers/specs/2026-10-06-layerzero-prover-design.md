@@ -86,8 +86,8 @@ Setup instructions (`init`, `init_path`, `set_alt`) are gated on the program's u
 ### 3.3 Setup instructions
 
 - **`init(InitArgs { peers })`** — creates `Store` and `LzReceiveTypes` (griefing-resistant `create_account`), validates peers (§3.1), CPIs `endpoint::register_oapp(delegate = pda_payer)` signed by `Store`. `pda_payer` must be pre-funded (deploy step).
-- **`init_path(eid, PathConfig)`** — for one configured peer: CPIs `init_nonce(remote_oapp = peer.address)`, `init_send_library`, `init_receive_library`, `set_send_library(ULN302)`, `set_receive_library(ULN302, grace 0)`, `init_config` (ULN send + receive), then `set_config` for the ULN send config (DVNs, confirmations), executor config (executor, max message size), and ULN receive config (DVNs, confirmations). All signed by `pda_payer` as delegate. `PathConfig` carries the explicit DVN set, thresholds, confirmations and executor; nothing is left on LayerZero defaults. May be split into `init_path` + `set_path_config` if one transaction exceeds CU or size; the split does not change semantics.
-- **`set_alt(alt)`** — records the lookup table the executor uses for `lz_receive`'s static accounts (§3.5). The ALT itself must be frozen (authority removed) before finalization.
+- **`init_path(eid, PathConfig)`** — for one configured peer: CPIs `init_nonce(remote_oapp = peer.address)`, `init_send_library`, `init_receive_library`, `set_send_library(ULN302)`, `set_receive_library(ULN302, grace 0)`, `init_config` (ULN send + receive), then `set_config` for the ULN send config (DVNs, confirmations), executor config (executor, max message size ≥ `MAX_PAYLOAD_LEN`, the largest batch's payload), and ULN receive config (DVNs, confirmations). All signed by `pda_payer` as delegate. `PathConfig` carries the explicit DVN set, thresholds, confirmations and executor; nothing is left on LayerZero defaults. May be split into `init_path` + `set_path_config` if one transaction exceeds CU or size; the split does not change semantics.
+- **`set_alt(alt)`** — records the lookup table the executor uses for `lz_receive`'s static accounts (§3.5). It rejects (`AltNotSet`) any table that is not frozen (authority removed), is deactivated, or lacks an address of `required_alt_addresses` (the static `lz_receive` accounts plus every peer's Nonce), so the recorded table is permanent and complete.
 
 ### 3.4 `prove(ProveArgs)` — outbound commit
 
@@ -142,7 +142,7 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 - **No admin after finalization.** Delegate is a program PDA; setup is upgrade-authority-gated; finalization removes both. No `skip`/`nilify`/`burn` exists afterwards: an unverifiable nonce would block later nonces on that path (DVNs verify every message, so this is a liveness risk, not a safety one, and the remedy is a new release).
 - **Pinned config.** Every path pins send/receive library and ULN/executor config explicitly; nothing follows `DEFAULT_MESSAGE_LIB`, so LayerZero governance cannot change our DVN set.
 - **Permissionless `send`** transmits only portal-attested commits to their configured peer with on-chain options.
-- **`pda_payer` is not a value store for users**: it holds only operator-funded rent float; draining it is impossible (only `lz_receive` debits it, one rent-exempt `Proof` per verified pair, refunded on close).
+- **`pda_payer` is not a value store for users**: it holds only operator-funded rent float, and only `lz_receive` debits it (one rent-exempt `Proof` per verified pair, refunded on close). It **can** be drained, though: anyone can make the EVM peers send proofs for junk or already-withdrawn intents, and each such pair burns ~1.22M lamports of `Proof` rent that no `withdraw` ever reclaims, at roughly the attacker's own LayerZero fee cost per message — the same exposure as hyper-prover's `pda_payer`. An empty reserve only makes delivery fail retryably, so the mitigation is the balance alert (§5) and top-ups.
 - **Atomic release.** Like every prover, it compiles against portal's ID for `dispatcher_pda`/`proof_closer_pda`. It joins the current portal without a portal redeploy (portal derives per-prover PDAs for any prover); it must be built from the tree that matches the deployed portal.
 
 ## 5. Cross-repo touchpoints
@@ -157,7 +157,7 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 
 **eco-solver** —
 - Solana-source prove: build `[ComputeBudget, portal::prove(prover = EcoZ…, domain = dst EID, data = EVM LayerZeroProver), layerzero_prover::send]` as v0 with ALTs (LayerZero accounts + FulfillMarkers); fee from simulating `quote_send`; batch ≤ `MAX_INTENTS_PER_PROVE`.
-- EVM-source prove toward Solana: `Inbox.prove` via `LayerZeroProver` with `domain = 30168`, receiver = `Store` PDA; **batch ≤ `MAX_PAIRS_PER_MESSAGE` (8)** — the EVM contract cannot enforce it.
+- EVM-source prove toward Solana: `Inbox.prove` via `LayerZeroProver` with `domain = 30168`, receiver = `Store` PDA; **batch ≤ `MAX_PAIRS_PER_MESSAGE` (7, measured)** — the EVM contract cannot enforce it.
 - Aggregator: add LayerZero as a member to the member listener / aggregate job; `pda_payer` balance alert.
 
 ## 6. Testing
@@ -174,13 +174,13 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 
 **Real endpoint** — one litesvm test loading the endpoint and ULN programs dumped from devnet (`solana program dump`) to prove `register_oapp`/`init_path`/`clear` against the real code, not only the mock.
 
-**Devnet E2E** — Solana devnet (EID 40168) ↔ Base Sepolia, both directions, real DVNs/executor; confirms: executor delivers with gas-only options (no lamport `value`), the gas floor is honored as CU, the delivery cap of 8, and fee quoting.
+**Devnet E2E** — Solana devnet (EID 40168) ↔ Base Sepolia, both directions, real DVNs/executor; confirms: executor delivers with gas-only options (no lamport `value`), the gas floor is honored as CU, the delivery cap of 7 (`MAX_PAIRS_PER_MESSAGE`, measured), and fee quoting.
 
 ## 7. Rollout
 
 1. Grind `EcoZ…`; derive `Store`; deploy EVM fleet `LayerZeroProver` (CREATE2, vanity `0xEC0…`) with the Solana `Store` whitelisted and `30168` in the domain config.
-2. Deploy `layerzero-prover` (verifiable build); fund `pda_payer`; `init(peers)`; create and freeze the ALT; `set_alt`; `init_path` per peer.
-3. **Read back** every path (Nonce, send/receive library, ULN send/receive config, executor config) against the plan; only then finalize. Upload IDL; OtterSec verify.
+2. Deploy `layerzero-prover` (verifiable build); fund `pda_payer`; `init(peers)`; create the ALT with every address of `required_alt_addresses` (Store, `pda_payer`, system program, our event authority and ID, endpoint, OApp registry, endpoint settings and event authority, each peer's Nonce), freeze it, then `set_alt` (which rejects a table that is not frozen, is deactivated, or is incomplete); `init_path` and `set_path_config` per peer.
+3. **Finalization gate.** Run one real outbound `send_message` and one inbound executor delivery on **every** configured mainnet path, then **read back** every path's Nonce, send/receive library, and ULN send/receive + executor config against the plan; only then finalize. This is the only check of the ULN302 `init_config`/`set_config` account tails, `SendParams`/`QuoteParams` and the `send` account head against the real programs — CI verifies them only against the mock. Upload IDL; OtterSec verify.
 4. Pin the EVM side's Solana path config and `revokeDelegation()`.
 5. Deploy the new aggregator pair (Solana program + EVM `AggregatorProver`) with LayerZero as a member.
 6. Mainnet E2E both ways (Solana ↔ Base) through the new aggregators; then solver cut-over.
@@ -188,7 +188,7 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 ## 8. Decisions and alternatives
 
 - **Record-then-send** over sending inside `portal::prove` — forced by CPI depth (§2.1).
-- **Direct inbound** (create proofs in `lz_receive`, cap 8) over buffering the batch and fanning out later — buffering only raises the cap to ~12 (message bytes still ride in the delivery tx) for a second relayer step and another account type.
+- **Direct inbound** (create proofs in `lz_receive`, cap 7) over buffering the batch and fanning out later — buffering only raises the cap to ~12 (message bytes still ride in the delivery tx) for a second relayer step and another account type.
 - **Portal stays the batch source** over a `send` that reads `FulfillMarker`s itself — portal's `fulfillment_claimant` owns the fulfilled/cancelled semantics; duplicating it would drift.
 - **`pda_payer` as delegate and rent reserve** — the endpoint requires a signing, paying, system-owned delegate; one reserve serves both.
 - **Upgrade-authority gating + finalization as revocation** over a separate revoke instruction.
@@ -200,3 +200,5 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 - Executor accepts gas-only options toward Solana; if it requires a lamport `value`, the EVM `LayerZeroProver` would need an options change (an EVM release).
 - Exact `MAX_INTENTS_PER_PROVE` and `MAX_PAIRS_PER_MESSAGE` from the size tests.
 - Endpoint `clear`/`init_*` account lists re-read from the endpoint source at a pinned tag.
+- Follow-ups (tracked in Linear PAR-719): a real-binary test against a dumped ULN302 (covering `init_config`/`set_config`, `send` and `quote`), and a CI job that detects LayerZero upstream drift against the mirrored `layerzero.rs`.
+- Outbound cap margin: 21 intents use 62 of 64 account locks and assume one ALT, a CU-limit instruction only and ≤ 4 DVNs per path; a second ALT or a CU-price instruction pushes 21 over the packet limit, and the fallback is `portal::prove` and `send_message` in separate transactions (the `PendingSend` commit persists).
