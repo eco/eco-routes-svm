@@ -77,6 +77,7 @@ fn plan_args(directory: &Path) -> PlanArgs {
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "1000000000".into(),
             finalize_layerzero: false,
+            compute_unit_price: "0".into(),
         },
     }
 }
@@ -85,7 +86,6 @@ fn apply_args(directory: &Path) -> ApplyArgs {
     ApplyArgs {
         plan: directory.join("plan.json"),
         assets: directory.into(),
-        compute_unit_price: 0,
         chain: chain_args(),
     }
 }

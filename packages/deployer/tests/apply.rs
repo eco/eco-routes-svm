@@ -187,6 +187,7 @@ fn inputs_with_peer_chain_id(hyper_senders: &str, chain_id: u64) -> RawInputs {
         hyper_reserve_lamports: HYPER_RESERVE.to_string(),
         layerzero_reserve_lamports: LAYERZERO_RESERVE.to_string(),
         finalize_layerzero: false,
+        compute_unit_price: "0".into(),
     }
 }
 

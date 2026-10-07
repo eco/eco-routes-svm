@@ -49,6 +49,9 @@ pub struct InputArgs {
     pub layerzero_reserve_lamports: String,
     #[arg(long, env = "FINALIZE_LAYERZERO", action = clap::ArgAction::Set, default_value = "false")]
     pub finalize_layerzero: bool,
+    /// Micro-lamports per compute unit for the run's deploys and `apply`; part of the plan hash.
+    #[arg(long, env = "COMPUTE_UNIT_PRICE", default_value = "0")]
+    pub compute_unit_price: String,
 }
 
 #[derive(Debug, Args)]
@@ -81,9 +84,6 @@ pub struct ApplyArgs {
     /// The release binaries the plan hashed.
     #[arg(long)]
     pub assets: PathBuf,
-    /// Micro-lamports per compute unit added to every transaction; 0 adds nothing.
-    #[arg(long, default_value_t = 0)]
-    pub compute_unit_price: u64,
     #[command(flatten)]
     pub chain: ChainArgs,
 }
@@ -210,31 +210,37 @@ mod tests {
 
         assert_eq!(apply.plan, PathBuf::from("plan.json"));
         assert_eq!(apply.assets, PathBuf::from("assets"));
-        assert_eq!(apply.compute_unit_price, 0);
         assert_eq!(apply.chain.deployer_keypair, PathBuf::from("deployer.json"));
     }
 
     #[test]
-    fn apply_parses_a_compute_unit_price() {
+    fn plan_takes_the_compute_unit_price_as_an_input() {
         let arguments = [
+            &["plan", "--version", "1", "--cluster", "mainnet"][..],
             &[
-                "apply",
-                "--plan",
-                "p",
+                "--program-ids",
+                "ids.json",
                 "--assets",
-                "a",
-                "--compute-unit-price",
-                "5",
-            ][..],
+                "assets",
+                "--out",
+                "plan.json",
+            ],
             &CHAIN,
+            &INPUTS,
+            &["--compute-unit-price", "5"],
         ]
         .concat();
+        let without_price: Vec<&str> = arguments[..arguments.len() - 2].to_vec();
 
-        let Command::Apply(apply) = parse(&arguments).unwrap().command else {
-            panic!("expected the apply command");
+        let Command::Plan(plan) = parse(&arguments).unwrap().command else {
+            panic!("expected the plan command");
+        };
+        let Command::Plan(default) = parse(&without_price).unwrap().command else {
+            panic!("expected the plan command");
         };
 
-        assert_eq!(apply.compute_unit_price, 5);
+        assert_eq!(plan.inputs.compute_unit_price, "5");
+        assert_eq!(default.inputs.compute_unit_price, "0");
     }
 
     #[test]

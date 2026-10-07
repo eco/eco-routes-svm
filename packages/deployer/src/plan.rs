@@ -585,9 +585,11 @@ fn init_values(inputs: &Inputs) -> String {
         hyper_reserve_lamports,
         layerzero_reserve_lamports,
         finalize_layerzero,
+        compute_unit_price,
     } = inputs;
     let header = format!(
         "### Init values\n\n\
+         - compute unit price (micro-lamports): {compute_unit_price}\n\
          - {HYPER_PROVER} senders: {}\n\
          - {HYPER_PROVER} reserve lamports: {hyper_reserve_lamports}\n\
          - {POLYMER_PROVER} emitters: {}\n\
@@ -662,6 +664,7 @@ struct CanonicalInputs {
     hyper_reserve_lamports: u64,
     layerzero_reserve_lamports: u64,
     finalize_layerzero: bool,
+    compute_unit_price: u64,
 }
 
 #[derive(Serialize)]
@@ -725,6 +728,7 @@ impl From<&Inputs> for CanonicalInputs {
             hyper_reserve_lamports: inputs.hyper_reserve_lamports,
             layerzero_reserve_lamports: inputs.layerzero_reserve_lamports,
             finalize_layerzero: inputs.finalize_layerzero,
+            compute_unit_price: inputs.compute_unit_price,
         }
     }
 }
@@ -914,6 +918,7 @@ mod tests {
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "2000000".into(),
             finalize_layerzero: false,
+            compute_unit_price: "0".into(),
         }
     }
 
@@ -1025,6 +1030,19 @@ mod tests {
             "const AGGREGATOR_MEMBERS = [{}];",
             members.join(", ")
         )));
+    }
+
+    #[test]
+    fn plan_hash_covers_the_compute_unit_price() {
+        let priced = Fixture {
+            raw: RawInputs {
+                compute_unit_price: "1".into(),
+                ..raw_inputs()
+            },
+            ..fixture()
+        };
+
+        assert_ne!(priced.hash(), fixture().hash());
     }
 
     #[test]

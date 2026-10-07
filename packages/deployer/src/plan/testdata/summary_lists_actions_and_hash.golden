@@ -13,6 +13,7 @@
 
 ### Init values
 
+- compute unit price (micro-lamports): 0
 - hyper_prover senders: 0xabcdef0123456789abcdef0123456789abcdef01, 0x1111111111111111111111111111111111111111
 - hyper_prover reserve lamports: 1000000
 - polymer_prover emitters: 0x1111111111111111111111111111111111111111
@@ -28,4 +29,4 @@
   - receive: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
   - executor: 11111111111111111111111111111113 (max message size 10000)
 
-Plan hash: 01af06b505d2ae1a25ad5876d91a88a681c9337c9b3ed432593199adcc355bc4
+Plan hash: 4e41e424d9627669241d38f7b243650634d06d27636bc72aa3c1ffed69945a72

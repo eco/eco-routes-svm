@@ -44,7 +44,7 @@ on:
         type: boolean
         default: false
       compute_unit_price:
-        description: "Micro-lamports per compute unit for deploys and init transactions; 0 adds nothing"
+        description: "Micro-lamports per compute unit for deploys and init transactions; 0 adds nothing. Part of the plan hash"
         type: string
         default: "0"
 
@@ -149,6 +149,7 @@ jobs:
           HYPER_RESERVE_LAMPORTS: ${{ inputs.hyper_reserve_lamports }}
           LAYERZERO_RESERVE_LAMPORTS: ${{ inputs.layerzero_reserve_lamports }}
           FINALIZE_LAYERZERO: ${{ inputs.finalize_layerzero }}
+          COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
         run: |
           mkdir -p out
           deployer plan --version "$VERSION" --cluster "$CLUSTER" \
@@ -180,17 +181,14 @@ jobs:
         if: steps.plan.outputs.execute == 'true'
         env:
           RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
-          COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
         run: scripts/deploy-step.sh deploy 2>&1 | scripts/deploy-step.sh redact | tee out/deploy.log
 
       - name: Apply
         if: steps.plan.outputs.execute == 'true'
         env:
           RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
-          COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
         run: |
-          deployer apply --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR" \
-            --compute-unit-price "$COMPUTE_UNIT_PRICE" 2>&1 \
+          deployer apply --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR" 2>&1 \
             | scripts/deploy-step.sh redact | tee out/apply.log
 
       - name: Verify

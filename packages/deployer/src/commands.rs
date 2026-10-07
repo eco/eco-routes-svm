@@ -96,7 +96,9 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
         Command::Apply(args) => {
             let deployer = read_keypair(&args.chain.deployer_keypair)?;
             let rpc = RpcChain::new(args.chain.rpc_url.clone());
-            let mut chain = Priced::new(rpc, args.compute_unit_price);
+            let file: PlanFile = read_json(&args.plan)?;
+            let price = Inputs::parse(file.document.inputs)?.compute_unit_price;
+            let mut chain = Priced::new(rpc, price);
 
             apply(&mut chain, args, &deployer, out)
         }
@@ -130,6 +132,7 @@ pub fn plan(
         hyper_reserve_lamports: inputs.hyper_reserve_lamports.clone(),
         layerzero_reserve_lamports: inputs.layerzero_reserve_lamports.clone(),
         finalize_layerzero: inputs.finalize_layerzero,
+        compute_unit_price: inputs.compute_unit_price.clone(),
     };
     let document = PlanDocument {
         release,
@@ -467,6 +470,7 @@ mod tests {
                     hyper_reserve_lamports: "1000000".into(),
                     layerzero_reserve_lamports: "100000000".into(),
                     finalize_layerzero: false,
+                    compute_unit_price: "0".into(),
                 },
             }
         }
@@ -475,7 +479,6 @@ mod tests {
             ApplyArgs {
                 plan: self.path("plan.json"),
                 assets: self.directory.path().into(),
-                compute_unit_price: 0,
                 chain: chain_args(),
             }
         }

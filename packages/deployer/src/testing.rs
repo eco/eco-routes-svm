@@ -124,6 +124,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
         hyper_reserve_lamports: reserve_lamports.to_string(),
         layerzero_reserve_lamports: reserve_lamports.to_string(),
         finalize_layerzero: false,
+        compute_unit_price: "0".into(),
     })
     .unwrap();
 

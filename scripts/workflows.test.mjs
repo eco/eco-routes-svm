@@ -82,7 +82,9 @@ test("deploy workflow closes leftover buffers after any outcome, while the deplo
   );
 });
 
-test("deploy closes the deployer's buffers before deploying anything", () => {
+// Runs `deploy-step.sh deploy` against stub `solana` and `deployer` commands and returns the
+// `solana` calls it made.
+const deployCalls = (price) => {
   const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
   const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
   const calls = join(bin, "calls");
@@ -91,6 +93,7 @@ test("deploy closes the deployer's buffers before deploying anything", () => {
   });
   writeFileSync(join(bin, "deployer"), `#!/usr/bin/env bash\necho portal\n`, { mode: 0o755 });
   writeFileSync(join(bin, "program-ids.json"), '{"portal":{"address":"PortalAddress"}}');
+  writeFileSync(join(bin, "plan.json"), JSON.stringify({ inputs: { compute_unit_price: price } }));
 
   const { status, stderr } = spawnSync("bash", [script, "deploy"], {
     encoding: "utf8",
@@ -101,17 +104,34 @@ test("deploy closes the deployer's buffers before deploying anything", () => {
       KEYPAIR: "deployer.json",
       ASSETS: bin,
       CLUSTER: "devnet",
-      PLAN: "plan.json",
+      PLAN: join(bin, "plan.json"),
+      COMPUTE_UNIT_PRICE: "999",
     },
   });
-
   assert.equal(status, 0, stderr);
-  const [first, ...rest] = readFileSync(calls, "utf8").trim().split("\n");
-  assert.equal(first, "solana program close --buffers -u http://rpc -k deployer.json");
-  assert.deepEqual(rest, [
+  const sent = readFileSync(calls, "utf8").trim().split("\n");
+  rmSync(bin, { recursive: true });
+
+  return { sent, binary: `${bin}/portal.devnet.so` };
+};
+
+test("deploy closes the deployer's buffers before deploying anything", () => {
+  const { sent, binary } = deployCalls("0");
+
+  assert.deepEqual(sent, [
+    "solana program close --buffers -u http://rpc -k deployer.json",
+    "solana program deploy -u http://rpc -k deployer.json --upgrade-authority deployer.json " +
+      `--program-id target/keys/portal-keypair.json --use-rpc --max-sign-attempts 20 ${binary}`,
+  ]);
+});
+
+test("deploy takes the compute-unit price from the reviewed plan, not the environment", () => {
+  const { sent, binary } = deployCalls("7");
+
+  assert.equal(
+    sent[1],
     "solana program deploy -u http://rpc -k deployer.json --upgrade-authority deployer.json " +
       "--program-id target/keys/portal-keypair.json --use-rpc --max-sign-attempts 20 " +
-      `${bin}/portal.devnet.so`,
-  ]);
-  rmSync(bin, { recursive: true });
+      `--with-compute-unit-price 7 ${binary}`,
+  );
 });

@@ -16,6 +16,7 @@ const POLYMER_EMITTERS: &str = "polymer_emitters";
 const LAYERZERO: &str = "layerzero";
 const HYPER_RESERVE_LAMPORTS: &str = "hyper_reserve_lamports";
 const LAYERZERO_RESERVE_LAMPORTS: &str = "layerzero_reserve_lamports";
+const COMPUTE_UNIT_PRICE: &str = "compute_unit_price";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -33,6 +34,8 @@ pub enum Error {
     UnsortedDvns { eid: u32 },
     #[error("{input}: {value:?} is not a u64 lamport amount")]
     InvalidLamports { input: &'static str, value: String },
+    #[error("{COMPUTE_UNIT_PRICE}: {value:?} is not a u64 micro-lamport price")]
+    InvalidComputeUnitPrice { value: String },
     #[error("{input}: the program's init would reject it: {reason}")]
     RejectedByProgram {
         input: &'static str,
@@ -49,6 +52,7 @@ pub struct RawInputs {
     pub hyper_reserve_lamports: String,
     pub layerzero_reserve_lamports: String,
     pub finalize_layerzero: bool,
+    pub compute_unit_price: String,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,8 @@ pub struct Inputs {
     pub hyper_reserve_lamports: u64,
     pub layerzero_reserve_lamports: u64,
     pub finalize_layerzero: bool,
+    /// Micro-lamports per compute unit on every deploy and `apply` transaction.
+    pub compute_unit_price: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +91,7 @@ impl Inputs {
             hyper_reserve_lamports,
             layerzero_reserve_lamports,
             finalize_layerzero,
+            compute_unit_price,
         } = raw;
 
         let hyper_senders = parse_address_list(HYPER_SENDERS, &hyper_senders)?;
@@ -114,6 +121,11 @@ impl Inputs {
                 &layerzero_reserve_lamports,
             )?,
             finalize_layerzero,
+            compute_unit_price: compute_unit_price.trim().parse().map_err(|_| {
+                Error::InvalidComputeUnitPrice {
+                    value: compute_unit_price.clone(),
+                }
+            })?,
         })
     }
 }
@@ -421,6 +433,7 @@ mod tests {
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "2000000".into(),
             finalize_layerzero: false,
+            compute_unit_price: "0".into(),
         }
     }
 
@@ -616,6 +629,21 @@ mod tests {
             ..raw_inputs()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn compute_unit_price_rejects_non_integer() {
+        ["", "-1", "1.5", "abc", "99999999999999999999"]
+            .iter()
+            .for_each(|value| {
+                assert!(matches!(
+                    Inputs::parse(RawInputs {
+                        compute_unit_price: (*value).into(),
+                        ..raw_inputs()
+                    }),
+                    Err(Error::InvalidComputeUnitPrice { .. })
+                ));
+            });
     }
 
     #[test]

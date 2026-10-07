@@ -614,7 +614,7 @@ The manual `Deploy` workflow (`.github/workflows/deploy.yml`) takes a published 
 - The release exists (`v<version>` and its `deploy/v<version>` tag) and the EVM provers it will trust are deployed, since their addresses are `init` inputs.
 - The workflow builds the deployer and runs `scripts/deploy-step.sh` from that `deploy/v<version>` tag, not from `main`: a release cut before this pipeline existed cannot use it, and a fix to the pipeline reaches deploys only through a new release.
 - GitHub environment `release` (shared with the release workflow and both clusters): required reviewers, self-review prevented, `main` only. Its approval is the second pair of eyes on every run, dry runs included.
-- The deployer, `Cx92mzUNNr7mazZmuB5uTZtaYPNDFs6RwKVYF2hC7kH3`, holds SOL on the target cluster. A fresh deploy of every program takes about 20 SOL: about 16 SOL of program rent, locked for good once the programs are final, plus the largest buffer (refunded), the reserve top-ups and fees. The plan step estimates this from the release and the chain and fails if the balance is short.
+- The deployer, `Cx92mzUNNr7mazZmuB5uTZtaYPNDFs6RwKVYF2hC7kH3`, holds SOL on the target cluster. A fresh deploy of every program takes about 20 SOL: about 16 SOL of program rent, locked for good once the programs are final, plus the largest buffer (refunded), the reserve top-ups and transaction fees, which grow with `compute_unit_price`. The plan step estimates this from the release and the chain and fails if the balance is short.
 - Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until the last step), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
 
 **Inputs**
@@ -629,7 +629,7 @@ The manual `Deploy` workflow (`.github/workflows/deploy.yml`) takes a published 
 | `layerzero` | JSON, see below |
 | `hyper_reserve_lamports`, `layerzero_reserve_lamports` | Top-ups for each prover's `pda_payer`, default `0`. Only the shortfall is sent; a balance is never reduced. The plan fails unless the LayerZero reserve covers the endpoint and ULN accounts its paths still need (about 0.036 SOL per peer) and stays rent-exempt; the summary shows both |
 | `finalize_layerzero` | Default `false`; see [Finalizing LayerZero](#finalizing-layerzero) |
-| `compute_unit_price` | Micro-lamports per compute unit for deploys and init transactions, default `0` (none) |
+| `compute_unit_price` | Micro-lamports per compute unit for deploys and init transactions, default `0` (none). Part of the plan hash, and the funding estimate includes the priority fees it adds; deploy and `apply` take it from the plan |
 
 Inputs for a program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any input the program's own `init` would: more than 20 hyper senders or Polymer emitters, and a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses.
 

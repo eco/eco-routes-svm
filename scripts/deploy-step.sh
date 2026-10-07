@@ -49,9 +49,11 @@ close_buffers() {
 
 deploy() {
   close_buffers
-  local price_flags=()
-  if [ "${COMPUTE_UNIT_PRICE:-0}" != 0 ]; then
-    price_flags=(--with-compute-unit-price "$COMPUTE_UNIT_PRICE")
+  # The reviewed plan fixes the price; `apply` reads it from there too.
+  local price price_flags=()
+  price=$(jq -er '.inputs.compute_unit_price' "$PLAN")
+  if [ "$price" != 0 ]; then
+    price_flags=(--with-compute-unit-price "$price")
   fi
   # The plan lists only programs absent from the chain when it was made, and runs on a cluster
   # never overlap, so nothing here can already be deployed. Writes go through the RPC: validator
