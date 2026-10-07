@@ -4,7 +4,7 @@ use anchor_lang::Discriminator;
 use eco_svm_std::prover::Proof;
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use polymer_prover::instructions::PolymerProverError;
-use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
+use portal::state::{vault_pda, WithdrawnMarker};
 use portal::types::{intent_hash, Reward};
 use solana_sdk::instruction::AccountMeta;
 use solana_sdk::pubkey::Pubkey;
@@ -36,10 +36,8 @@ fn close_proof_invalid_portal_proof_closer_fail() {
     )));
 }
 
-/// Portal `withdraw` → polymer-prover `close_proof`: the proof is gone and its
-/// rent came back to the withdraw payer.
 #[test]
-fn withdraw_closes_polymer_proof_and_refunds_payer() {
+fn cleanup_after_withdrawal_refunds_proof_rent() {
     let mut ctx = common::Context::default();
     let route_hash: Bytes32 = rand::random::<[u8; 32]>().into();
     let reward = Reward {
@@ -61,35 +59,37 @@ fn withdraw_closes_polymer_proof_and_refunds_payer() {
 
     let result = ctx.portal().withdraw_intent(
         CHAIN_ID,
-        reward,
+        reward.clone(),
         vault,
         route_hash,
         claimant,
         proof,
         WithdrawnMarker::pda(&hash).0,
-        proof_closer_pda(&polymer_prover::ID).0,
         vec![],
         iter::once(AccountMeta::new(payer, true)),
     );
     assert!(result.is_ok(), "{result:?}");
 
+    assert!(ctx.get_account(&proof).is_some());
+    ctx.portal()
+        .close_proof(
+            CHAIN_ID,
+            route_hash,
+            reward,
+            vec![
+                AccountMeta::new(proof, false),
+                AccountMeta::new(payer, true),
+            ],
+        )
+        .unwrap();
     assert!(ctx.get_account(&proof).is_none());
-    // Payer received the proof rent, net of the withdrawn-marker rent and the
-    // single-signature fee it paid.
     let marker_rent = ctx.balance(&WithdrawnMarker::pda(&hash).0);
     assert_eq!(
         ctx.balance(&payer) + marker_rent + TRANSACTION_FEE,
-        payer_before + proof_rent
+        payer_before + proof_rent - TRANSACTION_FEE
     );
 }
 
-/// `Context::set_proof` fabricates every prover's Proof with hyper-prover's
-/// `ProofAccount::DISCRIMINATOR`. That stands in for a Proof polymer-prover
-/// (or local-prover) actually wrote only because Anchor derives the
-/// discriminator from the struct *name* and all three crates call theirs
-/// `ProofAccount`; `close_proof`'s `Account<ProofAccount>` is what would reject
-/// a mismatch. Pin the coincidence so a rename fails here, with a message
-/// naming the cause, rather than as an opaque mismatch inside `withdraw`.
 #[test]
 fn set_proof_discriminator_matches_every_prover() {
     assert_eq!(

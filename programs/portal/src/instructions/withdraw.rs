@@ -6,13 +6,12 @@ use anchor_lang::solana_program::system_instruction;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::Proof;
-use eco_svm_std::{Bytes32, CANCELLED};
+use eco_svm_std::prover::{cpi, GetProofArgs};
+use eco_svm_std::Bytes32;
 
 use crate::events::IntentWithdrawn;
-use crate::instructions::close_proof::close_proof;
 use crate::instructions::PortalError;
-use crate::state::{proof_closer_pda, vault_pda, WithdrawnMarker, CLAIMED_MARKER_SEED, VAULT_SEED};
+use crate::state::{vault_pda, WithdrawnMarker, CLAIMED_MARKER_SEED, VAULT_SEED};
 use crate::types::{
     self, Reward, TokenTransferAccounts, VecTokenTransferAccounts,
     VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
@@ -23,6 +22,7 @@ pub struct WithdrawArgs {
     pub destination: u64,
     pub route_hash: Bytes32,
     pub reward: Reward,
+    pub prover_data: Vec<u8>,
 }
 
 #[derive(Accounts)]
@@ -30,18 +30,12 @@ pub struct WithdrawArgs {
 pub struct Withdraw<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    /// CHECK: validated in `validate_proof`
+    /// CHECK: must match the returned proof’s payable claimant.
     #[account(mut)]
     pub claimant: UncheckedAccount<'info>,
     /// CHECK: address is validated
     #[account(mut)]
     pub vault: UncheckedAccount<'info>,
-    /// CHECK: address is validated
-    #[account(mut)]
-    pub proof: UncheckedAccount<'info>,
-    /// CHECK: address is validated, scoped to the caller-chosen prover
-    #[account(address = proof_closer_pda(&args.reward.prover).0 @ PortalError::InvalidProofCloser)]
-    pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: address is validated
     #[account(executable, address = args.reward.prover @ PortalError::InvalidProver)]
     pub prover: UncheckedAccount<'info>,
@@ -61,6 +55,7 @@ pub fn withdraw_intent<'info>(
         destination,
         route_hash,
         reward,
+        prover_data,
     } = args;
     let intent_hash = types::intent_hash(destination, &route_hash, &reward.hash());
     let (vault_pda, bump) = vault_pda(&intent_hash);
@@ -70,14 +65,28 @@ pub fn withdraw_intent<'info>(
         ctx.accounts.vault.key() == vault_pda,
         PortalError::InvalidVault
     );
-    validate_proof(&ctx, destination, &intent_hash, &reward.prover)?;
+    require!(
+        !WithdrawnMarker::exists(&ctx.accounts.withdrawn_marker, &intent_hash)?,
+        PortalError::IntentAlreadyWithdrawn
+    );
 
-    withdraw_native(&ctx, &reward, &signer_seeds)?;
     // built once: both the account split and the mint check address reward
     // tokens by unique mint, and neither allocator here frees
     let reward_token_amounts = reward.token_amounts()?;
-    let (token_transfer_accounts, remaining_accounts) =
+    let (token_transfer_accounts, prover_accounts) =
         token_transfer_and_remaining_accounts(&ctx, &reward_token_amounts)?;
+    let proof = cpi::get_proof(
+        &ctx.accounts.prover,
+        prover_accounts,
+        GetProofArgs::new(intent_hash, destination, prover_data),
+    )?
+    .ok_or(PortalError::IntentNotFulfilled)?;
+    require!(
+        proof.is_payable_to(&ctx.accounts.claimant.key()),
+        PortalError::IntentNotFulfilled
+    );
+
+    withdraw_native(&ctx, &reward, &signer_seeds)?;
     withdraw_tokens(
         &ctx,
         &reward_token_amounts,
@@ -87,12 +96,6 @@ pub fn withdraw_intent<'info>(
 
     // once initialized, withdraw is never allowed again
     mark_withdrawn(&ctx, &intent_hash)?;
-    close_proof(
-        &ctx.accounts.prover,
-        &ctx.accounts.proof_closer,
-        &ctx.accounts.proof,
-        remaining_accounts,
-    )?;
 
     emit!(IntentWithdrawn::new(
         intent_hash,
@@ -100,30 +103,6 @@ pub fn withdraw_intent<'info>(
     ));
 
     Ok(())
-}
-
-fn validate_proof(
-    ctx: &Context<Withdraw>,
-    destination: u64,
-    intent_hash: &Bytes32,
-    prover: &Pubkey,
-) -> Result<()> {
-    require!(
-        ctx.accounts.proof.key() == Proof::pda(intent_hash, prover).0,
-        PortalError::InvalidProof
-    );
-
-    match Proof::try_from_account_info(&ctx.accounts.proof)? {
-        // checked first: a cancelled proof's claimant is a real, if unowned,
-        // key, and `withdraw` does not require the claimant to sign
-        Some(proof) if CANCELLED == proof.claimant => Err(PortalError::IntentCancelled.into()),
-        Some(proof)
-            if proof.claimant == *ctx.accounts.claimant.key && proof.destination == destination =>
-        {
-            Ok(())
-        }
-        _ => Err(PortalError::IntentNotFulfilled.into()),
-    }
 }
 
 fn withdraw_native<'info>(

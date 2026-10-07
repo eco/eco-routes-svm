@@ -17,14 +17,14 @@ use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
-use solana_sdk::instruction::InstructionError;
+use solana_sdk::instruction::{Instruction, InstructionError};
 use solana_sdk::message::Message;
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
-use solana_sdk::transaction::{Transaction, TransactionError};
+use solana_sdk::transaction::{Transaction, TransactionError, VersionedTransaction};
 
 mod aggregator_prover_context;
 mod flash_fulfiller_context;
@@ -35,6 +35,10 @@ mod local_prover_context;
 pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
+mod prover_query;
+
+pub use aggregator_prover_context::query_accounts as aggregator_query;
+pub use prover_query::ProverQuery;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
@@ -442,7 +446,7 @@ impl Context {
 
     pub fn set_withdrawn_marker(&mut self, withdrawn_marker_pda: Pubkey) {
         let mut data = Vec::new();
-        data.extend_from_slice(&[0u8; 8]);
+        data.extend_from_slice(WithdrawnMarker::DISCRIMINATOR);
 
         let account = solana_sdk::account::Account {
             // Not `WithdrawnMarker::min_balance`: that takes the `Rent` anchor-lang
@@ -468,7 +472,19 @@ impl Context {
         self.set_sysvar(&clock);
     }
 
-    pub fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
+    pub fn send_instruction(&mut self, instruction: Instruction) -> TransactionResult {
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+        self.send_transaction(transaction)
+    }
+
+    pub fn send_transaction(
+        &mut self,
+        transaction: impl Into<VersionedTransaction>,
+    ) -> TransactionResult {
         let result = self.svm.send_transaction(transaction);
         self.expire_blockhash();
         let slot = self.svm.get_sysvar::<Clock>().slot;
