@@ -1,5 +1,7 @@
 # LayerZero Prover for Solana Implementation Plan
 
+> **Historical:** written against the pre-#102 prover interface (portal `withdraw` CPIs `close_proof`, `proof_closer_pda(prover)`, aggregator `aggregate`). After stacking on eco-routes-svm #102 the program implements `get_proof` / `close_proof(CloseProofArgs)` with intent-hash-keyed closers; see `docs/prover-interface.md` and the design spec for the current behaviour.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `programs/layerzero-prover`, a LayerZero V2-backed Solana prover that proves Solana-fulfilled intents to EVM (record-then-send) and turns EVM-sent LayerZero messages into standard `Proof` PDAs (`lz_receive`), plus a localnet mock endpoint and the full test suite.
