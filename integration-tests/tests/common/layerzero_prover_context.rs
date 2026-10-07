@@ -10,8 +10,8 @@ use layerzero_prover::instructions::{
     InitArgs, PathConfig, QuoteMessageArgs, ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
 };
 use layerzero_prover::layerzero::{
-    self, ExecutorConfig, LzReceiveParams, MessagingFee, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID,
-    NIL_DVN_COUNT, ULN_ID,
+    self, AccountMetaRef, AddressLocator, ExecutorConfig, LzReceiveParams, MessagingFee, UlnConfig,
+    DEVNET_SOLANA_EID, ENDPOINT_ID, NIL_DVN_COUNT, ULN_ID,
 };
 use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, PendingSend, Store};
 use portal::state::FulfillMarker;
@@ -570,5 +570,117 @@ impl LayerZeroProver<'_> {
             data: layerzero_prover::instruction::LzReceiveTypesV2 { params }.data(),
         };
         self.send(vec![instruction], &[])
+    }
+}
+
+/// `lz_receive` as the executor would build it from `accounts` (all
+/// `AddressLocator::Address`). Free function so the batch-size tests can use it.
+pub fn build_lz_receive_instruction(
+    params: &LzReceiveParams,
+    accounts: Vec<AccountMetaRef>,
+) -> Instruction {
+    let accounts = accounts
+        .into_iter()
+        .map(|meta| match meta.pubkey {
+            AddressLocator::Address(pubkey) => AccountMeta {
+                pubkey,
+                is_signer: false,
+                is_writable: meta.is_writable,
+            },
+            other => panic!("unexpected locator {other:?}"),
+        })
+        .collect();
+
+    Instruction {
+        program_id: layerzero_prover::ID,
+        accounts,
+        data: layerzero_prover::instruction::LzReceive {
+            params: params.clone(),
+        }
+        .data(),
+    }
+}
+
+impl LayerZeroProver<'_> {
+    /// Stands in for DVN verification: writes the PayloadHash and advances the
+    /// path's inbound nonce on the mock endpoint.
+    pub fn verify(&mut self, params: &LzReceiveParams) -> TransactionResult {
+        let mut hasher = tiny_keccak::Keccak::v256();
+        tiny_keccak::Hasher::update(&mut hasher, &params.guid);
+        tiny_keccak::Hasher::update(&mut hasher, &params.message);
+        let mut payload_hash = [0u8; 32];
+        tiny_keccak::Hasher::finalize(hasher, &mut payload_hash);
+        let store = Store::pda().0;
+        let instruction = Instruction {
+            program_id: ENDPOINT_ID,
+            accounts: mock_layerzero_endpoint::accounts::MockVerify {
+                payer: self.payer.pubkey(),
+                nonce: layerzero::nonce_pda(&store, params.src_eid, &params.sender).0,
+                payload_hash: layerzero::payload_hash_pda(
+                    &store,
+                    params.src_eid,
+                    &params.sender,
+                    params.nonce,
+                )
+                .0,
+                system_program: system_program::ID,
+            }
+            .to_account_metas(None),
+            data: mock_layerzero_endpoint::instruction::MockVerify {
+                params: mock_layerzero_endpoint::MockVerifyParams {
+                    receiver: store,
+                    src_eid: params.src_eid,
+                    sender: params.sender,
+                    nonce: params.nonce,
+                    payload_hash,
+                },
+            }
+            .data(),
+        };
+
+        self.send(vec![instruction], &[])
+    }
+
+    pub fn lz_receive_instruction(
+        &self,
+        params: &LzReceiveParams,
+        accounts: Vec<AccountMetaRef>,
+    ) -> Instruction {
+        build_lz_receive_instruction(params, accounts)
+    }
+
+    pub fn lz_receive(&mut self, params: &LzReceiveParams) -> TransactionResult {
+        let proof_data = ProofData::from_bytes(&params.message).unwrap();
+        let accounts = layerzero_prover::instructions::lz_receive_accounts(params, &proof_data);
+        let instruction = self.lz_receive_instruction(params, accounts);
+        self.send(vec![instruction], &[])
+    }
+
+    pub fn deliver(&mut self, params: &LzReceiveParams) -> TransactionResult {
+        self.verify(params)?;
+        self.lz_receive(params)
+    }
+
+    /// Creates an endpoint Nonce for a path our `init_path` never opened, to
+    /// prove our own peer check holds even if the endpoint had one.
+    pub fn force_nonce(&mut self, src_eid: u32, sender: [u8; 32]) {
+        let store = Store::pda().0;
+        let (address, bump) = layerzero::nonce_pda(&store, src_eid, &sender);
+        let data = anchor_account_data(&mock_layerzero_endpoint::Nonce {
+            bump,
+            outbound_nonce: 0,
+            inbound_nonce: 0,
+        });
+        self.set_account(
+            address,
+            Account {
+                lamports: 1_000_000_000,
+                data,
+                owner: ENDPOINT_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
     }
 }

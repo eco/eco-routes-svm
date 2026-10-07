@@ -132,3 +132,16 @@ fn withdraw_closes_proof_and_refunds_pda_payer() {
     );
     assert_eq!(context.balance(&claimant), reward.native_amount);
 }
+
+#[test]
+fn lz_receive_discriminator_matches_executor_constant() {
+    assert_eq!(
+        layerzero_prover::instruction::LzReceive::DISCRIMINATOR,
+        layerzero::LZ_RECEIVE_DISCRIMINATOR.as_slice()
+    );
+    // Endpoint `send` is mocked under a custom name with LayerZero's selector.
+    assert_eq!(
+        mock_layerzero_endpoint::instruction::SendPacket::DISCRIMINATOR,
+        layerzero::SEND_DISCRIMINATOR.as_slice()
+    );
+}

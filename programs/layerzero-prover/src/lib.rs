@@ -56,6 +56,13 @@ pub mod layerzero_prover {
         instructions::quote_message(ctx, args)
     }
 
+    pub fn lz_receive<'info>(
+        ctx: Context<'info, LzReceive<'info>>,
+        params: LzReceiveParams,
+    ) -> Result<()> {
+        instructions::lz_receive(ctx, params)
+    }
+
     pub fn lz_receive_types_info(
         ctx: Context<LzReceiveTypesInfo>,
         params: LzReceiveParams,
