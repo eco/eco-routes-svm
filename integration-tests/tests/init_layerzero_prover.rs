@@ -3,7 +3,7 @@ use layerzero_prover::instructions::{required_alt_addresses, LayerZeroProverErro
 use layerzero_prover::layerzero::{
     self, CONFIG_TYPE_EXECUTOR, CONFIG_TYPE_RECEIVE_ULN, CONFIG_TYPE_SEND_ULN, NIL_DVN_COUNT,
 };
-use layerzero_prover::state::{pda_payer_pda, Store};
+use layerzero_prover::state::{pda_payer_pda, Store, MAX_PAYLOAD_LEN};
 use mock_layerzero_endpoint::{
     MockConfigInitialized, MockConfigSet, Nonce, OAppRegistry, ReceiveLibraryConfig,
     SendLibraryConfig,
@@ -164,7 +164,7 @@ fn set_path_config_pins_send_receive_and_executor() {
 
 #[test]
 fn set_path_config_rejects_anything_left_on_layerzero_defaults() {
-    let mutations: [fn(&mut PathConfig); 10] = [
+    let mutations: [fn(&mut PathConfig); 11] = [
         |c| c.send_uln.confirmations = 0,
         |c| c.receive_uln.required_dvn_count = 0,
         |c| c.receive_uln.required_dvn_count = NIL_DVN_COUNT,
@@ -172,6 +172,7 @@ fn set_path_config_rejects_anything_left_on_layerzero_defaults() {
             c.send_uln.required_dvns.pop();
         },
         |c| c.executor.max_message_size = 0,
+        |c| c.executor.max_message_size = MAX_PAYLOAD_LEN as u32 - 1,
         |c| c.executor.executor = Pubkey::default(),
         |c| c.receive_uln.optional_dvn_count = 0,
         |c| c.send_uln.optional_dvns.push(Pubkey::new_unique()),

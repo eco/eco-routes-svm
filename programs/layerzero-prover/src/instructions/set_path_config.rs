@@ -8,7 +8,7 @@ use crate::layerzero::{
     CONFIG_TYPE_SEND_ULN, ENDPOINT_ID, INIT_CONFIG_DISCRIMINATOR, NIL_DVN_COUNT,
     SET_CONFIG_DISCRIMINATOR, ULN_ID,
 };
-use crate::state::{pda_payer_pda, Store, PDA_PAYER_SEED};
+use crate::state::{pda_payer_pda, Store, MAX_PAYLOAD_LEN, PDA_PAYER_SEED};
 
 /// The path's full security config. Nothing may resolve to a LayerZero default
 /// (required or optional DVN count 0, confirmations 0, executor default), or LayerZero governance would
@@ -51,8 +51,11 @@ impl PathConfig {
                 }
                 Ok(())
             })?;
+        // 0 would fall back to the default executor config; anything below a
+        // full batch's payload would make the largest `prove` batch unsendable.
         require!(
-            self.executor.max_message_size != 0 && self.executor.executor != Pubkey::default(),
+            self.executor.max_message_size >= MAX_PAYLOAD_LEN as u32
+                && self.executor.executor != Pubkey::default(),
             LayerZeroProverError::UnpinnedConfig
         );
 
