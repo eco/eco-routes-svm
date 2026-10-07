@@ -1,11 +1,11 @@
-use std::iter;
-
 use anchor_lang::{Discriminator, InstructionData, ToAccountMetas};
-use eco_svm_std::prover::Proof;
+use eco_svm_std::prover::{CloseProofArgs, Proof};
 use layerzero_prover::instructions::LayerZeroProverError;
 use layerzero_prover::layerzero;
 use layerzero_prover::state::pda_payer_pda;
-use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
+use portal::events::IntentWithdrawn;
+use portal::instructions::PortalError;
+use portal::state::{vault_pda, WithdrawnMarker};
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
@@ -83,7 +83,10 @@ fn close_proof_rejects_foreign_closer() {
             pda_payer: pda_payer_pda().0,
         }
         .to_account_metas(None),
-        data: layerzero_prover::instruction::CloseProof {}.data(),
+        data: layerzero_prover::instruction::CloseProof {
+            args: CloseProofArgs::new(hash, vec![]),
+        }
+        .data(),
     };
     let result = context
         .layerzero_prover()
@@ -92,10 +95,14 @@ fn close_proof_rejects_foreign_closer() {
     assert!(result.is_err_and(common::is_error(
         LayerZeroProverError::InvalidPortalProofCloser
     )));
+    assert!(context.get_account(&proof).is_some());
 }
 
+/// `withdraw` only queries the proof (tail `[proof]`); the separate Portal
+/// `close_proof` (tail `[proof, pda_payer]`) returns its rent to the reserve
+/// that paid it in `lz_receive`.
 #[test]
-fn withdraw_closes_proof_and_refunds_pda_payer() {
+fn withdraw_leaves_proof_and_cleanup_refunds_pda_payer() {
     let mut context = common::Context::default();
     context.layerzero_prover().install(Pubkey::new_unique());
     let (reward, route_hash, hash) = context
@@ -119,18 +126,97 @@ fn withdraw_closes_proof_and_refunds_pda_payer() {
         claimant,
         proof,
         WithdrawnMarker::pda(&hash).0,
-        proof_closer_pda(&layerzero_prover::ID).0,
         Vec::<AccountMeta>::new(),
-        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+        Vec::<AccountMeta>::new(),
     );
 
-    assert!(result.is_ok());
+    assert!(result.is_ok_and(common::contains_event(IntentWithdrawn::new(hash, claimant))));
+    assert_eq!(context.balance(&claimant), reward.native_amount);
+    assert!(context.get_account(&proof).is_some());
+
+    context
+        .portal()
+        .close_proof(
+            BASE_CHAIN_ID,
+            route_hash,
+            reward,
+            cleanup_tail(proof, pda_payer_pda().0),
+        )
+        .unwrap();
+
     assert!(context.get_account(&proof).is_none());
     assert_eq!(
         context.balance(&pda_payer_pda().0),
         pda_payer_before + proof_rent
     );
-    assert_eq!(context.balance(&claimant), reward.native_amount);
+}
+
+/// The rent recipient is pinned to `pda_payer`, like hyper-prover's PDA payer:
+/// a cleanup that names anyone else fails and leaves the proof in place.
+#[test]
+fn cleanup_rejects_a_recipient_other_than_pda_payer() {
+    let mut context = common::Context::default();
+    context.layerzero_prover().install(Pubkey::new_unique());
+    let (reward, route_hash, hash) = context
+        .layerzero_prover()
+        .funded_native_intent(BASE_CHAIN_ID, layerzero_prover::ID);
+    let proof = Proof::pda(&hash, &layerzero_prover::ID).0;
+    context.set_proof(
+        proof,
+        Proof::new(BASE_CHAIN_ID, Pubkey::new_unique()),
+        layerzero_prover::ID,
+    );
+    context.set_withdrawn_marker(WithdrawnMarker::pda(&hash).0);
+    let payer = context.payer.pubkey();
+
+    let result = context.portal().close_proof(
+        BASE_CHAIN_ID,
+        route_hash,
+        reward,
+        vec![
+            AccountMeta::new(proof, false),
+            AccountMeta::new(payer, true),
+        ],
+    );
+
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidPdaPayer)));
+    assert!(context.get_account(&proof).is_some());
+}
+
+/// Without a withdrawal, cleanup needs a cancellation at/after the deadline:
+/// Portal reaches our `get_proof` through the same tail and refuses a payable
+/// proof.
+#[test]
+fn cleanup_without_withdrawal_refuses_a_payable_proof() {
+    let mut context = common::Context::default();
+    context.layerzero_prover().install(Pubkey::new_unique());
+    let (reward, route_hash, hash) = context
+        .layerzero_prover()
+        .funded_native_intent(BASE_CHAIN_ID, layerzero_prover::ID);
+    let proof = Proof::pda(&hash, &layerzero_prover::ID).0;
+    context.set_proof(
+        proof,
+        Proof::new(BASE_CHAIN_ID, Pubkey::new_unique()),
+        layerzero_prover::ID,
+    );
+    context.warp_to_timestamp(reward.deadline.try_into().unwrap());
+
+    let result = context.portal().close_proof(
+        BASE_CHAIN_ID,
+        route_hash,
+        reward,
+        cleanup_tail(proof, pda_payer_pda().0),
+    );
+
+    assert!(result.is_err_and(common::is_error(PortalError::IntentNotCancelled)));
+    assert!(context.get_account(&proof).is_some());
+}
+
+fn cleanup_tail(proof: Pubkey, pda_payer: Pubkey) -> Vec<AccountMeta> {
+    vec![
+        AccountMeta::new(proof, false),
+        AccountMeta::new(pda_payer, false),
+    ]
 }
 
 #[test]

@@ -15,9 +15,17 @@ pub mod common;
 
 #[test]
 fn forwarded_authority_cannot_close_another_intents_proof() {
-    for prover in [local_prover::ID, hyper_prover::ID, polymer_prover::ID] {
+    for prover in [
+        local_prover::ID,
+        hyper_prover::ID,
+        polymer_prover::ID,
+        layerzero_prover::ID,
+    ] {
         for substitute_hash in [false, true] {
             let mut context = common::Context::default();
+            if prover == layerzero_prover::ID {
+                context.layerzero_prover().install(Pubkey::new_unique());
+            }
             let victim_hash: Bytes32 = [3; 32].into();
             let victim_proof = Proof::pda(&victim_hash, &prover).0;
             context.set_proof(
@@ -50,10 +58,12 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                     )
                     .unwrap();
             }
-            let recipient = if prover == hyper_prover::ID {
-                hyper_prover::state::pda_payer_pda().0
+            let (recipient, recipient_signs) = if prover == hyper_prover::ID {
+                (hyper_prover::state::pda_payer_pda().0, false)
+            } else if prover == layerzero_prover::ID {
+                (layerzero_prover::state::pda_payer_pda().0, false)
             } else {
-                context.payer.pubkey()
+                (context.payer.pubkey(), true)
             };
             let result = context.portal().close_proof(
                 CHAIN_ID,
@@ -63,7 +73,7 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                     AccountMeta::new_readonly(own_proof, false),
                     AccountMeta::new_readonly(prover, false),
                     AccountMeta::new(victim_proof, false),
-                    AccountMeta::new(recipient, prover != hyper_prover::ID),
+                    AccountMeta::new(recipient, recipient_signs),
                 ],
             );
             let code = match (prover, substitute_hash) {
@@ -79,11 +89,20 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                 (program, false) if program == hyper_prover::ID => {
                     hyper_prover::instructions::HyperProverError::InvalidProof as u32
                 }
-                (_, true) => {
+                (program, true) if program == polymer_prover::ID => {
                     polymer_prover::instructions::PolymerProverError::InvalidPortalProofCloser
                         as u32
                 }
-                (_, false) => polymer_prover::instructions::PolymerProverError::InvalidProof as u32,
+                (program, false) if program == polymer_prover::ID => {
+                    polymer_prover::instructions::PolymerProverError::InvalidProof as u32
+                }
+                (_, true) => {
+                    layerzero_prover::instructions::LayerZeroProverError::InvalidPortalProofCloser
+                        as u32
+                }
+                (_, false) => {
+                    layerzero_prover::instructions::LayerZeroProverError::InvalidProof as u32
+                }
             };
             assert!(
                 result.clone().is_err_and(common::reached_program(prover)),

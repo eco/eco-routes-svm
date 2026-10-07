@@ -1,14 +1,13 @@
-use std::iter;
-
-use anchor_lang::AnchorDeserialize;
-use eco_svm_std::prover::{IntentHashClaimant, IntentProven, Proof, ProofData};
-use eco_svm_std::{Bytes32, CANCELLED};
+use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
+use eco_svm_std::prover::{GetProofArgs, IntentHashClaimant, IntentProven, Proof, ProofData};
+use eco_svm_std::CANCELLED;
 use layerzero_prover::instructions::LayerZeroProverError;
 use layerzero_prover::layerzero::{self, LzInstruction, LzReceiveTypesV2Result};
 use layerzero_prover::state::{pda_payer_pda, ProofAccount, Store};
-use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
+use portal::instructions::PortalError;
+use portal::state::{vault_pda, WithdrawnMarker};
 use solana_sdk::account::Account;
-use solana_sdk::instruction::AccountMeta;
+use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
@@ -296,8 +295,50 @@ fn cancelled_claimant_passes_through() {
     assert_eq!(proof(&context, 1).unwrap().claimant, cancelled);
 }
 
+/// Our own `get_proof` answers a proof `lz_receive` actually wrote (not just a
+/// fabricated one): `Some` for its destination, `None` for another
+/// destination or an undelivered intent.
 #[test]
-fn delivered_proof_withdraws_and_refunds_rent_to_pda_payer() {
+fn delivered_proof_is_returned_by_get_proof() {
+    let mut context = ready();
+    let claimant = Pubkey::new_unique();
+    context
+        .layerzero_prover()
+        .deliver(&receive_params(&peers()[0], 1, pairs(&[(1, claimant)])))
+        .unwrap();
+
+    let query = |context: &mut common::Context, byte: u8, destination: u64| {
+        let hash = [byte; 32].into();
+        let result = context
+            .send_instruction(Instruction {
+                program_id: layerzero_prover::ID,
+                accounts: layerzero_prover::accounts::GetProof {
+                    proof: Proof::pda(&hash, &layerzero_prover::ID).0,
+                }
+                .to_account_metas(None),
+                data: layerzero_prover::instruction::GetProof {
+                    args: GetProofArgs::new(hash, destination, vec![]),
+                }
+                .data(),
+            })
+            .unwrap();
+        assert_eq!(result.return_data.program_id, layerzero_prover::ID);
+        Option::<Proof>::try_from_slice(&result.return_data.data).unwrap()
+    };
+
+    assert_eq!(
+        query(&mut context, 1, BASE_CHAIN_ID),
+        Some(Proof::new(BASE_CHAIN_ID, claimant))
+    );
+    assert_eq!(query(&mut context, 1, OP_CHAIN_ID), None);
+    assert_eq!(query(&mut context, 2, BASE_CHAIN_ID), None);
+}
+
+/// Inbound delivery → Portal `withdraw` (query tail `[proof]`, proof left in
+/// place) → Portal `close_proof` (cleanup tail `[proof, pda_payer]`): the
+/// reserve that paid the proof rent in `lz_receive` gets it back.
+#[test]
+fn delivered_proof_withdraws_and_cleanup_refunds_rent_to_pda_payer() {
     let mut context = ready();
     let (reward, route_hash, hash) = context
         .layerzero_prover()
@@ -322,19 +363,36 @@ fn delivered_proof_withdraws_and_refunds_rent_to_pda_payer() {
         claimant,
         proof_address,
         WithdrawnMarker::pda(&hash).0,
-        proof_closer_pda(&layerzero_prover::ID).0,
         Vec::<AccountMeta>::new(),
-        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
+        Vec::<AccountMeta>::new(),
     );
 
     assert!(result.is_ok());
     assert_eq!(context.balance(&claimant), reward.native_amount);
+    assert!(context.get_account(&proof_address).is_some());
+
+    context
+        .portal()
+        .close_proof(
+            BASE_CHAIN_ID,
+            route_hash,
+            reward,
+            vec![
+                AccountMeta::new(proof_address, false),
+                AccountMeta::new(pda_payer_pda().0, false),
+            ],
+        )
+        .unwrap();
+
     assert!(context.get_account(&proof_address).is_none());
     assert_eq!(context.balance(&pda_payer_pda().0), pda_payer_before);
 }
 
+/// As an aggregator member: `get_proof` returns our delivered proof through
+/// the member framing, republished under the aggregator's ID, and an intent
+/// naming the aggregator withdraws and cleans up through it.
 #[test]
-fn delivered_proof_aggregates() {
+fn delivered_proof_answers_through_the_aggregator() {
     let mut context = ready();
     let aggregator_authority = Keypair::new();
     context
@@ -344,29 +402,78 @@ fn delivered_proof_aggregates() {
         .aggregator_prover()
         .init(&aggregator_authority, vec![layerzero_prover::ID])
         .unwrap();
+    let (reward, route_hash, hash) = context
+        .layerzero_prover()
+        .funded_native_intent(BASE_CHAIN_ID, aggregator_prover::ID);
     let claimant = Pubkey::new_unique();
-    let hash: Bytes32 = [9; 32].into();
     let data = ProofData::new(
         BASE_CHAIN_ID,
         vec![IntentHashClaimant::new(hash, claimant.to_bytes().into())],
     );
+    let pda_payer_before = context.balance(&pda_payer_pda().0);
     context
         .layerzero_prover()
         .deliver(&receive_params(&peers()[0], 1, data))
         .unwrap();
+    let proof_address = Proof::pda(&hash, &layerzero_prover::ID).0;
 
     let result = context
         .aggregator_prover()
-        .aggregate(hash, layerzero_prover::ID);
+        .get_proof(
+            GetProofArgs::new(hash, BASE_CHAIN_ID, vec![]),
+            &[layerzero_prover::ID],
+        )
+        .unwrap();
+    assert_eq!(result.return_data.program_id, aggregator_prover::ID);
+    assert_eq!(
+        Option::<Proof>::try_from_slice(&result.return_data.data).unwrap(),
+        Some(Proof::new(BASE_CHAIN_ID, claimant))
+    );
+    // Another destination is not evidence for this intent.
+    let result = context
+        .aggregator_prover()
+        .get_proof(
+            GetProofArgs::new(hash, OP_CHAIN_ID, vec![]),
+            &[layerzero_prover::ID],
+        )
+        .unwrap();
+    assert_eq!(
+        Option::<Proof>::try_from_slice(&result.return_data.data).unwrap(),
+        None
+    );
 
-    assert!(result.is_ok());
-    assert!(context
-        .get_account(&Proof::pda(&hash, &aggregator_prover::ID).0)
-        .is_some());
+    let result = context.portal().withdraw_intent(
+        BASE_CHAIN_ID,
+        reward.clone(),
+        vault_pda(&hash).0,
+        route_hash,
+        claimant,
+        aggregator_prover::state::Config::pda().0,
+        WithdrawnMarker::pda(&hash).0,
+        Vec::<AccountMeta>::new(),
+        common::aggregator_query(&hash, &[layerzero_prover::ID]),
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(context.balance(&claimant), reward.native_amount);
+    assert!(context.get_account(&proof_address).is_some());
+
+    let cleanup = context
+        .aggregator_prover()
+        .cleanup_accounts(&hash, &[layerzero_prover::ID]);
+    context
+        .portal()
+        .close_proof(BASE_CHAIN_ID, route_hash, reward, cleanup)
+        .unwrap();
+
+    assert!(context.get_account(&proof_address).is_none());
+    assert_eq!(context.balance(&pda_payer_pda().0), pda_payer_before);
 }
 
+/// A delivered cancellation refunds immediately and leaves the proof; cleanup
+/// is a separate Portal `close_proof` that waits for the reward deadline and
+/// returns the rent to `pda_payer`.
 #[test]
-fn proven_cancellation_refunds_through_close_proof() {
+fn proven_cancellation_refunds_then_cleans_up_after_deadline() {
     let mut context = ready();
     let (reward, route_hash, hash) = context
         .layerzero_prover()
@@ -375,13 +482,15 @@ fn proven_cancellation_refunds_through_close_proof() {
         BASE_CHAIN_ID,
         vec![IntentHashClaimant::new(hash, CANCELLED)],
     );
+    let pda_payer_before = context.balance(&pda_payer_pda().0);
     context
         .layerzero_prover()
         .deliver(&receive_params(&peers()[0], 1, data))
         .unwrap();
     let proof_address = Proof::pda(&hash, &layerzero_prover::ID).0;
+    assert!(context.now() < reward.deadline);
 
-    let result = context.portal().refund_intent_with_close_proof(
+    let result = context.portal().refund_cancelled_intent(
         BASE_CHAIN_ID,
         reward.clone(),
         vault_pda(&hash).0,
@@ -390,10 +499,29 @@ fn proven_cancellation_refunds_through_close_proof() {
         WithdrawnMarker::pda(&hash).0,
         reward.creator,
         Vec::<AccountMeta>::new(),
-        vec![AccountMeta::new(pda_payer_pda().0, false)],
+        Vec::<AccountMeta>::new(),
     );
 
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "{result:?}");
     assert_eq!(context.balance(&reward.creator), reward.native_amount);
+    assert!(context.get_account(&proof_address).is_some());
+
+    let cleanup = vec![
+        AccountMeta::new(proof_address, false),
+        AccountMeta::new(pda_payer_pda().0, false),
+    ];
+    assert!(context
+        .portal()
+        .close_proof(BASE_CHAIN_ID, route_hash, reward.clone(), cleanup.clone())
+        .is_err_and(common::is_error(PortalError::RewardNotExpired)));
+    assert!(context.get_account(&proof_address).is_some());
+
+    context.warp_to_timestamp(reward.deadline.try_into().unwrap());
+    context
+        .portal()
+        .close_proof(BASE_CHAIN_ID, route_hash, reward, cleanup)
+        .unwrap();
+
     assert!(context.get_account(&proof_address).is_none());
+    assert_eq!(context.balance(&pda_payer_pda().0), pda_payer_before);
 }

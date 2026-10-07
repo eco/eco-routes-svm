@@ -97,14 +97,18 @@ impl AggregatorProver<'_> {
 
     pub fn cleanup_accounts(&self, intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
         let query = member_queries(provers.iter().map(|prover| {
-            let recipient = if *prover == hyper_prover::ID {
-                hyper_prover::state::pda_payer_pda().0
+            // Hyperlane and LayerZero pin rent to their PDA payer; the rest
+            // pay a signing recipient.
+            let (recipient, is_signer) = if *prover == hyper_prover::ID {
+                (hyper_prover::state::pda_payer_pda().0, false)
+            } else if *prover == layerzero_prover::ID {
+                (layerzero_prover::state::pda_payer_pda().0, false)
             } else {
-                self.payer.pubkey()
+                (self.payer.pubkey(), true)
             };
             let cleanup = [
                 AccountMeta::new(Proof::pda(intent_hash, prover).0, false),
-                AccountMeta::new(recipient, *prover != hyper_prover::ID),
+                AccountMeta::new(recipient, is_signer),
             ]
             .into();
 
