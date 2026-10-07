@@ -1,0 +1,12 @@
+### Deployer funding
+
+| | Amount |
+|---|---|
+| Program rent (locked once final) | 0.000000000 SOL |
+| Largest buffer (refunded) | 0.000000000 SOL |
+| Reserve top-ups | 0.010000000 SOL |
+| Fees and account rent allowance | 0.200000000 SOL |
+| **Required** | 0.210000000 SOL |
+| Balance of `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx` | 0.000000001 SOL |
+
+**Short by 0.209999999 SOL**: fund `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx`, then plan again.

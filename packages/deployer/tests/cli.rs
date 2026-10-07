@@ -106,7 +106,7 @@ fn hash_line(out: &[u8]) -> PlanHash {
 fn plan_then_deploy_then_apply_agree_on_the_hash() {
     let mut context = Context::default();
     let deployer = Keypair::new();
-    context.airdrop(&deployer.pubkey(), 10_000_000_000).unwrap();
+    context.airdrop(&deployer.pubkey(), 20_000_000_000).unwrap();
     RELEASE_PROGRAMS
         .iter()
         .for_each(|program| context.set_upgrade_authority(program, Some(deployer.pubkey())));

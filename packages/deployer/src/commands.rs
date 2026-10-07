@@ -13,13 +13,14 @@ use crate::apply::{self, Step};
 use crate::chain::{self, Chain, Priced};
 use crate::classify::{self, classify, ProgramState, Status};
 use crate::cli::{ActionsArgs, ApplyArgs, Command, PlanArgs};
+use crate::funding::Funding;
 use crate::inputs::{self, Inputs, RawInputs};
 use crate::plan::{
     self, Cluster, Plan, PlanDocument, PlanFile, PlanHash, PlannedProgramFile, PlannedStatus,
     Release, ReleaseProgram,
 };
 use crate::rpc::RpcChain;
-use crate::{config, readback};
+use crate::{config, funding, readback};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -31,6 +32,8 @@ pub enum Error {
     Classify(#[from] classify::Error),
     #[error(transparent)]
     Config(#[from] config::Error),
+    #[error(transparent)]
+    Funding(#[from] funding::Error),
     #[error(transparent)]
     Inputs(#[from] inputs::Error),
     #[error(transparent)]
@@ -101,6 +104,8 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
     }
 }
 
+/// Writes `plan.json` and the summary and prints the hash even when the deployer is short of
+/// funds, so the reviewer sees the whole plan, then fails.
 pub fn plan(
     chain: &impl Chain,
     args: &PlanArgs,
@@ -131,13 +136,15 @@ pub fn plan(
         inputs: raw.clone(),
     };
     let plan = build(chain, &document, &binaries, deployer, &BTreeMap::new())?;
+    let funding = Funding::estimate(chain, &plan, &binaries, deployer)?;
 
     write_json(plan_path, &plan.file(raw))?;
     summary
         .iter()
-        .try_for_each(|path| append(path, &plan.summary()))?;
+        .try_for_each(|path| append(path, &format!("{}\n{funding}", plan.summary())))?;
+    print_hash(out, &plan.hash())?;
 
-    print_hash(out, &plan.hash())
+    Ok(funding.require()?)
 }
 
 /// Rebuilds the plan from the chain as it is now and refuses unless it hashes to the one in
@@ -381,6 +388,8 @@ mod tests {
         POLYMER_PROVER,
     ];
 
+    const DEPLOYER_LAMPORTS: u64 = 1_000_000_000;
+
     struct Env {
         directory: TempDir,
         deployer: Keypair,
@@ -415,6 +424,20 @@ mod tests {
                 directory,
                 deployer: Keypair::new(),
             }
+        }
+
+        /// A chain holding nothing but the deployer's balance.
+        fn chain(&self) -> RecordingChain {
+            let mut chain = RecordingChain::default();
+            chain.accounts.insert(
+                self.deployer.pubkey(),
+                Account {
+                    lamports: DEPLOYER_LAMPORTS,
+                    ..Account::default()
+                },
+            );
+
+            chain
         }
 
         fn path(&self, name: &str) -> PathBuf {
@@ -570,7 +593,7 @@ mod tests {
     #[test]
     fn plan_writes_the_full_plan_summary_and_hash() {
         let env = Env::new();
-        let hash = env.plan(&RecordingChain::default());
+        let hash = env.plan(&env.chain());
 
         let file: PlanFile = read_json(&env.path("plan.json")).unwrap();
         let summary = fs::read_to_string(env.path("summary.md")).unwrap();
@@ -588,15 +611,39 @@ mod tests {
             ]
         );
         assert!(
-            summary.ends_with(&format!("Plan hash: {hash}\n")),
+            summary.contains(&format!("Plan hash: {hash}\n\n### Deployer funding")),
             "{summary}"
         );
+        assert!(summary.ends_with("Funded.\n"), "{summary}");
+    }
+
+    #[test]
+    fn plan_records_the_plan_before_failing_on_an_underfunded_deployer() {
+        let env = Env::new();
+        let mut out = Vec::new();
+
+        let error = plan(
+            &RecordingChain::default(),
+            &env.plan_args(),
+            &env.deployer.pubkey(),
+            &mut out,
+        )
+        .unwrap_err();
+
+        let summary = fs::read_to_string(env.path("summary.md")).unwrap();
+        let file: PlanFile = read_json(&env.path("plan.json")).unwrap();
+        assert!(
+            matches!(error, Error::Funding(funding::Error::InsufficientBalance { deployer, .. }) if deployer == env.deployer.pubkey()),
+            "{error:?}"
+        );
+        assert_eq!(file.hash, hash_line(&out).to_string());
+        assert!(summary.contains("**Short by "), "{summary}");
     }
 
     #[test]
     fn plan_fails_on_a_foreign_program() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         chain
             .accounts
             .insert(release_address(LOCAL_PROVER), Account::default());
@@ -621,7 +668,7 @@ mod tests {
         let env = Env::new();
         let chain = RecordingChain {
             genesis_hash: Cluster::Mainnet.genesis_hash(),
-            ..RecordingChain::default()
+            ..env.chain()
         };
 
         let error = plan(
@@ -645,7 +692,7 @@ mod tests {
         fs::remove_file(env.path("hyper_prover.devnet.so")).unwrap();
 
         let error = plan(
-            &RecordingChain::default(),
+            &env.chain(),
             &env.plan_args(),
             &env.deployer.pubkey(),
             &mut Vec::new(),
@@ -658,7 +705,7 @@ mod tests {
     #[test]
     fn actions_lists_programs_for_action_from_the_plan_file_alone() {
         let env = Env::new();
-        env.plan(&RecordingChain::default());
+        env.plan(&env.chain());
         fs::remove_file(env.path("ids.json")).unwrap();
         PROGRAMS
             .iter()
@@ -680,7 +727,7 @@ mod tests {
     #[test]
     fn rebuild_accepts_the_chain_unchanged() {
         let env = Env::new();
-        let chain = RecordingChain::default();
+        let chain = env.chain();
         let hash = env.plan(&chain);
 
         assert_eq!(env.rebuild(&chain).unwrap().1, hash);
@@ -689,7 +736,7 @@ mod tests {
     #[test]
     fn rebuild_accepts_planned_new_programs_after_the_deploy_step() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         let hash = env.plan(&chain);
         PROGRAMS
             .iter()
@@ -704,7 +751,7 @@ mod tests {
     #[test]
     fn apply_rejects_changed_plan() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         let hash = env.plan(&chain);
         env.deploy(&mut chain, HYPER_PROVER);
         install_hyper_config(&mut chain);
@@ -721,13 +768,13 @@ mod tests {
     #[test]
     fn apply_rejects_a_planned_partial_program_that_changed() {
         let env = Env::new();
-        let mut with_config = RecordingChain::default();
+        let mut with_config = env.chain();
         env.deploy(&mut with_config, HYPER_PROVER);
         let hash = env.plan(&with_config);
         install_hyper_config(&mut with_config);
 
         let config_appeared = env.apply(&mut with_config);
-        let mut with_other_authority = RecordingChain::default();
+        let mut with_other_authority = env.chain();
         env.deploy(&mut with_other_authority, HYPER_PROVER);
         env.deploy_as(
             &mut with_other_authority,
@@ -752,7 +799,7 @@ mod tests {
     #[test]
     fn apply_rejects_a_planned_live_program_that_changed() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         env.deploy_as(&mut chain, LOCAL_PROVER, &binary(LOCAL_PROVER), None);
         env.plan(&chain);
         env.deploy_as(&mut chain, LOCAL_PROVER, b"upgraded", None);
@@ -768,7 +815,7 @@ mod tests {
     #[test]
     fn apply_rejects_a_planned_partial_program_that_is_now_live() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         env.deploy(&mut chain, LOCAL_PROVER);
         env.plan(&chain);
         env.deploy_as(&mut chain, LOCAL_PROVER, &binary(LOCAL_PROVER), None);
@@ -782,7 +829,7 @@ mod tests {
     #[test]
     fn apply_rejects_a_planned_new_program_deployed_by_someone_else() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         env.plan(&chain);
         env.deploy_as(
             &mut chain,
@@ -803,7 +850,7 @@ mod tests {
     #[test]
     fn apply_rejects_a_replaced_binary() {
         let env = Env::new();
-        let mut chain = RecordingChain::default();
+        let mut chain = env.chain();
         env.plan(&chain);
         fs::write(env.path("hyper_prover.devnet.so"), b"another build").unwrap();
 

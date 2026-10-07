@@ -2,17 +2,16 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use eco_svm_std::Bytes32;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::rent::Rent;
 use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::signer::Signer;
 
 use crate::chain::{self, Chain};
 use crate::config::{self, Configs};
-use crate::layerzero;
 use crate::plan::{
     self, Plan, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
     POLYMER_PROVER,
 };
+use crate::{funding, layerzero};
 
 const FUND_RESERVE: &str = "fund_reserve";
 const INIT: &str = "init";
@@ -136,10 +135,7 @@ fn fund_reserve(
     requested_lamports: u64,
 ) -> Result<Step, Error> {
     let reserve = Pubkey::find_program_address(&[seed], address).0;
-    let balance = chain
-        .account(&reserve)?
-        .map_or(0, |account| account.lamports);
-    let top_up = target_lamports(requested_lamports).saturating_sub(balance);
+    let top_up = funding::reserve_top_up(chain, &reserve, requested_lamports)?;
     let signature = match top_up {
         0 => None,
         top_up => {
@@ -154,16 +150,6 @@ fn fund_reserve(
     };
 
     Ok(step(program, FUND_RESERVE, signature))
-}
-
-/// A reserve below the rent-exempt minimum would be a rent-paying account, which the runtime
-/// rejects. `Rent::default()` rather than the sysvar: `Chain` exposes accounts only, and the
-/// minimum for a zero-data account is the same on every cluster we deploy to.
-fn target_lamports(requested_lamports: u64) -> u64 {
-    match requested_lamports {
-        0 => 0,
-        requested => requested.max(Rent::default().minimum_balance(0)),
-    }
 }
 
 fn init_hyper(chain: &mut impl Chain, plan: &Plan, deployer: &Keypair) -> Result<Step, Error> {
@@ -375,6 +361,7 @@ impl From<config::Mismatch> for Error {
 #[cfg(test)]
 mod tests {
     use layerzero_prover::instructions::required_alt_addresses_for;
+    use solana_sdk::rent::Rent;
 
     use super::*;
     use crate::classify::Status;

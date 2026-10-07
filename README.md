@@ -614,7 +614,8 @@ The manual `Deploy` workflow (`.github/workflows/deploy.yml`) takes a published 
 - The release exists (`v<version>` and its `deploy/v<version>` tag) and the EVM provers it will trust are deployed, since their addresses are `init` inputs.
 - The workflow builds the deployer and runs `scripts/deploy-step.sh` from that `deploy/v<version>` tag, not from `main`: a release cut before this pipeline existed cannot use it, and a fix to the pipeline reaches deploys only through a new release.
 - GitHub environment `release` (shared with the release workflow and both clusters): required reviewers, self-review prevented, `main` only. Its approval is the second pair of eyes on every run, dry runs included.
-- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until the last step, so it needs SOL on each cluster for the deploys and reserves), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
+- The deployer, `Cx92mzUNNr7mazZmuB5uTZtaYPNDFs6RwKVYF2hC7kH3`, holds SOL on the target cluster. A fresh deploy of every program takes about 20 SOL: about 16 SOL of program rent, locked for good once the programs are final, plus the largest buffer (refunded), the reserve top-ups and fees. The plan step estimates this from the release and the chain and fails if the balance is short.
+- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until the last step), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
 
 **Inputs**
 
@@ -676,7 +677,7 @@ Inputs for a program that is already live are not written, but are still hashed 
 
 The addresses above are placeholders; use the DVN and executor addresses LayerZero publishes for the Solana pathway to that peer.
 
-**1. Dry run.** Run the workflow with the inputs and an empty `plan_hash`. It checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary. Nothing is written on chain.
+**1. Dry run.** Run the workflow with the inputs and an empty `plan_hash`. It checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary, followed by the deployer's address, balance and estimated cost. Nothing is written on chain. A deployer short of SOL fails this step after printing the plan; fund it and rerun. Its balance is not part of the hash.
 
 **2. Review the summary.** Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify, finalize). Statuses:
 
