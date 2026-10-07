@@ -172,14 +172,13 @@ mod tests {
         ]);
     }
 
-    /// The portal authorities `prove` and `close_proof` accept, scoped to this
-    /// program's ID. A seed change silently locks out portal — pin the address.
+    /// The portal authority `prove` accepts, scoped to this program's ID. A seed
+    /// change silently locks out portal — pin the address. `close_proof`'s
+    /// closer is intent-scoped (`proof_closer_pda(intent_hash)`), so it has no
+    /// single address to pin here.
     #[test]
-    fn accepted_portal_authorities_deterministic() {
-        goldie::assert_json!(vec![
-            portal::state::dispatcher_pda(&crate::ID),
-            portal::state::proof_closer_pda(&crate::ID),
-        ]);
+    fn accepted_prove_caller_authority_deterministic() {
+        goldie::assert_json!(portal::state::dispatcher_pda(&crate::ID));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 mod close_proof;
+mod get_proof;
 mod init;
 mod init_path;
 mod lz_receive;
@@ -12,6 +13,7 @@ mod set_alt;
 mod set_path_config;
 
 pub use close_proof::*;
+pub use get_proof::*;
 pub use init::*;
 pub use init_path::*;
 pub use lz_receive::*;
