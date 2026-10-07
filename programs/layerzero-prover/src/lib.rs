@@ -40,4 +40,18 @@ pub mod layerzero_prover {
     pub fn prove(ctx: Context<Prove>, args: eco_svm_std::prover::ProveArgs) -> Result<()> {
         prove_intent(ctx, args)
     }
+
+    pub fn send_message<'info>(
+        ctx: Context<'info, SendMessage<'info>>,
+        max_native_fee: u64,
+    ) -> Result<()> {
+        instructions::send_message(ctx, max_native_fee)
+    }
+
+    pub fn quote_message<'info>(
+        ctx: Context<'info, QuoteMessage<'info>>,
+        args: QuoteMessageArgs,
+    ) -> Result<layerzero::MessagingFee> {
+        instructions::quote_message(ctx, args)
+    }
 }

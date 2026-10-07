@@ -1,12 +1,17 @@
 use std::iter;
 
-use anchor_lang::{system_program, AccountSerialize, InstructionData, ToAccountMetas};
+use anchor_lang::{
+    system_program, AccountSerialize, AnchorDeserialize, InstructionData, ToAccountMetas,
+};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
-use layerzero_prover::instructions::{InitArgs, PathConfig, ADDRESS_LOOKUP_TABLE_PROGRAM_ID};
+use layerzero_prover::instructions::{
+    InitArgs, PathConfig, QuoteMessageArgs, ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+};
 use layerzero_prover::layerzero::{
-    self, ExecutorConfig, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID, NIL_DVN_COUNT, ULN_ID,
+    self, ExecutorConfig, MessagingFee, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID, NIL_DVN_COUNT,
+    ULN_ID,
 };
 use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, PendingSend, Store};
 use portal::state::FulfillMarker;
@@ -396,5 +401,135 @@ impl LayerZeroProver<'_> {
             ],
             COMPUTE_UNIT_LIMIT,
         )
+    }
+}
+
+/// Endpoint `send` accounts after `[program, sender]`, then the ULN302 send
+/// tail. Worker (executor/DVN) accounts are omitted: the mock ignores them.
+pub fn send_accounts(
+    store: Pubkey,
+    payer: Pubkey,
+    dst_eid: u32,
+    receiver: &Bytes32,
+) -> Vec<AccountMeta> {
+    let uln = layerzero::uln_settings_pda().0;
+    vec![
+        AccountMeta::new_readonly(ULN_ID, false),
+        AccountMeta::new_readonly(layerzero::send_library_config_pda(&store, dst_eid).0, false),
+        AccountMeta::new_readonly(layerzero::default_send_library_config_pda(dst_eid).0, false),
+        AccountMeta::new_readonly(layerzero::message_lib_info_pda(&uln).0, false),
+        AccountMeta::new_readonly(layerzero::endpoint_settings_pda().0, false),
+        AccountMeta::new(layerzero::nonce_pda(&store, dst_eid, receiver).0, false),
+        AccountMeta::new_readonly(layerzero::endpoint_event_authority().0, false),
+        AccountMeta::new_readonly(ENDPOINT_ID, false),
+        AccountMeta::new_readonly(uln, false),
+        AccountMeta::new_readonly(layerzero::uln_send_config_pda(dst_eid, &store).0, false),
+        AccountMeta::new_readonly(layerzero::uln_default_send_config_pda(dst_eid).0, false),
+        AccountMeta::new(payer, true),
+        AccountMeta::new(TREASURY, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(layerzero::uln_event_authority().0, false),
+        AccountMeta::new_readonly(ULN_ID, false),
+    ]
+}
+
+/// Endpoint `quote` accounts plus the ULN302 quote head, all read-only.
+pub fn quote_accounts(store: Pubkey, dst_eid: u32, receiver: &Bytes32) -> Vec<AccountMeta> {
+    let uln = layerzero::uln_settings_pda().0;
+    vec![
+        AccountMeta::new_readonly(ULN_ID, false),
+        AccountMeta::new_readonly(layerzero::send_library_config_pda(&store, dst_eid).0, false),
+        AccountMeta::new_readonly(layerzero::default_send_library_config_pda(dst_eid).0, false),
+        AccountMeta::new_readonly(layerzero::message_lib_info_pda(&uln).0, false),
+        AccountMeta::new_readonly(layerzero::endpoint_settings_pda().0, false),
+        AccountMeta::new_readonly(layerzero::nonce_pda(&store, dst_eid, receiver).0, false),
+        AccountMeta::new_readonly(uln, false),
+        AccountMeta::new_readonly(layerzero::uln_send_config_pda(dst_eid, &store).0, false),
+        AccountMeta::new_readonly(layerzero::uln_default_send_config_pda(dst_eid).0, false),
+    ]
+}
+
+/// Free function (no context needed) so the batch-size tests can build it too.
+pub fn build_send_message_instruction(
+    pending_send: Pubkey,
+    rent_payer: Pubkey,
+    fee_payer: Pubkey,
+    dst_eid: u32,
+    receiver: &Bytes32,
+    max_native_fee: u64,
+) -> Instruction {
+    let store = Store::pda().0;
+    let accounts = layerzero_prover::accounts::SendMessage {
+        payer: fee_payer,
+        store,
+        pending_send,
+        rent_payer,
+        endpoint_program: ENDPOINT_ID,
+    }
+    .to_account_metas(None)
+    .into_iter()
+    .chain(send_accounts(store, fee_payer, dst_eid, receiver))
+    .collect();
+
+    Instruction {
+        program_id: layerzero_prover::ID,
+        accounts,
+        data: layerzero_prover::instruction::SendMessage { max_native_fee }.data(),
+    }
+}
+
+impl LayerZeroProver<'_> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_message(
+        &mut self,
+        pending_send: Pubkey,
+        rent_payer: Pubkey,
+        fee_payer: &Keypair,
+        dst_eid: u32,
+        receiver: &Bytes32,
+        max_native_fee: u64,
+    ) -> TransactionResult {
+        let instruction = build_send_message_instruction(
+            pending_send,
+            rent_payer,
+            fee_payer.pubkey(),
+            dst_eid,
+            receiver,
+            max_native_fee,
+        );
+        let instructions = vec![
+            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+            instruction,
+        ];
+        let transaction = Transaction::new(
+            &[fee_payer],
+            Message::new(&instructions, Some(&fee_payer.pubkey())),
+            self.latest_blockhash(),
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    pub fn quote_message(
+        &mut self,
+        args: QuoteMessageArgs,
+    ) -> Result<MessagingFee, Box<litesvm::types::FailedTransactionMetadata>> {
+        let store = Store::pda().0;
+        let accounts = layerzero_prover::accounts::QuoteMessage {
+            store,
+            endpoint_program: ENDPOINT_ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(quote_accounts(store, args.dst_eid, &args.receiver))
+        .collect();
+        let instruction = Instruction {
+            program_id: layerzero_prover::ID,
+            accounts,
+            data: layerzero_prover::instruction::QuoteMessage { args }.data(),
+        };
+        let result = self.send(vec![instruction], &[])?;
+
+        Ok(MessagingFee::try_from_slice(&result.return_data.data).unwrap())
     }
 }

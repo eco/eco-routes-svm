@@ -4,6 +4,8 @@ mod close_proof;
 mod init;
 mod init_path;
 mod prove;
+mod quote_message;
+mod send_message;
 mod set_alt;
 mod set_path_config;
 
@@ -11,6 +13,8 @@ pub use close_proof::*;
 pub use init::*;
 pub use init_path::*;
 pub use prove::*;
+pub use quote_message::*;
+pub use send_message::*;
 pub use set_alt::*;
 pub use set_path_config::*;
 
