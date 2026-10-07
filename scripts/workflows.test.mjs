@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -67,4 +69,48 @@ test("deploy workflow rejects a malformed compute_unit_price before anything run
   ["", "-1", "1.5", "abc", " 5", "5 ", "1e6", "99999999999999999999"].forEach((value) =>
     assert.ok(!validates(value), value),
   );
+});
+
+test("deploy workflow closes leftover buffers after any outcome, while the deployer key exists", () => {
+  const text = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const close = text.indexOf("      - name: Close leftover buffers\n");
+  assert.ok(close > text.indexOf("      - name: Finalize\n"));
+  assert.ok(close < text.indexOf("      - name: Delete keys\n"));
+  assert.match(
+    text.slice(close),
+    /^ {8}if: always\(\) && steps\.plan\.outputs\.execute == 'true'$/m,
+  );
+});
+
+test("deploy closes the deployer's buffers before deploying anything", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
+  const calls = join(bin, "calls");
+  // `program show` fails: nothing is on chain yet.
+  writeFileSync(
+    join(bin, "solana"),
+    `#!/usr/bin/env bash\necho "solana $*" >> "${calls}"\n[ "$2" != show ]\n`,
+    { mode: 0o755 },
+  );
+  writeFileSync(join(bin, "deployer"), `#!/usr/bin/env bash\necho portal\n`, { mode: 0o755 });
+  writeFileSync(join(bin, "program-ids.json"), '{"portal":{"address":"PortalAddress"}}');
+
+  const { status, stderr } = spawnSync("bash", [script, "deploy"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      RPC_URL: "http://rpc",
+      KEYPAIR: "deployer.json",
+      ASSETS: bin,
+      CLUSTER: "devnet",
+      PLAN: "plan.json",
+    },
+  });
+
+  assert.equal(status, 0, stderr);
+  const [first, ...rest] = readFileSync(calls, "utf8").trim().split("\n");
+  assert.equal(first, "solana program close --buffers -u http://rpc -k deployer.json");
+  assert.ok(rest.some((call) => call.startsWith("solana program deploy ")), rest.join("\n"));
+  rmSync(bin, { recursive: true });
 });

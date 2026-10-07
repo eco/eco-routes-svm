@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# One step of .github/workflows/deploy.yml: deploy-step.sh <check|deploy|verify|finalize|redact>.
+# One step of .github/workflows/deploy.yml:
+# deploy-step.sh <check|deploy|verify|finalize|close-buffers|redact>.
 # Reads CLUSTER, RPC_URL, ASSETS (release download dir, holds program-ids.json), PLAN (plan.json)
 # and KEYPAIR (deployer keypair file) from the environment; KEYS_DIR (default target/keys) holds
 # the derived program keypairs. Never prints key material.
@@ -37,7 +38,15 @@ check() {
   done
 }
 
+# A failed `solana program deploy` strands its buffer and the rent in it; only the deployer key,
+# which exists only inside this workflow, can reclaim it. The key writes buffers nowhere else and
+# runs never overlap on a cluster, so every buffer it holds is a leftover.
+close_buffers() {
+  solana program close --buffers -u "$RPC_URL" -k "$KEYPAIR"
+}
+
 deploy() {
+  close_buffers
   local price_flags=()
   if [ "${COMPUTE_UNIT_PRICE:-0}" != 0 ]; then
     price_flags=(--with-compute-unit-price "$COMPUTE_UNIT_PRICE")
@@ -86,5 +95,6 @@ finalize() {
 
 case "${1:-}" in
   check | deploy | verify | finalize | redact) "$1" ;;
-  *) echo "usage: $0 <check|deploy|verify|finalize|redact>" >&2; exit 2 ;;
+  close-buffers) close_buffers ;;
+  *) echo "usage: $0 <check|deploy|verify|finalize|close-buffers|redact>" >&2; exit 2 ;;
 esac

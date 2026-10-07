@@ -205,6 +205,13 @@ jobs:
           RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
         run: scripts/deploy-step.sh finalize 2>&1 | scripts/deploy-step.sh redact | tee out/finalize.log
 
+      # A failed or cancelled deploy leaves its buffer holding rent; return it to the deployer.
+      - name: Close leftover buffers
+        if: always() && steps.plan.outputs.execute == 'true'
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: scripts/deploy-step.sh close-buffers 2>&1 | scripts/deploy-step.sh redact | tee out/close-buffers.log
+
       - name: Delete keys
         if: always()
         run: rm -rf target/keys "$RUNNER_TEMP/deployer.json"
