@@ -10,8 +10,8 @@ use layerzero_prover::instructions::{
     InitArgs, PathConfig, QuoteMessageArgs, ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
 };
 use layerzero_prover::layerzero::{
-    self, ExecutorConfig, MessagingFee, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID, NIL_DVN_COUNT,
-    ULN_ID,
+    self, ExecutorConfig, LzReceiveParams, MessagingFee, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID,
+    NIL_DVN_COUNT, ULN_ID,
 };
 use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, PendingSend, Store};
 use portal::state::FulfillMarker;
@@ -531,5 +531,44 @@ impl LayerZeroProver<'_> {
         let result = self.send(vec![instruction], &[])?;
 
         Ok(MessagingFee::try_from_slice(&result.return_data.data).unwrap())
+    }
+}
+
+/// A delivery of `proof_data` from `peer` at `nonce` (guid derived from nonce).
+pub fn receive_params(peer: &Peer, nonce: u64, proof_data: ProofData) -> LzReceiveParams {
+    LzReceiveParams {
+        src_eid: peer.eid,
+        sender: peer.address.into(),
+        nonce,
+        guid: [nonce as u8; 32],
+        message: proof_data.to_bytes(),
+        extra_data: vec![],
+    }
+}
+
+impl LayerZeroProver<'_> {
+    pub fn lz_receive_types_info(&mut self, params: LzReceiveParams) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: layerzero_prover::ID,
+            accounts: layerzero_prover::accounts::LzReceiveTypesInfo {
+                store: Store::pda().0,
+                lz_receive_types: LzReceiveTypesAccount::pda().0,
+            }
+            .to_account_metas(None),
+            data: layerzero_prover::instruction::LzReceiveTypesInfo { params }.data(),
+        };
+        self.send(vec![instruction], &[])
+    }
+
+    pub fn lz_receive_types_v2(&mut self, params: LzReceiveParams) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: layerzero_prover::ID,
+            accounts: layerzero_prover::accounts::LzReceiveTypesV2 {
+                store: Store::pda().0,
+            }
+            .to_account_metas(None),
+            data: layerzero_prover::instruction::LzReceiveTypesV2 { params }.data(),
+        };
+        self.send(vec![instruction], &[])
     }
 }

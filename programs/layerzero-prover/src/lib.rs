@@ -8,6 +8,7 @@ pub mod layerzero;
 pub mod state;
 
 use instructions::*;
+use layerzero::{LzReceiveParams, LzReceiveTypesInfoResult, LzReceiveTypesV2Result};
 
 #[program]
 pub mod layerzero_prover {
@@ -53,5 +54,19 @@ pub mod layerzero_prover {
         args: QuoteMessageArgs,
     ) -> Result<layerzero::MessagingFee> {
         instructions::quote_message(ctx, args)
+    }
+
+    pub fn lz_receive_types_info(
+        ctx: Context<LzReceiveTypesInfo>,
+        params: LzReceiveParams,
+    ) -> Result<LzReceiveTypesInfoResult> {
+        instructions::lz_receive_types_info(ctx, params)
+    }
+
+    pub fn lz_receive_types_v2(
+        ctx: Context<LzReceiveTypesV2>,
+        params: LzReceiveParams,
+    ) -> Result<LzReceiveTypesV2Result> {
+        instructions::lz_receive_types_v2(ctx, params)
     }
 }
