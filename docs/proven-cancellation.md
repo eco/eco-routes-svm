@@ -4,11 +4,11 @@ An intent whose route was never fulfilled can be cancelled on its destination af
 
 ## Release Note
 
-The `refund` instruction's account list and arguments change shape, and `close_fulfill_marker` is removed with the `FulfillMarker` shrinking to 41 bytes, which breaks every existing caller. This is acceptable only because each release deploys the programs under new program IDs; do not upgrade a deployed portal in place.
+The `refund` instruction's account list and arguments change shape, and `close_fulfill_marker` is removed with the `FulfillMarker` shrinking to 41 bytes, which breaks every existing caller. This is acceptable only because a changed program deploys under a new program ID (IDs are derived from bytecode); do not upgrade a deployed portal in place.
 
 `CANCELLED` is deliberately a valid EVM address (see below), so an old-generation source (an EVM prover, or an
 old SVM portal, which stores claimants verbatim) would treat it as a payable claimant, and a permissionless
-`withdraw` would burn the reward. Every release therefore needs a new EVM root SALT and new program IDs, and
+`withdraw` would burn the reward. Every release that changes these programs therefore needs a new EVM root SALT and new program IDs, and
 prover whitelists must never cross generations.
 
 ## Destination Chain
