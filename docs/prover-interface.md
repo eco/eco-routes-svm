@@ -1,6 +1,6 @@
 # Proof queries and cleanup
 
-This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Deploy the programs together under new IDs; regenerate clients from the release IDLs. Proof encoding, destination markers, withdrawal markers and bridge payloads are unchanged.
+This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Every affected program's bytecode changes, so the release derives new IDs for all of them; deploy them together and regenerate clients from the release IDLs. Proof encoding, destination markers, withdrawal markers and bridge payloads are unchanged.
 
 ## Prover interface
 

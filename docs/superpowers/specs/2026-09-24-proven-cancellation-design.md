@@ -15,7 +15,7 @@ SVM scope, summarized:
   — the EVM address `0xe685056aEc77686A83E2a6bDf37c6f71dD2fdB5f` left-padded to 32 bytes, golden-pinned to the EVM
   bytes. It is deliberately a valid EVM address, hash-derived so no EVM or Solana key controls it; `withdraw`
   rejects it.
-- **Release:** one atomic release under new program IDs; minor version. An old-generation source (EVM prover or
+- **Release:** one atomic release; every changed program deploys under a new program ID (derived from its bytecode); minor version. An old-generation source (EVM prover or
   old SVM portal) would treat the sentinel as a payable claimant and a permissionless `withdraw` would burn the
-  reward, so every release needs new program IDs / a new EVM root SALT, and whitelists must never cross
+  reward, so every release that changes these programs needs new program IDs / a new EVM root SALT, and whitelists must never cross
   generations.

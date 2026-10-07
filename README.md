@@ -238,10 +238,6 @@ anchor run build-localnet   # Build for localnet (includes dummy-ism)
 anchor run build-devnet     # Build for devnet (excludes dummy-ism)
 anchor run build-mainnet    # Build for mainnet with mainnet feature
 
-# Deploy scripts
-anchor run deploy-devnet    # Deploy to devnet (excludes dummy-ism)
-anchor run deploy-mainnet   # Deploy to mainnet (excludes dummy-ism)
-
 # Test script
 anchor run test             # Run all tests
 ```
@@ -455,27 +451,9 @@ anchor deploy
 anchor deploy --provider.cluster localnet
 ```
 
-#### Devnet (Staging):
-```bash
-# Build and deploy for devnet (excludes dummy-ism)
-anchor run build-devnet
-anchor run deploy-devnet
+#### Devnet and Mainnet
 
-# Or use cluster-specific deployment
-anchor deploy --provider.cluster devnet
-```
-
-#### Mainnet (Production):
-```bash
-# Step 1: Build with mainnet feature (REQUIRED)
-anchor run build-mainnet
-
-# Step 2: Deploy to mainnet (excludes dummy-ism)
-anchor run deploy-mainnet
-
-# Or use cluster-specific deployment
-anchor deploy --provider.cluster mainnet
-```
+The committed `declare_id!`s are placeholders, so devnet and mainnet deploy only from a release. Follow [Deploying a release](#deploying-a-release).
 
 #### Network-Specific Program Configuration
 
@@ -484,7 +462,7 @@ The `Anchor.toml` file includes network-specific program configurations:
 - **Localnet**: Includes the localnet-only test programs — `dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`
 - **Devnet** / **Mainnet**: Exclude the localnet-only test programs (production-like / production only)
 
-What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]` registration — that only maps names to IDs — but the explicit `--program-name` enumeration in `Anchor.toml`'s `build-devnet` / `build-mainnet` scripts and the named IDL loops in `release.yml`.
+What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]` registration — that only maps names to IDs — but the explicit `--program-name` enumeration in `Anchor.toml`'s `build-devnet` / `build-mainnet` scripts and the `RELEASED_PROGRAMS` list `release.yml` copies assets by.
 
 ```toml
 [programs.localnet]
@@ -533,18 +511,117 @@ wallet = "~/.config/solana/id.json"
 
 ## Release
 
-Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub and click **Run workflow**.
+Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub, click **Run workflow** and untick **dry_run**. A dry run (the default) computes the version, derives the program IDs and builds every asset, but publishes nothing: no release, tags or branches. Either way the run summary shows the version and each program's address, and a dry run uploads the would-be assets (`.so` files, IDLs, `program-ids.json`, the script; never keypairs) as a workflow artifact. A dry run uses the same secret, so it needs the same `release` environment approval, and its addresses are exactly what a real release from that commit would publish.
 
 ### What gets published
 
-Each release attaches mainnet and devnet IDLs as downloadable assets on the GitHub Release:
+Each release attaches every production program's bytecode (the verifiable build, from `solana-verify build` in the pinned image) and IDL, built once per cluster, as downloadable assets on the GitHub Release:
 
 ```
-dist/idl/mainnet/{portal,hyper_prover,local_prover,aggregator_prover,flash_fulfiller,proof_helper,polymer_prover}.mainnet.json
-dist/idl/devnet/{portal,hyper_prover,local_prover,aggregator_prover,flash_fulfiller,proof_helper,polymer_prover}.devnet.json
+dist/program/mainnet/<program>.mainnet.so    dist/idl/mainnet/<program>.mainnet.json
+dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.json
 ```
 
-Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.json`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
+plus `program-ids.json`, recording each program's `address`, `seed` and `salt` (see [Program IDs](#program-ids)).
+
+`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper` and `polymer_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
+
+Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
+
+### Program IDs
+
+The `declare_id!`s in source are placeholders and never change. A release's real IDs are derived by `scripts/program-keypairs.mjs` (zero-dependency, Node 22) from the release secret, the program's lib name and a seed, then ground to an `Eco` prefix (about 57,000 attempts, ~1.5 s per program). Mainnet and devnet share the IDs. The seed hashes:
+
+- the program's salt from `scripts/program-salts.json` (0 when absent);
+- its placeholder build on both clusters;
+- the seed of every released program whose ID it compiles in (its Cargo dependencies, followed through shared workspace crates) and, for the aggregator, of its members (`AGGREGATOR_MEMBERS` in the script; keep it equal to the set you pass to `init`).
+
+So a program keeps its address while its bytecode and salt are unchanged, and anything that moves a program also moves everything that depends on it. A toolchain, Anchor, Solana or dependency bump changes bytecode, so it usually moves every program.
+
+**Salts re-roll an address without a code change.** Raise a program's salt when its address must not be reused: its `init` was squatted or wrong, or its configuration changes (whitelisted senders or emitters, aggregator members), since a live address keeps its original config forever. Only ever raise a salt: lowering it returns to an old address and its old config.
+
+The release job builds the placeholders, derives the IDs (it writes no keys), rewrites every `declare_id!` on the runner, rebuilds, and checks each IDL's `address`. Bytecode is always built with `solana-verify build` in the image pinned by digest in `VERIFY_IMAGE` (`release.yml`), so the published `.so` files are exactly what `verify-from-repo` reproduces and what gets deployed; v2.1.1's mainnet programs are byte-identical to builds in that image. IDLs come from `anchor idl build`. Before publishing it pushes a `deploy/v<version>` tag: one commit on top of `v<version>` that only rewrites the `declare_id!`s (public keys), which `solana-verify verify-from-repo` rebuilds. `main` and the `releases/*` branches never contain it, and CI does not test it, since the PDA goldens are pinned to the placeholder IDs. Cargo.toml versions are not bumped before building, because a bump changes the bytecode of every dependent of `eco-svm-std`; the IDLs' `metadata.version` is set afterwards.
+
+The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl rand -hex 32`), stored in the `release` GitHub environment and the team vault. Anyone holding it can deploy at any release's addresses, and changing it moves every program. Repository settings that protect it:
+
+- the `release` environment allows only `main` (or `releases/**` too, with a ruleset restricting who may create or update those branches), requires reviewers and prevents self-review;
+- CODEOWNERS review is required for `.github/workflows/**`, `scripts/program-keypairs.mjs` and `scripts/program-salts.json`;
+- a tag ruleset forbids updating or deleting `v*` and `deploy/*`.
+
+### Deploying a release
+
+Deploying is manual. Each new program ends up deployed, initialized, verified and immutable, in that order. Run every block below under `set -euo pipefail` so a failed command stops it.
+
+**You need:** Solana CLI 4.1.1, Anchor CLI 1.1.2, Node 22, Docker (running), [`solana-verify`](https://github.com/Ellipsis-Labs/solana-verifiable-build) 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`), `gh`, `PROGRAM_KEYPAIR_SECRET` from the vault, a funded deployer keypair, an RPC URL for the cluster, and the `init` values: the EVM HyperProver and PolymerProver addresses for this cluster. The deployer keypair signs every transaction below: it pays, and it is every new program's upgrade authority until the last step.
+
+The examples deploy to mainnet. For devnet, use a devnet RPC, the `.devnet.` assets, and drop every `-- --features mainnet`. Pass `-u <rpc>` to every command: mainnet and devnet share addresses.
+
+**1. Get the release and derive its keypairs.** `deploy/v<version>` is the release commit plus its real `declare_id!`s; run the script from that checkout, never from a downloaded copy.
+
+```bash
+git clone https://github.com/eco/eco-routes-svm && cd eco-routes-svm
+git checkout deploy/v<version>
+gh release download v<version> --pattern program-ids.json --pattern '*.mainnet.so' --pattern '*.mainnet.json'
+export PROGRAM_KEYPAIR_SECRET=<from the vault>
+node scripts/program-keypairs.mjs deploy program-ids.json keys
+```
+
+The script refuses to write anything unless every derived address matches `program-ids.json`, then writes `keys/<program>-keypair.json` (`/keys` is gitignored). The `.so` files are the release's verifiable builds: deploy them as they are.
+
+**2. Classify every program.** For each, with `address=$(jq -r ".${program}.address" program-ids.json)`, compare `solana program show -u <rpc> "$address"` and `solana-verify get-program-hash -u <rpc> "$address"` with `solana-verify get-executable-hash <program>.mainnet.so`:
+
+| On chain | Meaning | Action |
+|---|---|---|
+| no account | new | run steps 3–6 |
+| hash matches, `Authority: none`, and for programs with an `init` the config reads back correctly (step 4) | unchanged since an earlier release | skip |
+| hash matches, authority is your deployer | an earlier attempt stopped part-way | resume at the first step it has not finished |
+| anything else | someone else holds the address | stop and deploy nothing: the other programs would trust it |
+
+**3. Deploy each new program:**
+
+```bash
+solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deployer-keypair> \
+  --program-id keys/<program>-keypair.json <program>.mainnet.so
+```
+
+**4. Initialize.** Deploy every new program first: the aggregator only accepts members that are already deployed. Send each `init` with your own tooling, using the release IDL (`<program>.mainnet.json`) for the instruction layout. `hyper_prover` and `polymer_prover` can be initialized by anyone until they are, so send theirs right after the deploy.
+
+| Program | `init` arguments | Signers |
+|---|---|---|
+| `hyper_prover` | `whitelisted_senders`: the EVM HyperProver addresses, each left-padded to 32 bytes | deployer |
+| `polymer_prover` | `whitelisted_emitters`: the EVM PolymerProver addresses, each left-padded to 32 bytes | deployer |
+| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `local_prover`, `polymer_prover` from `program-ids.json`) as remaining accounts | deployer, as payer and upgrade authority |
+
+Every config is permanent. Read each one back and compare it with what you sent:
+
+```bash
+config=$(solana find-program-derived-address "$address" string:config | head -1)
+anchor account <program>.Config "$config" --idl <program>.mainnet.json --provider.cluster <rpc>
+```
+
+If a config is wrong or was set by someone else, stop: that address is burned. Raise the program's salt in `scripts/program-salts.json` and cut a new release, which moves it and everything depending on it to new addresses.
+
+**5. Verify each new program** while you still hold its upgrade authority, since OtterSec only accepts a verify PDA uploaded by it. `verify-from-repo` rebuilds the deploy tag in the same pinned image the release built with, and fails unless the result matches the program on chain:
+
+```bash
+commit=$(git rev-parse "deploy/v<version>^{commit}")
+test -n "$commit"
+solana-verify verify-from-repo -u <rpc> --program-id "$address" https://github.com/eco/eco-routes-svm \
+  --commit-hash "$commit" --library-name <program> \
+  --base-image <VERIFY_IMAGE from .github/workflows/release.yml> \
+  -k <deployer-keypair> -y -- --features mainnet
+solana-verify remote submit-job -u <rpc> --program-id "$address" --uploader <deployer-address>
+```
+
+`-y` uploads the verify PDA without prompting; `<deployer-address>` is `solana-keygen pubkey <deployer-keypair>`. If verification fails, stop here: do not make the program immutable.
+
+**6. Make each new program immutable**, last, because `init` and verification both need the upgrade authority:
+
+```bash
+solana program set-upgrade-authority -u <rpc> -k <deployer-keypair> "$address" --final
+```
+
+Then delete `keys/`.
 
 The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
@@ -561,7 +638,7 @@ Driven by [semantic-release](https://semantic-release.gitbook.io/) reading conve
 
 If only `chore:`/`docs:` commits accumulated since the last tag, the workflow exits cleanly and creates no release.
 
-The `version` field in each released crate's `Cargo.toml` (the 7 production programs + `eco-svm-std`) is bumped on the CI runner *before* the IDL build by `scripts/bump-cargo-versions.sh`, so the published IDLs carry the correct `metadata.version`. **Those bumps are never committed back to source** — Cargo.tomls in `main` and `releases/*` stay at their pre-release version forever; the canonical version is the git tag, not the manifest. The localnet-only test programs are not bumped.
+Cargo.toml `version` fields are never bumped; the canonical version is the git tag. The release writes it into each IDL's `metadata.version` after building.
 
 ### First release
 
