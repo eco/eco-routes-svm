@@ -2,12 +2,14 @@ use std::iter;
 
 use anchor_lang::{system_program, AccountSerialize, InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::Bytes32;
+use eco_svm_std::prover::{IntentHashClaimant, ProofData};
+use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::instructions::{InitArgs, PathConfig, ADDRESS_LOOKUP_TABLE_PROGRAM_ID};
 use layerzero_prover::layerzero::{
     self, ExecutorConfig, UlnConfig, DEVNET_SOLANA_EID, ENDPOINT_ID, NIL_DVN_COUNT, ULN_ID,
 };
-use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, Store};
+use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, PendingSend, Store};
+use portal::state::FulfillMarker;
 use portal::types::Reward;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
@@ -333,5 +335,66 @@ impl LayerZeroProver<'_> {
         self.set_alt(&authority, alt).unwrap();
 
         authority
+    }
+}
+
+impl LayerZeroProver<'_> {
+    /// The bytes portal hands `prove` for these fulfilled intents.
+    pub fn payload(&self, intent_hashes: &[Bytes32]) -> Vec<u8> {
+        let pairs = intent_hashes
+            .iter()
+            .map(|hash| {
+                let marker = self
+                    .account::<FulfillMarker>(&FulfillMarker::pda(hash).0)
+                    .unwrap();
+                IntentHashClaimant::new(*hash, marker.claimant)
+            })
+            .collect();
+
+        ProofData::new(CHAIN_ID, pairs).to_bytes()
+    }
+
+    pub fn pending_send_for(
+        &self,
+        dst_eid: u32,
+        receiver: &Bytes32,
+        intent_hashes: &[Bytes32],
+    ) -> Pubkey {
+        PendingSend::pda(dst_eid, receiver, &self.payload(intent_hashes)).0
+    }
+
+    /// `portal::prove` targeting this prover. `data` is normally the 32-byte
+    /// EVM receiver; tests pass malformed data on purpose.
+    pub fn prove(
+        &mut self,
+        intent_hashes: Vec<Bytes32>,
+        dst_eid: u64,
+        data: Vec<u8>,
+    ) -> TransactionResult {
+        let fulfill_markers = intent_hashes
+            .iter()
+            .map(|hash| FulfillMarker::pda(hash).0)
+            .collect();
+        let receiver: Bytes32 = <[u8; 32]>::try_from(data.as_slice())
+            .unwrap_or([0; 32])
+            .into();
+        let pending = self.pending_send_for(dst_eid as u32, &receiver, &intent_hashes);
+        let payer = self.payer.pubkey();
+
+        self.portal().prove_intent_via_program_with_compute_limit(
+            layerzero_prover::ID,
+            intent_hashes,
+            dst_eid,
+            fulfill_markers,
+            portal::state::dispatcher_pda(&layerzero_prover::ID).0,
+            data,
+            vec![
+                AccountMeta::new(payer, true),
+                AccountMeta::new_readonly(Store::pda().0, false),
+                AccountMeta::new(pending, false),
+                AccountMeta::new_readonly(system_program::ID, false),
+            ],
+            COMPUTE_UNIT_LIMIT,
+        )
     }
 }

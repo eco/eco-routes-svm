@@ -36,4 +36,8 @@ pub mod layerzero_prover {
     pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
         instructions::close_proof(ctx)
     }
+
+    pub fn prove(ctx: Context<Prove>, args: eco_svm_std::prover::ProveArgs) -> Result<()> {
+        prove_intent(ctx, args)
+    }
 }
