@@ -103,3 +103,77 @@ pub fn lz_receive_accounts(
         })
         .collect()
 }
+
+/// The static `lz_receive` accounts the executor resolves through the lookup
+/// table `lz_receive_types_v2` returns: every account of
+/// [`lz_receive_accounts`] that exists before the message does, i.e. all but
+/// the per-message `PayloadHash` and `Proof` PDAs, with the Nonce of every
+/// configured peer. `set_alt` refuses a table that lacks any of them, because
+/// the delivery transaction only fits `MAX_PAIRS_PER_MESSAGE` pairs when these
+/// ride in the table rather than as static keys.
+pub fn required_alt_addresses(store: &Store) -> Vec<Pubkey> {
+    let store_key = Store::pda().0;
+    let fixed = [
+        store_key,
+        pda_payer_pda().0,
+        anchor_lang::system_program::ID,
+        event_authority_pda(&crate::ID).0,
+        crate::ID,
+        ENDPOINT_ID,
+        oapp_registry_pda(&store_key).0,
+        endpoint_settings_pda().0,
+        endpoint_event_authority().0,
+    ];
+    let nonces = store
+        .peers
+        .iter()
+        .map(|peer| nonce_pda(&store_key, peer.eid, &peer.address).0);
+
+    fixed.into_iter().chain(nonces).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use eco_svm_std::prover::IntentHashClaimant;
+
+    use super::*;
+    use crate::state::Peer;
+
+    /// Everything `lz_receive_accounts` lists except the per-message
+    /// `PayloadHash` and `Proof` PDAs must be in the required table contents.
+    #[test]
+    fn required_alt_addresses_cover_every_static_lz_receive_account() {
+        let peer = Peer {
+            eid: 30184,
+            address: [0xba; 32].into(),
+            chain_id: 8453,
+        };
+        let store = Store::new(vec![peer]).unwrap();
+        let params = LzReceiveParams {
+            src_eid: peer.eid,
+            sender: peer.address.into(),
+            nonce: 1,
+            guid: [1; 32],
+            message: vec![],
+            extra_data: vec![],
+        };
+        let proof_data = ProofData::new(
+            8453,
+            vec![IntentHashClaimant::new([1; 32].into(), [2; 32].into())],
+        );
+        let per_message = [
+            payload_hash_pda(&Store::pda().0, peer.eid, &params.sender, params.nonce).0,
+            Proof::pda(&[1; 32].into(), &crate::ID).0,
+        ];
+        let required = required_alt_addresses(&store);
+
+        lz_receive_accounts(&params, &proof_data)
+            .into_iter()
+            .map(|meta| match meta.pubkey {
+                AddressLocator::Address(pubkey) => pubkey,
+                other => panic!("unexpected locator {other:?}"),
+            })
+            .filter(|pubkey| !per_message.contains(pubkey))
+            .for_each(|pubkey| assert!(required.contains(&pubkey), "{pubkey} missing"));
+    }
+}

@@ -1,5 +1,5 @@
 use anchor_lang::prelude::borsh;
-use layerzero_prover::instructions::{LayerZeroProverError, PathConfig};
+use layerzero_prover::instructions::{required_alt_addresses, LayerZeroProverError, PathConfig};
 use layerzero_prover::layerzero::{
     self, CONFIG_TYPE_EXECUTOR, CONFIG_TYPE_RECEIVE_ULN, CONFIG_TYPE_SEND_ULN, NIL_DVN_COUNT,
 };
@@ -234,6 +234,68 @@ fn set_alt_rejects_non_lookup_table_account() {
         .layerzero_prover()
         .set_alt(&authority, not_a_table)
         .is_err());
+}
+
+fn initialized() -> (common::Context, Keypair) {
+    let (mut context, authority) = installed();
+    context
+        .layerzero_prover()
+        .init(&authority, peers())
+        .unwrap();
+    (context, authority)
+}
+
+fn required_addresses(context: &common::Context) -> Vec<Pubkey> {
+    required_alt_addresses(&context.account::<Store>(&Store::pda().0).unwrap())
+}
+
+#[test]
+fn set_alt_rejects_table_with_authority() {
+    let (mut context, authority) = initialized();
+    let addresses = required_addresses(&context);
+    let alt =
+        context
+            .layerzero_prover()
+            .create_alt_with(Some(authority.pubkey()), u64::MAX, addresses);
+
+    let result = context.layerzero_prover().set_alt(&authority, alt);
+
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::AltNotSet)));
+}
+
+#[test]
+fn set_alt_rejects_deactivated_table() {
+    let (mut context, authority) = initialized();
+    let addresses = required_addresses(&context);
+    let alt = context
+        .layerzero_prover()
+        .create_alt_with(None, 1, addresses);
+
+    let result = context.layerzero_prover().set_alt(&authority, alt);
+
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::AltNotSet)));
+}
+
+#[test]
+fn set_alt_rejects_table_missing_a_peer_nonce() {
+    let (mut context, authority) = initialized();
+    let peer = peers()[1];
+    let nonce = layerzero::nonce_pda(&Store::pda().0, peer.eid, &peer.address).0;
+    let addresses: Vec<Pubkey> = required_addresses(&context)
+        .into_iter()
+        .filter(|address| *address != nonce)
+        .collect();
+    let alt = context
+        .layerzero_prover()
+        .create_alt_with(None, u64::MAX, addresses);
+
+    let result = context.layerzero_prover().set_alt(&authority, alt);
+
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::AltNotSet)));
+    assert_eq!(
+        context.account::<Store>(&Store::pda().0).unwrap().alt,
+        Pubkey::default()
+    );
 }
 
 #[test]

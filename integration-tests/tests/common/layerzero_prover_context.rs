@@ -7,7 +7,7 @@ use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::instructions::{
-    InitArgs, PathConfig, QuoteMessageArgs, ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
+    required_alt_addresses, InitArgs, PathConfig, QuoteMessageArgs, ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
 };
 use layerzero_prover::layerzero::{
     self, AccountMetaRef, AddressLocator, ExecutorConfig, LzReceiveParams, MessagingFee, UlnConfig,
@@ -35,6 +35,8 @@ pub const BASE_CHAIN_ID: u64 = 8453;
 pub const OP_EID: u32 = 30111;
 pub const OP_CHAIN_ID: u64 = 10;
 pub const COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
+/// Size of a lookup table's serialized meta; addresses follow it.
+pub const LOOKUP_TABLE_META_SIZE: usize = 56;
 /// Receives the mock endpoint's flat fee in `send_message` tests.
 pub const TREASURY: Pubkey = Pubkey::new_from_array([0x7e; 32]);
 
@@ -291,15 +293,37 @@ impl LayerZeroProver<'_> {
         self.send(vec![instruction], &[authority])
     }
 
-    /// Stages an account owned by the lookup-table program (contents are not
-    /// read on-chain; the executor reads the table off-chain).
+    /// Stages a frozen, active lookup table holding `required_alt_addresses`
+    /// for the `Store` that `init` created: the table `set_alt` accepts.
     pub fn create_alt(&mut self) -> Pubkey {
+        let store = self.account::<Store>(&Store::pda().0).unwrap();
+        self.create_alt_with(None, u64::MAX, required_alt_addresses(&store))
+    }
+
+    /// Stages a lookup-table account with the given meta and addresses, in
+    /// the program's bincode `ProgramState::LookupTable` layout.
+    pub fn create_alt_with(
+        &mut self,
+        authority: Option<Pubkey>,
+        deactivation_slot: u64,
+        addresses: Vec<Pubkey>,
+    ) -> Pubkey {
         let alt = Pubkey::new_unique();
+        let mut data = vec![0u8; LOOKUP_TABLE_META_SIZE];
+        data[..4].copy_from_slice(&1u32.to_le_bytes());
+        data[4..12].copy_from_slice(&deactivation_slot.to_le_bytes());
+        if let Some(authority) = authority {
+            data[21] = 1;
+            data[22..54].copy_from_slice(authority.as_ref());
+        }
+        addresses
+            .iter()
+            .for_each(|address| data.extend_from_slice(address.as_ref()));
         self.set_account(
             alt,
             Account {
                 lamports: 1_000_000_000,
-                data: vec![0; 56],
+                data,
                 owner: ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
                 executable: false,
                 rent_epoch: 0,
