@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Compute the version and program IDs and build every asset, but publish nothing"
+        type: boolean
+        default: true
 
 concurrency:
   group: release
@@ -10,23 +15,23 @@ concurrency:
 env:
   RUST_VERSION: "1.97.1"
   ANCHOR_VERSION: "1.1.2"
-  # Exact Solana CLI version, pinned rather than tracking "stable". Note this no longer
-  # decides the on-chain compiler: anchor-cli 1.x hard-codes `--tools-version v1.52` when it
-  # shells out to `cargo build-sbf`, so it overrides whatever platform-tools this CLI defaults
-  # to. This pins the CLI tooling only.
+  # Exact Solana CLI version for the Anchor tooling, which here only generates IDLs.
   SOLANA_VERSION: "4.1.1"
-  # The rustc `anchor build` actually uses for the programs, asserted after every build.
-  # Changing this changes the compiler that produces deployed bytecode -- do it deliberately.
-  # Comes from anchor's hard-coded platform-tools version below; bump both only alongside
-  # ANCHOR_VERSION.
-  SBF_RUSTC_VERSION: "1.89.0-dev"
-  # The platform-tools version anchor-cli hard-codes in `cargo build-sbf --tools-version`
-  # (BUILD_SUBCOMMAND in its cli/src/lib.rs). Asserted together with SBF_RUSTC_VERSION.
-  SBF_TOOLS_VERSION: "v1.52"
+  # Released bytecode is built with `solana-verify build` in this image, pinned by digest, so
+  # `verify-from-repo --base-image` reproduces it exactly; v2.1.1's mainnet programs are
+  # byte-identical to it. With each program's `[package.metadata.solana] tools-version` it
+  # fixes the compiler. Changing it changes bytecode, which moves every affected address.
+  VERIFY_IMAGE: "solanafoundation/solana-verifiable-build@sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68"
+  SOLANA_VERIFY_VERSION: "0.5.2"
+  # Production programs only. The localnet test programs (dummy-ism, mock-polymer-prover,
+  # malicious-*) must never reach a release, so assets are copied by name, never by glob.
+  RELEASED_PROGRAMS: "aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover"
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Holds PROGRAM_KEYPAIR_SECRET; anyone with it can claim a release's program addresses.
+    environment: release
     permissions:
       contents: write
       issues: write
@@ -43,6 +48,9 @@ jobs:
           rust-version: ${{ env.RUST_VERSION }}
           cache-key-suffix: release
 
+      - name: Install solana-verify
+        run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
+
       - name: Setup Anchor
         uses: ./.github/actions/setup-anchor
         with:
@@ -52,7 +60,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Compute next version (dry run)
         id: dry
@@ -62,37 +70,126 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Bump Cargo.toml versions (runner-only, never committed)
-        if: steps.dry.outputs.new_release_published == 'true'
-        run: scripts/bump-cargo-versions.sh ${{ steps.dry.outputs.new_release_version }}
-
-      - name: Build mainnet IDLs
-        if: steps.dry.outputs.new_release_published == 'true'
-        run: |
-          rm -rf target/idl
-          anchor run build-mainnet
-          mkdir -p dist/idl/mainnet
-          for program in aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover; do
-            cp "target/idl/${program}.json" "dist/idl/mainnet/${program}.mainnet.json"
-          done
-
-      - name: Assert on-chain compiler
-        if: steps.dry.outputs.new_release_published == 'true'
-        run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
-
-      - name: Build devnet IDLs
+      # The committed declare_id!s are placeholders. Each program's real ID is seeded by its
+      # salt, its placeholder build and the seeds of the programs whose IDs it compiles in, so
+      # unchanged bytecode keeps its address. Cargo.toml versions are not bumped: a bump changes
+      # the bytecode of every dependent of eco-svm-std.
+      # solana-verify's container runs as root, so hand target/ back to the runner after it.
+      - name: Build placeholder programs
         if: steps.dry.outputs.new_release_published == 'true'
         run: |
-          rm -rf target/idl
-          anchor run build-devnet
-          mkdir -p dist/idl/devnet
-          for program in aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover; do
-            cp "target/idl/${program}.json" "dist/idl/devnet/${program}.devnet.json"
+          mkdir -p target/deploy
+          # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
+          scripts/verifiable-build.sh target/placeholder $RELEASED_PROGRAMS
+          sudo chown -R "$(id -u):$(id -g)" target
+
+      # CI only needs the addresses: `release` writes no keys, and the deployer re-derives
+      # the keypairs from the published program-ids.json. Both clusters share the IDs. The
+      # rewritten declare_id!s reach git only through the deploy/v<version> tag.
+      - name: Derive program IDs
+        if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          PROGRAM_KEYPAIR_SECRET: ${{ secrets.PROGRAM_KEYPAIR_SECRET }}
+        run: |
+          # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
+          node scripts/program-keypairs.mjs release target/placeholder $RELEASED_PROGRAMS \
+            > target/program-ids.json
+          jq -r 'to_entries[] | "\(.key) \(.value.address)"' target/program-ids.json > target/program-ids.txt
+          cat target/program-ids.txt
+          while read -r program address; do
+            lib="programs/${program//_/-}/src/lib.rs"
+            sed -i "s/declare_id!(\"[^\"]*\")/declare_id!(\"${address}\")/" "$lib"
+            grep -q "declare_id!(\"${address}\")" "$lib"
+          done < target/program-ids.txt
+
+      # Every program's bytecode and three IDLs (hyper_prover, polymer_prover, proof_helper)
+      # embed feature-gated addresses, so each cluster gets its own .so and IDL set. Bytecode
+      # comes from the pinned verifiable build, and the IDLs from `anchor idl build`, which
+      # matches `anchor build`'s IDLs byte for byte.
+      - name: Build release programs
+        if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          VERSION: ${{ steps.dry.outputs.new_release_version }}
+        run: |
+          # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
+          scripts/verifiable-build.sh target/release-build $RELEASED_PROGRAMS
+          sudo chown -R "$(id -u):$(id -g)" target
+          for cluster in mainnet devnet; do
+            features=()
+            if [ "$cluster" = mainnet ]; then
+              features=(-- --features mainnet)
+            fi
+            mkdir -p "target/idl/${cluster}" "dist/idl/${cluster}" "dist/program/${cluster}"
+            while read -r program address; do
+              idl="target/idl/${cluster}/${program}.json"
+              anchor idl build --program-name "${program//_/-}" --out "$idl" "${features[@]}"
+              test "$(jq -r .address "$idl")" = "$address"
+              jq --arg version "$VERSION" '.metadata.version = $version' "$idl" \
+                > "dist/idl/${cluster}/${program}.${cluster}.json"
+              cp "target/release-build/${cluster}/${program}.so" "dist/program/${cluster}/${program}.${cluster}.so"
+            done < target/program-ids.txt
           done
+          cp target/program-ids.json dist/program-ids.json
+
+      # Verifiable builds rebuild a commit, so tag one carrying the real program IDs (public
+      # keys only) on top of the release commit. main and the maintenance branch never see
+      # it, and CI does not test it: the PDA goldens are pinned to the placeholder IDs. It is
+      # pushed before the release, so no release exists without it; a re-run accepts an
+      # existing tag only if it carries the same IDs on the same parent. A dry run builds the
+      # commit, which checks the guard, but pushes nothing.
+      - name: Tag program IDs
+        if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          VERSION: ${{ steps.dry.outputs.new_release_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          git add programs/*/src/lib.rs
+          test "$(git diff --cached --name-only | wc -l)" -eq "$(wc -l < target/program-ids.txt)"
+          commit=$(git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit-tree "$(git write-tree)" -p HEAD -m "chore: program IDs for v${VERSION}")
+          tag="deploy/v${VERSION}"
+          existing=$(git ls-remote origin "refs/tags/${tag}" | cut -f1)
+          if [ -n "$existing" ]; then
+            git fetch --no-tags origin "refs/tags/${tag}"
+            test "$(git rev-parse "FETCH_HEAD^{tree}")" = "$(git rev-parse "${commit}^{tree}")"
+            test "$(git rev-parse "FETCH_HEAD^")" = "$(git rev-parse HEAD)"
+            echo "${tag} already carries these program IDs"
+          elif [ "$DRY_RUN" != true ]; then
+            git tag "$tag" "$commit"
+            git push origin "refs/tags/${tag}"
+          fi
+
+      - name: Summarize no release
+        if: steps.dry.outputs.new_release_published != 'true'
+        run: |
+          echo "## No release: no releasable commits since the last tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize
+        if: steps.dry.outputs.new_release_published == 'true'
+        env:
+          VERSION: ${{ steps.dry.outputs.new_release_version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## v${VERSION}$([ "$DRY_RUN" = true ] && echo " (dry run: nothing published)")"
+            echo
+            echo "| Program | Address |"
+            echo "|---|---|"
+            jq -r 'to_entries[] | "| `\(.key)` | `\(.value.address)` |"' target/program-ids.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload dry-run assets
+        if: inputs.dry_run && steps.dry.outputs.new_release_published == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-v${{ steps.dry.outputs.new_release_version }}-dry-run
+          path: dist/
+          if-no-files-found: error
 
       - name: Release
         id: semantic
-        if: steps.dry.outputs.new_release_published == 'true'
+        if: steps.dry.outputs.new_release_published == 'true' && !inputs.dry_run
         uses: cycjimmy/semantic-release-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

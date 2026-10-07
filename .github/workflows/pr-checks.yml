@@ -23,6 +23,27 @@ env:
   SBF_TOOLS_VERSION: "v1.52"
 
 jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # the tests compare the dependency graph against `cargo metadata`
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: scripts
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Test release scripts
+        run: node --test scripts/program-keypairs.test.mjs
+
   format:
     runs-on: ubuntu-latest
     steps:
