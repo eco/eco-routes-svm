@@ -121,23 +121,20 @@ impl Chain for RpcChain {
 mod tests {
     use super::*;
 
-    const UNREACHABLE: &str = "http://127.0.0.1:1/?api-key=SECRET";
-
-    #[test]
-    fn normalized_urls_are_redacted_wherever_they_appear() {
-        let text = "failed (https://rpc.example/?api-key=SECRET) at 'wss://h?k=SECRET' \\\"http://h?k=SECRET\\\" ok";
-
-        let redacted = redact_urls(text);
-
-        assert_eq!(
-            redacted,
-            "failed (<rpc-url>) at '<rpc-url>' \\\"<rpc-url>\\\" ok"
-        );
-    }
+    /// The second is normalized by the HTTP client (a `/` is added), so its errors echo a URL
+    /// that differs from the configured string.
+    const UNREACHABLE: [&str; 2] = [
+        "http://127.0.0.1:1/?api-key=SECRET",
+        "http://127.0.0.1:1?api-key=SECRET",
+    ];
 
     #[test]
     fn errors_never_contain_the_rpc_url() {
-        let mut chain = RpcChain::new(UNREACHABLE.into());
+        UNREACHABLE.into_iter().for_each(errors_omit);
+    }
+
+    fn errors_omit(url: &str) {
+        let mut chain = RpcChain::new(url.into());
         let deployer = Keypair::new();
         let transfer = solana_system_interface::instruction::transfer(
             &deployer.pubkey(),

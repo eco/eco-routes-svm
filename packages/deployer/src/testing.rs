@@ -14,8 +14,8 @@ use crate::config::Configs;
 use crate::inputs::{Inputs, RawInputs};
 use crate::layerzero_state;
 use crate::plan::{
-    Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
-    LOCAL_PROVER, POLYMER_PROVER,
+    Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER,
+    LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 
 pub const SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
@@ -72,7 +72,7 @@ pub fn release_address(program: &str) -> Pubkey {
         LOCAL_PROVER => address(202),
         POLYMER_PROVER => address(203),
         AGGREGATOR_PROVER => address(204),
-        _ => address(205),
+        _ => layerzero_prover::ID,
     }
 }
 
@@ -130,6 +130,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
     Plan::build(
         release,
         Cluster::Devnet.genesis_hash(),
+        address(1),
         states,
         Configs::default(),
         inputs,
@@ -144,7 +145,7 @@ pub fn chain_with_deployed_members() -> RecordingChain {
     };
 
     RecordingChain {
-        accounts: [HYPER_PROVER, LOCAL_PROVER, POLYMER_PROVER]
+        accounts: AGGREGATOR_MEMBERS
             .iter()
             .map(|member| (release_address(member), executable.clone()))
             .collect(),
@@ -279,7 +280,7 @@ pub fn full_setup(plan: &Plan) -> FullSetup {
         (
             alt,
             solana_sdk_ids::address_lookup_table::id(),
-            frozen_table(&program, &store),
+            frozen_table(&store),
         ),
     ]
     .into_iter()
@@ -314,11 +315,11 @@ pub fn uln_account_data(name: &str, account: &impl AnchorSerialize) -> Vec<u8> {
 }
 
 /// A lookup table in the program's layout: tag 1, never deactivated, no authority.
-pub fn frozen_table(program: &Pubkey, store: &layerzero_prover::state::Store) -> Vec<u8> {
+pub fn frozen_table(store: &layerzero_prover::state::Store) -> Vec<u8> {
     let mut data = vec![0u8; 56];
     data[..4].copy_from_slice(&1u32.to_le_bytes());
     data[4..12].copy_from_slice(&u64::MAX.to_le_bytes());
-    layerzero_prover::instructions::required_alt_addresses_for(program, store)
+    layerzero_prover::instructions::required_alt_addresses(store)
         .iter()
         .for_each(|address| data.extend_from_slice(address.as_ref()));
 

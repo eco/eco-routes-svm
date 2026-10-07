@@ -86,12 +86,9 @@ test("deploy closes the deployer's buffers before deploying anything", () => {
   const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
   const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
   const calls = join(bin, "calls");
-  // `program show` fails: nothing is on chain yet.
-  writeFileSync(
-    join(bin, "solana"),
-    `#!/usr/bin/env bash\necho "solana $*" >> "${calls}"\n[ "$2" != show ]\n`,
-    { mode: 0o755 },
-  );
+  writeFileSync(join(bin, "solana"), `#!/usr/bin/env bash\necho "solana $*" >> "${calls}"\n`, {
+    mode: 0o755,
+  });
   writeFileSync(join(bin, "deployer"), `#!/usr/bin/env bash\necho portal\n`, { mode: 0o755 });
   writeFileSync(join(bin, "program-ids.json"), '{"portal":{"address":"PortalAddress"}}');
 
@@ -111,6 +108,10 @@ test("deploy closes the deployer's buffers before deploying anything", () => {
   assert.equal(status, 0, stderr);
   const [first, ...rest] = readFileSync(calls, "utf8").trim().split("\n");
   assert.equal(first, "solana program close --buffers -u http://rpc -k deployer.json");
-  assert.ok(rest.some((call) => call.startsWith("solana program deploy ")), rest.join("\n"));
+  assert.deepEqual(rest, [
+    "solana program deploy -u http://rpc -k deployer.json --upgrade-authority deployer.json " +
+      "--program-id target/keys/portal-keypair.json --use-rpc --max-sign-attempts 20 " +
+      `${bin}/portal.devnet.so`,
+  ]);
   rmSync(bin, { recursive: true });
 });

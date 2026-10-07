@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use anchor_lang::{system_program, AccountDeserialize, InstructionData, ToAccountMetas};
 use common::litesvm_chain::{uln_account_data, LitesvmChain};
 use common::{Context, RELEASE_PROGRAMS};
-use deployer::apply::{self, apply, Report};
+use deployer::apply::{self, apply, Step};
 use deployer::classify::{ProgramState, Status};
 use deployer::config::{self, Configs};
 use deployer::plan::{
@@ -90,16 +90,21 @@ impl Env {
         Plan::build(
             release,
             genesis_hash,
+            self.deployer.pubkey(),
             states,
             live_configs,
             Inputs::parse(inputs).unwrap(),
         )
     }
 
-    fn apply(&mut self, plan: &Plan) -> Result<Report, apply::Error> {
+    fn apply(&mut self, plan: &Plan) -> Result<Vec<Step>, apply::Error> {
         let deployer = self.deployer.insecure_clone();
+        let mut steps = Vec::new();
+        apply(&mut self.chain(), plan, &deployer, &mut |step| {
+            steps.push(step.clone())
+        })?;
 
-        apply(&mut self.chain(), plan, &deployer)
+        Ok(steps)
     }
 
     fn balance(&self, address: &Pubkey) -> u64 {
@@ -187,16 +192,12 @@ fn inputs_with_peer_chain_id(hyper_senders: &str, chain_id: u64) -> RawInputs {
 
 /// The reserve tops up to its target on every run, and LayerZero paths spend it, so a re-run
 /// refills it; every other step must be a no-op.
-fn without_reserve_top_ups(report: &Report) -> impl Iterator<Item = &apply::Step> {
-    report
-        .steps
-        .iter()
-        .filter(|step| step.action != "fund_reserve")
+fn without_reserve_top_ups(report: &[Step]) -> impl Iterator<Item = &Step> {
+    report.iter().filter(|step| step.action != "fund_reserve")
 }
 
-fn sent(report: &Report) -> Vec<(&'static str, &'static str, bool)> {
+fn sent(report: &[Step]) -> Vec<(&'static str, &'static str, bool)> {
     report
-        .steps
         .iter()
         .map(|step| (step.program, step.action, step.signature.is_some()))
         .collect()
@@ -239,27 +240,22 @@ fn apply_rerun_sends_nothing() {
     let report = env.apply(&plan).unwrap();
 
     assert!(without_reserve_top_ups(&report).all(|step| step.signature.is_none()));
-    assert_eq!(report.steps.len(), 9);
+    assert_eq!(report.len(), 9);
 }
 
 #[test]
 fn apply_refuses_aggregator_before_members_deployed() {
     let mut env = Env::new();
-    let undeployed_local = Pubkey::new_unique();
-    env.release = release([
-        (HYPER_PROVER, hyper_prover::ID),
-        (LOCAL_PROVER, undeployed_local),
-        (POLYMER_PROVER, polymer_prover::ID),
-        (AGGREGATOR_PROVER, aggregator_prover::ID),
-        (LAYERZERO_PROVER, layerzero_prover::ID),
-    ]);
+    env.context
+        .set_account(layerzero_prover::ID, Account::default())
+        .unwrap();
     let plan = env.plan(inputs(HYPER_SENDER)).unwrap();
 
     let result = env.apply(&plan);
 
     assert!(matches!(
         result,
-        Err(apply::Error::MembersNotDeployed { members }) if members == [LOCAL_PROVER]
+        Err(apply::Error::MembersNotDeployed { members }) if members == [LAYERZERO_PROVER]
     ));
     let live = config::read(&env.chain(), &plan.release).unwrap();
     assert_eq!(live.aggregator_provers, None);
@@ -347,6 +343,7 @@ fn readback_detects_mismatch() {
     let stale = Plan::build(
         plan.release.clone(),
         plan.genesis_hash,
+        plan.deployer,
         states(&plan.release, &env.deployer.pubkey()),
         Configs::default(),
         Inputs::parse(inputs(OTHER_SENDER)).unwrap(),

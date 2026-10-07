@@ -9,7 +9,7 @@ use crate::layerzero::{
     LzReceiveTypesInfoResult, LzReceiveTypesV2Accounts, LzReceiveTypesV2Result, ENDPOINT_ID,
     EXECUTION_CONTEXT_VERSION_1, LZ_RECEIVE_TYPES_VERSION,
 };
-use crate::state::{pda_payer_pda, LzReceiveTypesAccount, Store, PDA_PAYER_SEED, STORE_SEED};
+use crate::state::{pda_payer_pda, LzReceiveTypesAccount, Store};
 
 /// Accounts `endpoint::clear` takes, as the head of `lz_receive`'s remaining
 /// accounts: endpoint program, receiver (store), OApp registry, nonce, payload
@@ -112,20 +112,13 @@ pub fn lz_receive_accounts(
 /// the delivery transaction only fits `MAX_PAIRS_PER_MESSAGE` pairs when these
 /// ride in the table rather than as static keys.
 pub fn required_alt_addresses(store: &Store) -> Vec<Pubkey> {
-    required_alt_addresses_for(&crate::ID, store)
-}
-
-/// [`required_alt_addresses`] for a deployment at `program`, which differs from
-/// the compiled-in ID when the release deploys to another address.
-pub fn required_alt_addresses_for(program: &Pubkey, store: &Store) -> Vec<Pubkey> {
-    let store_key = Pubkey::find_program_address(&[STORE_SEED], program).0;
-    let pda_payer = Pubkey::find_program_address(&[PDA_PAYER_SEED], program).0;
+    let store_key = Store::pda().0;
     let fixed = [
         store_key,
-        pda_payer,
+        pda_payer_pda().0,
         anchor_lang::system_program::ID,
-        event_authority_pda(program).0,
-        *program,
+        event_authority_pda(&crate::ID).0,
+        crate::ID,
         ENDPOINT_ID,
         oapp_registry_pda(&store_key).0,
         endpoint_settings_pda().0,
@@ -182,40 +175,5 @@ mod tests {
             })
             .filter(|pubkey| !per_message.contains(pubkey))
             .for_each(|pubkey| assert!(required.contains(&pubkey), "{pubkey} missing"));
-    }
-
-    #[test]
-    fn required_alt_addresses_for_the_compiled_id_equals_required_alt_addresses() {
-        let store = Store::new(vec![Peer {
-            eid: 30184,
-            address: [0xba; 32].into(),
-            chain_id: 8453,
-        }])
-        .unwrap();
-
-        assert_eq!(
-            required_alt_addresses_for(&crate::ID, &store),
-            required_alt_addresses(&store)
-        );
-    }
-
-    #[test]
-    fn required_alt_addresses_for_another_program_use_that_programs_own_addresses() {
-        let store = Store::new(vec![Peer {
-            eid: 30184,
-            address: [0xba; 32].into(),
-            chain_id: 8453,
-        }])
-        .unwrap();
-        let other = Pubkey::new_from_array([7; 32]);
-        let own = required_alt_addresses(&store);
-
-        let foreign = required_alt_addresses_for(&other, &store);
-
-        assert!(foreign.contains(&Pubkey::find_program_address(&[STORE_SEED], &other).0));
-        assert!(foreign.contains(&other));
-        assert!(!foreign.contains(&crate::ID));
-        assert!(!foreign.contains(&Store::pda().0));
-        assert_eq!(foreign.len(), own.len());
     }
 }

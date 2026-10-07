@@ -171,7 +171,7 @@ pub fn read(chain: &impl Chain, release: &Release) -> Result<Configs, Error> {
     let store = layerzero_store(chain, &layerzero)?;
     let layerzero_alt = store
         .as_ref()
-        .map(|store| layerzero_state::read_alt(chain, &layerzero, store))
+        .map(|store| layerzero_state::read_alt(chain, store))
         .transpose()?
         .flatten();
     let layerzero_paths = store

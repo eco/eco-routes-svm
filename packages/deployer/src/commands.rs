@@ -158,7 +158,7 @@ pub fn apply(
 ) -> Result<(), Error> {
     let (live, expected) = rebuild(chain, args, &deployer.pubkey())?;
     let mut printed = Ok(());
-    let landed = apply::apply_observed(chain, &live, deployer, &mut |step| {
+    let landed = apply::apply(chain, &live, deployer, &mut |step| {
         printed = mem::replace(&mut printed, Ok(())).and_then(|()| print_step(out, step));
     });
     printed?;
@@ -224,6 +224,7 @@ fn build(
     Ok(Plan::build(
         release.clone(),
         chain.genesis_hash()?,
+        *deployer,
         states,
         live_configs,
         Inputs::parse(inputs.clone())?,
@@ -464,7 +465,7 @@ mod tests {
                         r#"{{"peers":[{{"eid":1,"address":"{SENDER}","chain_id":1,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
                     ),
                     hyper_reserve_lamports: "1000000".into(),
-                    layerzero_reserve_lamports: "1000000".into(),
+                    layerzero_reserve_lamports: "100000000".into(),
                     finalize_layerzero: false,
                 },
             }

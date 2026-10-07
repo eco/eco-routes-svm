@@ -58,14 +58,13 @@ mod tests {
 
     use super::*;
     use crate::plan::LAYERZERO_PROVER;
-    use crate::testing::{full_setup, plan, release_address, uln_account_data};
+    use crate::testing::{full_setup, plan, uln_account_data};
 
     #[test]
-    fn complete_setup_at_a_non_compiled_address_reads_back() {
+    fn complete_setup_reads_back() {
         let plan = plan(5_000_000);
         let setup = full_setup(&plan);
 
-        assert_ne!(release_address(LAYERZERO_PROVER), layerzero_prover::ID);
         assert!(readback(&setup.chain, &plan).is_ok());
     }
 

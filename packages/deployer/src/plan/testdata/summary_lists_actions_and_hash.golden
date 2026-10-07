@@ -5,7 +5,7 @@
 | aggregator_prover | `4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi` | new | deploy, init, verify, finalize |
 | flash_fulfiller | `8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR` | new | deploy, verify, finalize |
 | hyper_prover | `CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8` | partial | init, verify, finalize |
-| layerzero_prover | `GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq` | partial | init, verify |
+| layerzero_prover | `EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm` | partial | init, verify |
 | local_prover | `LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY` | new | deploy, verify, finalize |
 | polymer_prover | `QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF` | new | deploy, init, verify, finalize |
 | portal | `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx` | live | none |
@@ -16,7 +16,7 @@
 - hyper_prover senders: 0xabcdef0123456789abcdef0123456789abcdef01, 0x1111111111111111111111111111111111111111
 - hyper_prover reserve lamports: 1000000
 - polymer_prover emitters: 0x1111111111111111111111111111111111111111
-- aggregator_prover members: hyper_prover, local_prover, polymer_prover
+- aggregator_prover members: hyper_prover, polymer_prover, layerzero_prover
 - layerzero_prover reserve lamports: 2000000
 - layerzero_prover finalize: false
 - layerzero_prover peer eid 30184: 0xabcdef0123456789abcdef0123456789abcdef01, chain id 30184
@@ -28,4 +28,4 @@
   - receive: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
   - executor: 11111111111111111111111111111113 (max message size 10000)
 
-Plan hash: 1a0edaa86ddc7ec6e783cac534c440f6a6864ff4583b9204e18a071489b0e823
+Plan hash: 01af06b505d2ae1a25ad5876d91a88a681c9337c9b3ed432593199adcc355bc4

@@ -10,6 +10,8 @@ set -euo pipefail
 set +x
 
 readonly REPOSITORY_URL="https://github.com/eco/eco-routes-svm"
+# Each attempt re-signs the writes still unconfirmed when the blockhash expires (about a minute).
+readonly MAX_SIGN_ATTEMPTS=20
 
 redact() {
   local line
@@ -51,15 +53,14 @@ deploy() {
   if [ "${COMPUTE_UNIT_PRICE:-0}" != 0 ]; then
     price_flags=(--with-compute-unit-price "$COMPUTE_UNIT_PRICE")
   fi
+  # The plan lists only programs absent from the chain when it was made, and runs on a cluster
+  # never overlap, so nothing here can already be deployed. Writes go through the RPC: validator
+  # TPUs drop much of what a CI runner sends, and each drop is a re-sign.
   deployer actions --plan "$PLAN" --action deploy | while read -r program; do
-    local address
-    address=$(program_address "$program")
-    if solana program show -u "$RPC_URL" "$address" > /dev/null 2>&1; then
-      echo "${program} ${address} already on chain, skipping"
-      continue
-    fi
+    echo "deploying ${program} $(program_address "$program")"
     solana program deploy -u "$RPC_URL" -k "$KEYPAIR" --upgrade-authority "$KEYPAIR" \
       --program-id "${KEYS_DIR:-target/keys}/${program}-keypair.json" \
+      --use-rpc --max-sign-attempts "$MAX_SIGN_ATTEMPTS" \
       ${price_flags[@]+"${price_flags[@]}"} "${ASSETS}/${program}.${CLUSTER}.so"
   done
 }

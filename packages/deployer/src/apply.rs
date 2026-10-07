@@ -38,12 +38,7 @@ pub enum Error {
     UnplannedProgram { program: &'static str },
 }
 
-#[derive(Debug)]
-pub struct Report {
-    pub steps: Vec<Step>,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Step {
     pub program: &'static str,
     pub action: &'static str,
@@ -53,22 +48,17 @@ pub struct Step {
 
 type StepFn<C> = fn(&mut C, &Plan, &Keypair) -> Result<Step, Error>;
 
-/// Runs the init steps in spec order. Configs are re-verified before the first write, and each
-/// step reads before it writes, so a re-run sends nothing.
-pub fn apply<C: Chain>(chain: &mut C, plan: &Plan, deployer: &Keypair) -> Result<Report, Error> {
-    apply_observed(chain, plan, deployer, &mut |_| {})
-}
-
-/// [`apply`], calling `observe` with each step as soon as it has landed, so a failure part-way
-/// still shows what was written.
-pub fn apply_observed<C: Chain>(
+/// Runs the init steps in spec order, calling `observe` with each step as soon as it has landed
+/// so a failure part-way still shows what was written. Configs are re-verified before the first
+/// write, and each step reads before it writes, so a re-run sends nothing.
+pub fn apply<C: Chain>(
     chain: &mut C,
     plan: &Plan,
     deployer: &Keypair,
     observe: &mut impl FnMut(&Step),
-) -> Result<Report, Error> {
+) -> Result<(), Error> {
     plan.verify_configs(&config::read(chain, &plan.release)?)?;
-    let steps: [StepFn<C>; 5] = [
+    let prover_steps: [StepFn<C>; 5] = [
         fund_hyper_reserve,
         fund_layerzero_reserve,
         init_hyper,
@@ -76,20 +66,15 @@ pub fn apply_observed<C: Chain>(
         init_aggregator,
     ];
 
-    let prover_steps = steps
-        .into_iter()
-        .map(|step| step(chain, plan, deployer))
-        .inspect(|result| result.iter().for_each(&mut *observe))
-        .collect::<Result<Vec<_>, _>>()?;
-    let layerzero_steps = layerzero::apply_observed(chain, plan, deployer, &mut |action| {
-        observe(&step(LAYERZERO_PROVER, action.name, action.signature))
-    })?
-    .into_iter()
-    .map(|action| step(LAYERZERO_PROVER, action.name, action.signature));
+    prover_steps.into_iter().try_for_each(|run| {
+        observe(&run(chain, plan, deployer)?);
 
-    Ok(Report {
-        steps: prover_steps.into_iter().chain(layerzero_steps).collect(),
-    })
+        Ok::<_, Error>(())
+    })?;
+
+    Ok(layerzero::apply(chain, plan, deployer, &mut |action| {
+        observe(&step(LAYERZERO_PROVER, action.name, action.signature))
+    })?)
 }
 
 fn fund_hyper_reserve(
@@ -360,12 +345,12 @@ impl From<config::Mismatch> for Error {
 
 #[cfg(test)]
 mod tests {
-    use layerzero_prover::instructions::required_alt_addresses_for;
+    use layerzero_prover::instructions::required_alt_addresses;
+    use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_sdk::rent::Rent;
 
     use super::*;
     use crate::classify::Status;
-    use crate::plan::LOCAL_PROVER;
     use crate::testing::{
         chain_with_deployed_members, chain_with_layerzero_store, keys, layerzero_store, pda, plan,
         program_data, release_address,
@@ -402,6 +387,17 @@ mod tests {
             .collect()
     }
 
+    fn applied(
+        chain: &mut impl Chain,
+        plan: &Plan,
+        deployer: &Keypair,
+    ) -> Result<Vec<Step>, Error> {
+        let mut steps = Vec::new();
+        apply(chain, plan, deployer, &mut |step| steps.push(step.clone()))?;
+
+        Ok(steps)
+    }
+
     fn transfer_lamports(instruction: &Instruction) -> u64 {
         let data = &instruction.data;
         assert_eq!(data.len(), SYSTEM_TRANSFER_DATA_LEN);
@@ -417,14 +413,14 @@ mod tests {
         let system = solana_sdk_ids::system_program::id();
         let mut chain = chain_with_layerzero_store(&plan);
 
-        apply(&mut chain, &plan, &deployer).unwrap();
+        applied(&mut chain, &plan, &deployer).unwrap();
 
         let hyper = release_address(HYPER_PROVER);
         let polymer = release_address(POLYMER_PROVER);
         let aggregator = release_address(AGGREGATOR_PROVER);
         let hyper_reserve = pda(hyper_prover::state::PDA_PAYER_SEED, HYPER_PROVER);
         let layerzero_reserve = pda(layerzero_prover::state::PDA_PAYER_SEED, LAYERZERO_PROVER);
-        assert_eq!(chain.sent.len(), 11);
+        assert_eq!(chain.sent.len(), 13);
         assert_eq!(keys(&chain.sent[0]), vec![payer, hyper_reserve]);
         assert_eq!(keys(&chain.sent[1]), vec![payer, layerzero_reserve]);
         assert_eq!(chain.sent[2].program_id, hyper);
@@ -462,14 +458,14 @@ mod tests {
                 pda(aggregator_prover::state::CONFIG_SEED, AGGREGATOR_PROVER),
                 system,
                 release_address(HYPER_PROVER),
-                release_address(LOCAL_PROVER),
                 release_address(POLYMER_PROVER),
+                release_address(LAYERZERO_PROVER),
             ]
         );
     }
 
     #[test]
-    fn layerzero_instructions_target_release_addresses_not_compiled_ids() {
+    fn layerzero_instructions_target_the_release_address_with_a_compute_unit_limit() {
         let plan = plan(5_000_000);
         let deployer = Keypair::new();
         let payer = deployer.pubkey();
@@ -480,11 +476,15 @@ mod tests {
         let oapp_registry = layerzero_prover::layerzero::oapp_registry_pda(&store).0;
         let mut chain = chain_with_layerzero_store(&plan);
 
-        apply(&mut chain, &plan, &deployer).unwrap();
+        applied(&mut chain, &plan, &deployer).unwrap();
 
-        let [init_path, set_path_config, create, extend, freeze, set_alt] = &chain.sent[5..] else {
-            panic!("expected six LayerZero instructions after the prover inits");
+        let [init_path_limit, init_path, set_path_config_limit, set_path_config, create, extend, freeze, set_alt] =
+            &chain.sent[5..]
+        else {
+            panic!("expected eight LayerZero instructions after the prover inits");
         };
+        let limit = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+        assert_eq!([init_path_limit, set_path_config_limit], [&limit, &limit]);
         assert_eq!(init_path.program_id, program);
         assert_eq!(
             keys(init_path)[..5],
@@ -532,14 +532,7 @@ mod tests {
             vec![payer, program, program_data(LAYERZERO_PROVER), store, alt]
         );
         let stored = layerzero_store(&plan);
-        assert_eq!(
-            extended_addresses(extend),
-            required_alt_addresses_for(&program, &stored)
-        );
-        assert_ne!(
-            extended_addresses(extend),
-            layerzero_prover::instructions::required_alt_addresses(&stored)
-        );
+        assert_eq!(extended_addresses(extend), required_alt_addresses(&stored));
     }
 
     #[test]
@@ -560,13 +553,13 @@ mod tests {
         .0;
         let mut chain = chain_with_deployed_members();
 
-        let result = apply(&mut chain, &plan, &deployer);
+        let result = applied(&mut chain, &plan, &deployer);
 
         assert!(matches!(
             result,
             Err(Error::LayerZero(layerzero::Error::StoreMissing { address })) if address == store
         ));
-        let init = &chain.sent[5];
+        let init = &chain.sent[6];
         assert_eq!(init.program_id, program);
         assert_eq!(
             keys(init),
@@ -580,7 +573,7 @@ mod tests {
         let mut chain = chain_with_deployed_members();
         let mut observed = Vec::new();
 
-        let result = apply_observed(&mut chain, &plan, &Keypair::new(), &mut |step| {
+        let result = apply(&mut chain, &plan, &Keypair::new(), &mut |step| {
             observed.push((step.program, step.action, step.signature.is_some()));
         });
 
@@ -605,7 +598,7 @@ mod tests {
         let plan = plan(1_000);
         let mut chain = chain_with_layerzero_store(&plan);
 
-        apply(&mut chain, &plan, &Keypair::new()).unwrap();
+        applied(&mut chain, &plan, &Keypair::new()).unwrap();
 
         assert_eq!(
             transfer_lamports(&chain.sent[0]),
@@ -622,12 +615,10 @@ mod tests {
         let plan = plan(0);
         let mut chain = chain_with_layerzero_store(&plan);
 
-        let report = apply(&mut chain, &plan, &Keypair::new()).unwrap();
+        let report = applied(&mut chain, &plan, &Keypair::new()).unwrap();
 
-        assert!(report.steps[..2]
-            .iter()
-            .all(|step| step.signature.is_none()));
-        assert_eq!(chain.sent.len(), 9);
+        assert!(report[..2].iter().all(|step| step.signature.is_none()));
+        assert_eq!(chain.sent.len(), 11);
     }
 
     #[test]
@@ -636,7 +627,7 @@ mod tests {
         plan.programs.get_mut(HYPER_PROVER).unwrap().state.status = Status::Live;
         let mut chain = chain_with_deployed_members();
 
-        let result = apply(&mut chain, &plan, &Keypair::new());
+        let result = applied(&mut chain, &plan, &Keypair::new());
 
         assert!(matches!(
             result,

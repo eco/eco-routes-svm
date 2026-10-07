@@ -8,5 +8,9 @@
 | Fees and account rent allowance | 0.200000000 SOL |
 | **Required** | 0.210000000 SOL |
 | Balance of `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx` | 0.000000001 SOL |
+| LayerZero path rent (paid by its reserve) | 0.035614320 SOL |
+| LayerZero reserve after top-up | 0.005000000 SOL |
 
 **Short by 0.209999999 SOL**: fund `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx`, then plan again.
+
+**LayerZero reserve short by 0.031505200 SOL**: raise `layerzero_reserve_lamports` to at least 36505200.

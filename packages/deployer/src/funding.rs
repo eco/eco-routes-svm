@@ -6,6 +6,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
 
 use crate::chain::{self, Chain};
+use crate::layerzero_state;
 use crate::plan::{Action, Plan, HYPER_PROVER, LAYERZERO_PROVER};
 
 /// Transaction fees, the configs', `Store`'s and lookup table's rent, and `solana-verify`'s
@@ -25,6 +26,8 @@ pub enum Error {
         balance: Sol,
         required: Sol,
     },
+    #[error("the {LAYERZERO_PROVER} reserve will hold {reserve} but its path setup needs {required}; raise layerzero_reserve_lamports")]
+    InsufficientLayerZeroReserve { reserve: Sol, required: Sol },
 }
 
 /// What a run takes from the deployer, against what it holds. Not part of the plan hash: every
@@ -39,6 +42,9 @@ pub struct Funding {
     /// `solana program deploy` writes one buffer at a time and refunds it into the program data.
     largest_buffer: Sol,
     reserve_top_ups: Sol,
+    /// The LayerZero reserve once topped up; it pays the endpoint and ULN accounts of every path.
+    layerzero_reserve: Sol,
+    layerzero_path_rent: Sol,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,45 +76,58 @@ impl Funding {
             .map(|length| rent.minimum_balance(UpgradeableLoaderState::size_of_buffer(*length)))
             .max()
             .unwrap_or(0);
-        let reserves = [
-            (
-                HYPER_PROVER,
-                hyper_prover::state::PDA_PAYER_SEED,
-                plan.inputs.hyper_reserve_lamports,
-            ),
-            (
-                LAYERZERO_PROVER,
-                layerzero_prover::state::PDA_PAYER_SEED,
-                plan.inputs.layerzero_reserve_lamports,
-            ),
-        ];
-        let reserve_top_ups = reserves
-            .into_iter()
-            .map(|(program, seed, requested_lamports)| {
-                let address = plan.release.programs[program].address;
-                let reserve = Pubkey::find_program_address(&[seed], &address).0;
+        let reserve = |program, seed, requested_lamports| {
+            let address = plan.release.programs[program].address;
+            let reserve = Pubkey::find_program_address(&[seed], &address).0;
+            let balance = lamports(chain, &reserve)?;
 
-                reserve_top_up(chain, &reserve, requested_lamports)
-            })
-            .sum::<Result<u64, _>>()?;
+            Ok::<_, chain::Error>((balance, top_up(balance, requested_lamports)))
+        };
+        let (_, hyper_top_up) = reserve(
+            HYPER_PROVER,
+            hyper_prover::state::PDA_PAYER_SEED,
+            plan.inputs.hyper_reserve_lamports,
+        )?;
+        let (layerzero_balance, layerzero_top_up) = reserve(
+            LAYERZERO_PROVER,
+            layerzero_prover::state::PDA_PAYER_SEED,
+            plan.inputs.layerzero_reserve_lamports,
+        )?;
 
         Ok(Self {
             deployer: *deployer,
             balance: Sol(lamports(chain, deployer)?),
             program_rent: Sol(program_rent),
             largest_buffer: Sol(largest_buffer),
-            reserve_top_ups: Sol(reserve_top_ups),
+            reserve_top_ups: Sol(hyper_top_up + layerzero_top_up),
+            layerzero_reserve: Sol(layerzero_balance + layerzero_top_up),
+            layerzero_path_rent: Sol(layerzero_path_rent(plan)),
         })
     }
 
     pub fn require(&self) -> Result<(), Error> {
-        match self.balance >= self.required() {
-            true => Ok(()),
-            false => Err(Error::InsufficientBalance {
+        if self.balance < self.required() {
+            return Err(Error::InsufficientBalance {
                 deployer: self.deployer,
                 balance: self.balance,
                 required: self.required(),
+            });
+        }
+
+        match self.layerzero_reserve >= self.layerzero_reserve_required() {
+            true => Ok(()),
+            false => Err(Error::InsufficientLayerZeroReserve {
+                reserve: self.layerzero_reserve,
+                required: self.layerzero_reserve_required(),
             }),
+        }
+    }
+
+    /// The path rent, and the reserve must stay rent-exempt after paying it.
+    fn layerzero_reserve_required(&self) -> Sol {
+        match self.layerzero_path_rent.0 {
+            0 => Sol(0),
+            rent => Sol(rent + Rent::default().minimum_balance(0)),
         }
     }
 
@@ -126,7 +145,35 @@ pub fn reserve_top_up(
     reserve: &Pubkey,
     requested_lamports: u64,
 ) -> Result<u64, chain::Error> {
-    Ok(target_lamports(requested_lamports).saturating_sub(lamports(chain, reserve)?))
+    Ok(top_up(lamports(chain, reserve)?, requested_lamports))
+}
+
+fn top_up(balance: u64, requested_lamports: u64) -> u64 {
+    target_lamports(requested_lamports).saturating_sub(balance)
+}
+
+/// Only a run that initializes the LayerZero prover creates path accounts.
+fn layerzero_path_rent(plan: &Plan) -> u64 {
+    if !plan.programs[LAYERZERO_PROVER]
+        .actions
+        .contains(&Action::Init)
+    {
+        return 0;
+    }
+
+    plan.inputs
+        .layerzero_peers
+        .iter()
+        .map(|peer| {
+            let live = plan
+                .live_configs
+                .layerzero_paths
+                .iter()
+                .find(|path| path.eid == peer.eid);
+
+            layerzero_state::path_setup_rent(live)
+        })
+        .sum()
 }
 
 /// A reserve below the rent-exempt minimum would be a rent-paying account, which the runtime
@@ -153,14 +200,32 @@ impl fmt::Display for Funding {
             program_rent,
             largest_buffer,
             reserve_top_ups,
+            layerzero_reserve,
+            layerzero_path_rent,
         } = self;
         let required = self.required();
-        let verdict = match balance >= &required {
+        let reserve_required = self.layerzero_reserve_required();
+        let shortfalls: Vec<String> = [
+            (balance < &required).then(|| {
+                format!(
+                    "**Short by {}**: fund `{deployer}`, then plan again.",
+                    Sol(required.0 - balance.0)
+                )
+            }),
+            (layerzero_reserve < &reserve_required).then(|| {
+                format!(
+                    "**LayerZero reserve short by {}**: raise `layerzero_reserve_lamports` to at least {}.",
+                    Sol(reserve_required.0 - layerzero_reserve.0),
+                    reserve_required.0
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let verdict = match shortfalls.is_empty() {
             true => "Funded.".to_owned(),
-            false => format!(
-                "**Short by {}**: fund `{deployer}`, then plan again.",
-                Sol(required.0 - balance.0)
-            ),
+            false => shortfalls.join("\n\n"),
         };
 
         write!(
@@ -172,7 +237,9 @@ impl fmt::Display for Funding {
              | Reserve top-ups | {reserve_top_ups} |\n\
              | Fees and account rent allowance | {} |\n\
              | **Required** | {required} |\n\
-             | Balance of `{deployer}` | {balance} |\n\n\
+             | Balance of `{deployer}` | {balance} |\n\
+             | LayerZero path rent (paid by its reserve) | {layerzero_path_rent} |\n\
+             | LayerZero reserve after top-up | {layerzero_reserve} |\n\n\
              {verdict}\n",
             Sol(ALLOWANCE_LAMPORTS),
         )
@@ -195,6 +262,7 @@ mod tests {
     use solana_sdk::account::Account;
 
     use super::*;
+    use crate::layerzero_state::Path;
     use crate::testing::{self, pda, release_address, RecordingChain};
 
     const DEPLOYER: Pubkey = Pubkey::new_from_array([7; 32]);
@@ -283,7 +351,12 @@ mod tests {
 
     #[test]
     fn require_rejects_a_balance_below_the_estimate() {
-        let plan = testing::plan(0);
+        let mut plan = testing::plan(0);
+        plan.programs
+            .get_mut(LAYERZERO_PROVER)
+            .unwrap()
+            .actions
+            .clear();
         let estimate = |lamports| {
             Funding::estimate(&funded(lamports), &plan, &binaries(&plan), &DEPLOYER).unwrap()
         };
@@ -298,6 +371,52 @@ mod tests {
                         && balance == Sol(ALLOWANCE_LAMPORTS - 1)
                         && required == Sol(ALLOWANCE_LAMPORTS)
             )));
+    }
+
+    #[test]
+    fn layerzero_reserve_must_cover_every_path_account_and_stay_rent_exempt() {
+        let path_rent = [25, 2_061, 41, 82, 1_088, 1_052]
+            .map(rent)
+            .iter()
+            .sum::<u64>();
+        let required = path_rent + rent(0);
+        let estimate = |reserve_lamports| {
+            let plan = testing::plan(reserve_lamports);
+            Funding::estimate(&funded(u64::MAX / 2), &plan, &binaries(&plan), &DEPLOYER).unwrap()
+        };
+
+        assert!(estimate(required).require().is_ok());
+        assert!(estimate(required - 1)
+            .require()
+            .is_err_and(|error| matches!(
+                error,
+                Error::InsufficientLayerZeroReserve { reserve, required: needed }
+                    if reserve == Sol(required - 1) && needed == Sol(required)
+            )));
+    }
+
+    #[test]
+    fn layerzero_reserve_needs_rent_only_for_path_accounts_not_yet_created() {
+        let mut plan = testing::plan(0);
+        let peer = &plan.inputs.layerzero_peers[0];
+        let expected = Path::expected(&layerzero_prover::ID, &peer.into(), &peer.path);
+        plan.live_configs.layerzero_paths = vec![Path {
+            send: None,
+            receive: None,
+            ..expected.clone()
+        }];
+        let reserve_required = |plan: &Plan| {
+            Funding::estimate(&funded(0), plan, &binaries(plan), &DEPLOYER)
+                .unwrap()
+                .layerzero_reserve_required()
+        };
+
+        assert_eq!(
+            reserve_required(&plan),
+            Sol(rent(1_088) + rent(1_052) + rent(0))
+        );
+        plan.live_configs.layerzero_paths = vec![expected];
+        assert_eq!(reserve_required(&plan), Sol(0));
     }
 
     #[test]

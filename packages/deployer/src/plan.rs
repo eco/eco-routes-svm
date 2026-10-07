@@ -22,7 +22,7 @@ pub const POLYMER_PROVER: &str = "polymer_prover";
 pub const AGGREGATOR_PROVER: &str = "aggregator_prover";
 pub const LAYERZERO_PROVER: &str = "layerzero_prover";
 /// Mirrors `AGGREGATOR_MEMBERS` in `scripts/program-keypairs.mjs`; the order is the on-chain config order.
-pub const AGGREGATOR_MEMBERS: [&str; 3] = [HYPER_PROVER, LOCAL_PROVER, POLYMER_PROVER];
+pub const AGGREGATOR_MEMBERS: [&str; 3] = [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER];
 const PROGRAMS_WITH_INIT: [&str; 4] = [
     HYPER_PROVER,
     POLYMER_PROVER,
@@ -62,6 +62,8 @@ pub enum Error {
     UnknownCluster { value: String },
     #[error("invalid plan hash {value:?}, expected 64 hex characters")]
     InvalidPlanHash { value: String },
+    #[error("{LAYERZERO_PROVER} is released at {release} but this deployer was built for {compiled}; build it from the release's deploy tag")]
+    BuiltForAnotherRelease { release: Pubkey, compiled: Pubkey },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +145,8 @@ pub struct Plan {
     pub release: Release,
     /// Of the ledger the RPC serves; equal to the release cluster's.
     pub genesis_hash: Hash,
+    /// Pays for the run and is every new program's upgrade authority until finalize.
+    pub deployer: Pubkey,
     pub programs: BTreeMap<String, PlannedProgram>,
     pub inputs: Inputs,
     /// Prover configs as found on chain at planning time; part of the plan hash.
@@ -158,11 +162,13 @@ impl Plan {
     pub fn build(
         release: Release,
         genesis_hash: Hash,
+        deployer: Pubkey,
         mut states: BTreeMap<String, ProgramState>,
         live_configs: Configs,
         inputs: Inputs,
     ) -> Result<Self, Error> {
         require_cluster(release.cluster, genesis_hash)?;
+        require_compiled_layerzero(&release)?;
         let expected_configs = expected_configs(&release, &inputs)?;
         layerzero::check_transaction_sizes(
             &release.programs[LAYERZERO_PROVER].address,
@@ -194,6 +200,7 @@ impl Plan {
         let plan = Self {
             release,
             genesis_hash,
+            deployer,
             programs,
             inputs,
             live_configs,
@@ -298,13 +305,13 @@ impl Plan {
             ..
         } = self;
         let table = programs.iter().fold(
-            String::from("| Program | Address | Status | Actions |\n|---|---|---|---|\n"),
+            "| Program | Address | Status | Actions |\n|---|---|---|---|\n".to_owned(),
             |table, (name, program)| {
                 let actions = match program.actions.is_empty() {
                     true => "none".to_owned(),
                     false => join_displayed(program.actions.iter().map(action_label)),
                 };
-                let status = PlannedStatus::from(&program.state.status);
+                let status: PlannedStatus = (&program.state.status).into();
 
                 table
                     + &format!(
@@ -327,6 +334,7 @@ impl Plan {
         let Self {
             release,
             genesis_hash,
+            deployer,
             programs,
             inputs,
             live_configs,
@@ -336,6 +344,7 @@ impl Plan {
             version: &release.version,
             cluster: release.cluster,
             genesis_hash: genesis_hash.to_string(),
+            deployer: deployer.to_string(),
             programs: programs
                 .iter()
                 .map(|(name, program)| {
@@ -345,7 +354,7 @@ impl Plan {
                     )
                 })
                 .collect(),
-            inputs: CanonicalInputs::from(inputs),
+            inputs: inputs.into(),
             live_configs: live_configs.entries().into_iter().collect(),
             live_layerzero_alt: live_configs.layerzero_alt.as_ref().map(Alt::describe),
             live_layerzero_paths: live_configs
@@ -383,7 +392,9 @@ impl fmt::Display for PlannedStatus {
 
 impl Cluster {
     pub fn genesis_hash(self) -> Hash {
-        ClusterType::from(self)
+        let cluster: ClusterType = self.into();
+
+        cluster
             .get_genesis_hash()
             .expect("devnet and mainnet have a known genesis hash")
     }
@@ -486,6 +497,20 @@ fn require_cluster(cluster: Cluster, actual: Hash) -> Result<(), Error> {
             cluster,
             expected,
             actual,
+        }),
+    }
+}
+
+/// The lookup table and its on-chain check derive from the compiled-in ID, so the deployer
+/// must be built from the tree that compiled the release's LayerZero prover.
+fn require_compiled_layerzero(release: &Release) -> Result<(), Error> {
+    let release = release.programs[LAYERZERO_PROVER].address;
+
+    match release == layerzero_prover::ID {
+        true => Ok(()),
+        false => Err(Error::BuiltForAnotherRelease {
+            release,
+            compiled: layerzero_prover::ID,
         }),
     }
 }
@@ -611,6 +636,7 @@ struct CanonicalPlan<'a> {
     version: &'a str,
     cluster: Cluster,
     genesis_hash: String,
+    deployer: String,
     programs: BTreeMap<&'a str, CanonicalProgram>,
     inputs: CanonicalInputs,
     live_configs: BTreeMap<&'static str, Option<Vec<String>>>,
@@ -819,6 +845,7 @@ mod tests {
             Plan::build(
                 release,
                 genesis_hash,
+                deployer(),
                 states,
                 configs,
                 Inputs::parse(raw).unwrap(),
@@ -852,6 +879,13 @@ mod tests {
 
     fn deployer() -> Pubkey {
         Pubkey::new_from_array([99; 32])
+    }
+
+    fn fixture_address(index: usize, program: &str) -> Pubkey {
+        match program {
+            LAYERZERO_PROVER => layerzero_prover::ID,
+            _ => address(index),
+        }
     }
 
     fn uln_json() -> String {
@@ -898,7 +932,7 @@ mod tests {
                     (
                         (*program).into(),
                         ReleaseProgram {
-                            address: address(index),
+                            address: fixture_address(index, program),
                             so_sha256: solana_sha256_hasher::hash(&so_bytes(program)).to_bytes(),
                         },
                     )
@@ -920,7 +954,7 @@ mod tests {
                 (
                     (*program).into(),
                     ProgramState {
-                        address: address(index),
+                        address: fixture_address(index, program),
                         status,
                         authority,
                         data_hash,
@@ -963,6 +997,43 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn plan_rejects_a_release_the_deployer_was_not_built_for() {
+        let mut other = fixture();
+        other
+            .release
+            .programs
+            .get_mut(LAYERZERO_PROVER)
+            .unwrap()
+            .address = address(42);
+
+        assert!(matches!(
+            other.plan(),
+            Err(Error::BuiltForAnotherRelease { release, compiled })
+                if release == address(42) && compiled == layerzero_prover::ID
+        ));
+    }
+
+    #[test]
+    fn aggregator_members_mirror_the_keypair_script_in_order() {
+        let script = include_str!("../../../scripts/program-keypairs.mjs");
+        let members = AGGREGATOR_MEMBERS.map(|member| format!(r#""{member}""#));
+
+        assert!(script.contains(&format!(
+            "const AGGREGATOR_MEMBERS = [{}];",
+            members.join(", ")
+        )));
+    }
+
+    #[test]
+    fn plan_hash_covers_the_deployer() {
+        let plan = fixture().plan().unwrap();
+
+        assert!(plan
+            .canonical_json()
+            .contains(&format!(r#""deployer":"{}""#, deployer())));
     }
 
     #[test]
@@ -1407,6 +1478,7 @@ mod tests {
         let rebuilt = Plan::build(
             release,
             Cluster::Devnet.genesis_hash(),
+            deployer(),
             fixture().states,
             Configs::default(),
             Inputs::parse(inputs).unwrap(),
@@ -1493,7 +1565,7 @@ mod tests {
             matches!(
                 &error,
                 Error::LayerZero(layerzero::Error::TransactionTooLarge { transaction, size, limit })
-                    if transaction == "set_path_config for eid 30184" && *size == 1276 && *limit == 1232
+                    if transaction == "set_path_config for eid 30184" && *size == 1284 && *limit == 1232
             ),
             "{error:?}"
         );

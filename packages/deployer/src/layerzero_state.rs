@@ -1,15 +1,23 @@
-use layerzero_prover::instructions::{required_alt_addresses_for, PathConfig};
+use layerzero_prover::instructions::{required_alt_addresses, PathConfig};
 use layerzero_prover::layerzero::{self, ExecutorConfig, UlnConfig, ENDPOINT_ID};
 use layerzero_prover::state::{Peer, Store, STORE_SEED};
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_sdk::account::Account;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk_ids::address_lookup_table;
 
 use crate::chain::Chain;
 use crate::config::{Error, Mismatch};
 use crate::plan::LAYERZERO_PROVER;
 use crate::uln::{self, ReceiveConfig, SendConfig};
+
+/// Sizes, discriminator included, of the accounts `pda_payer` pays for as delegate, per
+/// LayerZero-v2@9c741e7f: `init_path` creates the endpoint `Nonce`, `PendingInboundNonce` (256
+/// nonces), `SendLibraryConfig` and `ReceiveLibraryConfig`; `set_path_config` creates ULN302's
+/// `SendConfig` and `ReceiveConfig` (16 DVNs each list). Devnet holds thousands of each size.
+const INIT_PATH_ACCOUNT_SIZES: [usize; 4] = [25, 2061, 41, 82];
+const SET_PATH_CONFIG_ACCOUNT_SIZES: [usize; 2] = [1088, 1052];
 
 /// The endpoint and ULN accounts a peer's path creates, derived for a deployment at `program`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +51,23 @@ pub enum AltFault {
     Unfrozen,
     Deactivated,
     Incomplete { missing: Pubkey },
+}
+
+/// Rent `pda_payer` still has to pay to set up a peer's path, given what is on chain for it.
+pub fn path_setup_rent(live: Option<&Path>) -> u64 {
+    let rent = Rent::default();
+    let nonce_exists = live.is_some_and(|path| path.nonce);
+    let configs_exist = live.is_some_and(|path| path.send.is_some() || path.receive.is_some());
+
+    [
+        (nonce_exists, INIT_PATH_ACCOUNT_SIZES.as_slice()),
+        (configs_exist, SET_PATH_CONFIG_ACCOUNT_SIZES.as_slice()),
+    ]
+    .into_iter()
+    .filter(|(exists, _)| !exists)
+    .flat_map(|(_, sizes)| sizes)
+    .map(|size| rent.minimum_balance(*size))
+    .sum()
 }
 
 pub fn store_address(program: &Pubkey) -> Pubkey {
@@ -143,19 +168,19 @@ pub fn read_paths(chain: &impl Chain, program: &Pubkey, store: &Store) -> Result
         .collect()
 }
 
-pub fn read_alt(chain: &impl Chain, program: &Pubkey, store: &Store) -> Result<Option<Alt>, Error> {
+pub fn read_alt(chain: &impl Chain, store: &Store) -> Result<Option<Alt>, Error> {
     let address = store.alt;
     if address == Pubkey::default() {
         return Ok(None);
     }
-    let fault = alt_fault(chain.account(&address)?, program, store);
+    let fault = alt_fault(chain.account(&address)?, store);
 
     Ok(Some(Alt { address, fault }))
 }
 
 /// After finalization nothing can replace or repair the table, so it must be frozen, never
 /// deactivated, and hold every address `lz_receive` needs.
-fn alt_fault(account: Option<Account>, program: &Pubkey, store: &Store) -> Option<AltFault> {
+fn alt_fault(account: Option<Account>, store: &Store) -> Option<AltFault> {
     let Some(account) = account.filter(|account| account.owner == address_lookup_table::id())
     else {
         return Some(AltFault::Invalid);
@@ -170,7 +195,7 @@ fn alt_fault(account: Option<Account>, program: &Pubkey, store: &Store) -> Optio
         return Some(AltFault::Deactivated);
     }
 
-    required_alt_addresses_for(program, store)
+    required_alt_addresses(store)
         .into_iter()
         .find(|address| !table.addresses.contains(address))
         .map(|missing| AltFault::Incomplete { missing })

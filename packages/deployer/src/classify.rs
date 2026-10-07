@@ -4,6 +4,13 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::chain::{self, Chain};
 
+/// Program IDs are public from release on, and loader v3 creates both accounts with
+/// `create_account`, which refuses an address that already holds lamports; nobody can drain them.
+const PREFUNDED_PROGRAM: &str =
+    "a system account already holds lamports here, so the loader cannot deploy; raise its salt";
+const PREFUNDED_PROGRAMDATA: &str =
+    "its programdata address already holds lamports, so the loader cannot deploy; raise its salt";
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -33,8 +40,11 @@ pub fn classify(
     deployer: &Pubkey,
 ) -> Result<ProgramState, Error> {
     let Some(program) = chain.account(address)? else {
-        return Ok(state(address, Status::New, None, None));
+        return undeployed(chain, address);
     };
+    if program.owner == solana_sdk_ids::system_program::id() {
+        return Ok(foreign(address, PREFUNDED_PROGRAM));
+    }
     let Some(programdata_address) = programdata_address(&program) else {
         return Ok(foreign(address, "not a program"));
     };
@@ -74,6 +84,16 @@ fn status(authority: Option<Pubkey>, hash_matches: bool, deployer: &Pubkey) -> S
         Some(authority) => Status::Foreign {
             reason: format!("authority {authority}"),
         },
+    }
+}
+
+fn undeployed(chain: &impl Chain, address: &Pubkey) -> Result<ProgramState, Error> {
+    let loader = solana_sdk_ids::bpf_loader_upgradeable::id();
+    let programdata = Pubkey::find_program_address(&[address.as_ref()], &loader).0;
+
+    match chain.account(&programdata)? {
+        None => Ok(state(address, Status::New, None, None)),
+        Some(_) => Ok(foreign(address, PREFUNDED_PROGRAMDATA)),
     }
 }
 
@@ -277,7 +297,7 @@ mod tests {
         let chain = FakeChain {
             accounts: HashMap::from([(
                 address(),
-                account(solana_sdk_ids::system_program::id(), vec![]),
+                account(Pubkey::new_from_array([9; 32]), vec![]),
             )]),
         };
 
@@ -285,6 +305,42 @@ mod tests {
             classified(&chain).status,
             Status::Foreign {
                 reason: "not a program".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn foreign_when_someone_prefunded_the_program_address() {
+        let chain = FakeChain {
+            accounts: HashMap::from([(
+                address(),
+                account(solana_sdk_ids::system_program::id(), vec![]),
+            )]),
+        };
+
+        assert_eq!(
+            classified(&chain).status,
+            Status::Foreign {
+                reason: PREFUNDED_PROGRAM.to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn foreign_when_someone_prefunded_the_programdata_address() {
+        let loader = solana_sdk_ids::bpf_loader_upgradeable::id();
+        let programdata = Pubkey::find_program_address(&[address().as_ref()], &loader).0;
+        let chain = FakeChain {
+            accounts: HashMap::from([(
+                programdata,
+                account(solana_sdk_ids::system_program::id(), vec![]),
+            )]),
+        };
+
+        assert_eq!(
+            classified(&chain).status,
+            Status::Foreign {
+                reason: PREFUNDED_PROGRAMDATA.to_owned()
             }
         );
     }

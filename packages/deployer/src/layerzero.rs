@@ -1,5 +1,5 @@
 use anchor_lang::{system_program, InstructionData, ToAccountMetas};
-use layerzero_prover::instructions::{required_alt_addresses_for, InitArgs, PathConfig};
+use layerzero_prover::instructions::{required_alt_addresses, InitArgs, PathConfig};
 use layerzero_prover::layerzero::{self, ENDPOINT_ID, LZ_RECEIVE_TYPES_SEED, ULN_ID};
 use layerzero_prover::state::{Peer, PDA_PAYER_SEED};
 use solana_address_lookup_table_interface::instruction::{
@@ -21,6 +21,9 @@ use crate::layerzero_state::{self, Path};
 use crate::plan::{Plan, LAYERZERO_PROVER};
 
 const ALT_EXTEND_CHUNK: usize = 20;
+/// The transaction maximum: `init_path` and `set_path_config` nest several endpoint and ULN302
+/// CPIs whose cost on the real programs is unmeasured, and the default 200k must not decide it.
+const COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 const PACKET_DATA_SIZE: usize = 1232;
 /// Any price: the instruction's size does not depend on it.
 const SIZING_PRICE_MICRO_LAMPORTS: u64 = 1;
@@ -48,15 +51,15 @@ pub enum Error {
 }
 
 /// One LayerZero setup action; `signature` is `None` when it was already done.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Action {
     pub name: &'static str,
     pub signature: Option<Signature>,
 }
 
 /// Rejects a setup whose `init` or any `set_path_config` would not fit one legacy transaction
-/// once `apply --compute-unit-price` prepends its price instruction: deployer as sole signer and
-/// fee payer, built with the real instructions at `program`.
+/// with its compute-unit limit and the price `apply --compute-unit-price` prepends: deployer as
+/// sole signer and fee payer, built with the real instructions at `program`.
 pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Result<(), Error> {
     let deployer = Pubkey::new_from_array([1; 32]);
     let init = (
@@ -88,30 +91,22 @@ pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Res
 
 fn priced_transaction_size(deployer: &Pubkey, instruction: Instruction) -> usize {
     let price = ComputeBudgetInstruction::set_compute_unit_price(SIZING_PRICE_MICRO_LAMPORTS);
-    let message =
-        Message::new_with_blockhash(&[price, instruction], Some(deployer), &Hash::default());
+    let instructions: Vec<Instruction> = [price].into_iter().chain(limited(instruction)).collect();
+    let message = Message::new_with_blockhash(&instructions, Some(deployer), &Hash::default());
 
     bincode::serialize(&Transaction::new_unsigned(message))
         .expect("a transaction must serialize")
         .len()
 }
 
-/// Init, paths and lookup table in spec order; every action reads before it writes.
+/// Init, paths and lookup table in spec order, calling `observe` with each action as soon as it
+/// has landed; every action reads before it writes.
 pub fn apply<C: Chain>(
     chain: &mut C,
     plan: &Plan,
     deployer: &Keypair,
-) -> Result<Vec<Action>, Error> {
-    apply_observed(chain, plan, deployer, &mut |_| {})
-}
-
-/// [`apply`], calling `observe` with each action as soon as it has landed.
-pub fn apply_observed<C: Chain>(
-    chain: &mut C,
-    plan: &Plan,
-    deployer: &Keypair,
     observe: &mut impl FnMut(&Action),
-) -> Result<Vec<Action>, Error> {
+) -> Result<(), Error> {
     let program = plan
         .programs
         .get(LAYERZERO_PROVER)
@@ -123,44 +118,23 @@ pub fn apply_observed<C: Chain>(
         .iter()
         .map(|peer| (peer.into(), peer.path.clone()))
         .collect();
-    let mut landed = |name, signature: Option<Signature>| {
-        observe(&action(name, signature));
+    let mut landed = |name, signature| observe(&Action { name, signature });
 
-        signature
-    };
-    let init = init(chain, plan, &program, deployer, &peers)?;
-    let init = landed("init", init);
-    let init_paths = peers
-        .iter()
-        .map(|(peer, _)| init_path(chain, &program, deployer, peer))
-        .map(|signature| signature.map(|signature| landed("init_path", signature)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let set_path_configs = peers
-        .iter()
-        .map(|(peer, path)| set_path_config(chain, &program, deployer, peer, path))
-        .map(|signature| signature.map(|signature| landed("set_path_config", signature)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let set_alt = set_alt(chain, &program, deployer)?;
-    let set_alt = landed("set_alt", set_alt);
+    landed("init", init(chain, plan, &program, deployer, &peers)?);
+    peers.iter().try_for_each(|(peer, _)| {
+        landed("init_path", init_path(chain, &program, deployer, peer)?);
 
-    Ok([action("init", init)]
-        .into_iter()
-        .chain(
-            init_paths
-                .into_iter()
-                .map(|signature| action("init_path", signature)),
-        )
-        .chain(
-            set_path_configs
-                .into_iter()
-                .map(|signature| action("set_path_config", signature)),
-        )
-        .chain([action("set_alt", set_alt)])
-        .collect())
-}
+        Ok::<_, Error>(())
+    })?;
+    peers.iter().try_for_each(|(peer, path)| {
+        let signature = set_path_config(chain, &program, deployer, peer, path)?;
+        landed("set_path_config", signature);
 
-fn action(name: &'static str, signature: Option<Signature>) -> Action {
-    Action { name, signature }
+        Ok::<_, Error>(())
+    })?;
+    landed("set_alt", set_alt(chain, &program, deployer)?);
+
+    Ok(())
 }
 
 fn init(
@@ -183,7 +157,7 @@ fn init(
     send(
         chain,
         deployer,
-        &[init_instruction(program, &deployer.pubkey(), peers)],
+        &limited(init_instruction(program, &deployer.pubkey(), peers)),
     )
 }
 
@@ -200,7 +174,7 @@ fn init_path(
     send(
         chain,
         deployer,
-        &[init_path_instruction(program, &deployer.pubkey(), peer)],
+        &limited(init_path_instruction(program, &deployer.pubkey(), peer)),
     )
 }
 
@@ -220,7 +194,7 @@ fn set_path_config(
     }
     let instruction = set_path_config_instruction(program, &deployer.pubkey(), peer.eid, path);
 
-    send(chain, deployer, &[instruction])
+    send(chain, deployer, &limited(instruction))
 }
 
 /// Creates, fills and freezes a lookup table, then records it. Freezing and recording share a
@@ -239,7 +213,7 @@ fn set_alt(
     }
     let authority = deployer.pubkey();
     let (create, alt) = create_lookup_table(authority, authority, chain.slot()?);
-    let required = required_alt_addresses_for(program, &store);
+    let required = required_alt_addresses(&store);
     let mut extensions = required
         .chunks(ALT_EXTEND_CHUNK)
         .map(|addresses| extend_lookup_table(alt, authority, Some(authority), addresses.to_vec()));
@@ -258,6 +232,13 @@ fn set_alt(
         .chain(extensions.map(|extension| vec![extension]))
         .chain([last])
         .try_fold(None, |_, instructions| send(chain, deployer, &instructions))
+}
+
+fn limited(instruction: Instruction) -> [Instruction; 2] {
+    [
+        ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+        instruction,
+    ]
 }
 
 fn send(
@@ -435,6 +416,19 @@ mod tests {
         }
     }
 
+    fn applied(
+        chain: &mut impl Chain,
+        plan: &Plan,
+        deployer: &Keypair,
+    ) -> Result<Vec<Action>, Error> {
+        let mut actions = Vec::new();
+        apply(chain, plan, deployer, &mut |action| {
+            actions.push(action.clone())
+        })?;
+
+        Ok(actions)
+    }
+
     fn max_uln() -> UlnConfig {
         UlnConfig {
             confirmations: 15,
@@ -468,7 +462,7 @@ mod tests {
         let plan = plan(5_000_000);
         let mut setup = full_setup(&plan);
 
-        let actions = apply(&mut setup.chain, &plan, &Keypair::new()).unwrap();
+        let actions = applied(&mut setup.chain, &plan, &Keypair::new()).unwrap();
 
         assert!(actions.iter().all(|action| action.signature.is_none()));
         assert!(setup.chain.sent.is_empty());
@@ -480,7 +474,7 @@ mod tests {
         let mut setup = full_setup(&plan);
         with_other_send_executor(&mut setup, &plan);
 
-        let result = apply(&mut setup.chain, &plan, &Keypair::new());
+        let result = applied(&mut setup.chain, &plan, &Keypair::new());
 
         assert!(matches!(
             result,
@@ -495,7 +489,7 @@ mod tests {
         let mut setup = full_setup(&plan);
         setup.chain.accounts.remove(&setup.receive_config);
 
-        let result = apply(&mut setup.chain, &plan, &Keypair::new());
+        let result = applied(&mut setup.chain, &plan, &Keypair::new());
 
         assert!(matches!(result, Err(Error::PartialPathConfig { eid: 1 })));
         assert!(setup.chain.sent.is_empty());

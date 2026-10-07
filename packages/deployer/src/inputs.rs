@@ -287,7 +287,7 @@ fn parse_layerzero_peers(value: &str) -> Result<Vec<LayerZeroPeer>, Error> {
                 chain_id,
                 path,
             } = peer;
-            let path = PathConfig::from(path);
+            let path: PathConfig = path.into();
             path.validate().map_err(|_| Error::UnpinnedPath { eid })?;
             require_sorted_dvns(eid, &path)?;
 
