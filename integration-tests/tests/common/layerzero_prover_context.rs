@@ -17,7 +17,6 @@ use layerzero_prover::state::{pda_payer_pda, LzReceiveTypesAccount, Peer, Pendin
 use portal::state::FulfillMarker;
 use portal::types::Reward;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::account::Account;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
@@ -74,7 +73,7 @@ impl LayerZeroProver<'_> {
     pub fn install(&mut self, authority: Pubkey) {
         self.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
             .unwrap();
-        self.set_upgrade_authority(Some(authority));
+        self.set_upgrade_authority(&layerzero_prover::ID, Some(authority));
 
         let payer = self.payer.pubkey();
         let instruction = Instruction {
@@ -100,21 +99,9 @@ impl LayerZeroProver<'_> {
         Pubkey::find_program_address(&[layerzero_prover::ID.as_ref()], &program.owner).0
     }
 
-    pub fn set_upgrade_authority(&mut self, authority: Option<Pubkey>) {
-        let address = self.program_data();
-        let mut program_data = self.get_account(&address).unwrap();
-        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
-            slot: 0,
-            upgrade_authority_address: authority,
-        })
-        .unwrap();
-        program_data.data[..metadata.len()].copy_from_slice(&metadata);
-        self.set_account(address, program_data).unwrap();
-    }
-
     /// Simulates `solana program set-upgrade-authority --final`.
     pub fn finalize(&mut self) {
-        self.set_upgrade_authority(None);
+        self.set_upgrade_authority(&layerzero_prover::ID, None);
     }
 
     /// Sends `instructions` after a 1.4M CU limit, paid by the context payer

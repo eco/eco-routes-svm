@@ -24,8 +24,9 @@ import { fileURLToPath } from "node:url";
 export const ADDRESS_PREFIX = "Eco";
 const CLUSTERS = ["mainnet", "devnet"];
 // The aggregator's members are fixed in its on-chain config at `init`, so it must move
-// whenever any of them does, although it does not compile their IDs in. Keep this equal to
-// the set the deployer passes to `init`.
+// whenever any of them does, although it does not compile their IDs in. The deployer
+// (`packages/deployer`) derives the same members from the release; both must equal the set
+// passed to the aggregator's `init`.
 const AGGREGATOR = "aggregator_prover";
 const AGGREGATOR_MEMBERS = ["hyper_prover", "local_prover", "polymer_prover"];
 // Changing the domain re-keys every program; add a new version instead of editing it.

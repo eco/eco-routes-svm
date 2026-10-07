@@ -1,0 +1,217 @@
+name: Deploy
+
+# Run twice: once with an empty plan_hash (plans, writes the summary, changes nothing), then
+# again with the reviewed hash. The hash covers chain state, so any drift between the two runs
+# makes the second a dry run again.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, without the v"
+        type: string
+        required: true
+      cluster:
+        description: "Target cluster; selects the deploy-<cluster> environment"
+        type: choice
+        options: [devnet, mainnet]
+        required: true
+      plan_hash:
+        description: "plan_hash from a reviewed dry run; empty or mismatched plans only"
+        type: string
+        default: ""
+      hyper_senders:
+        description: "Comma-separated EVM addresses (20-byte hex) allowed to send via hyper_prover"
+        type: string
+        default: ""
+      polymer_emitters:
+        description: "Comma-separated EVM addresses allowed to emit via polymer_prover"
+        type: string
+        default: ""
+      layerzero:
+        description: 'JSON {"peers":[{"eid","address","chain_id","path":{"send_uln","receive_uln","executor"}}]}'
+        type: string
+        default: ""
+      hyper_reserve_lamports:
+        description: "Top-up for the hyper_prover pda_payer"
+        type: string
+        default: "0"
+      layerzero_reserve_lamports:
+        description: "Top-up for the layerzero_prover pda_payer; must cover endpoint/ULN rent before init_path"
+        type: string
+        default: "0"
+      finalize_layerzero:
+        description: "Finalize an already initialized layerzero_prover after the manual gate"
+        type: boolean
+        default: false
+      compute_unit_price:
+        description: "Micro-lamports per compute unit for deploys and init transactions; 0 adds nothing"
+        type: string
+        default: "0"
+
+concurrency:
+  group: deploy-${{ inputs.cluster }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# bash -eo pipefail: a failing command piped into tee must fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUST_VERSION: "1.97.1"
+  ANCHOR_VERSION: "1.1.2"
+  SOLANA_VERSION: "4.1.1"
+  # Must equal release.yml's: verification rebuilds the released bytecode in this image.
+  VERIFY_IMAGE: "solanafoundation/solana-verifiable-build@sha256:0b4e3716fad9ca4b4aac3e3f977f43aad93a18c22296c0c0f44fc22e644bdd68"
+  SOLANA_VERIFY_VERSION: "0.5.2"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Required reviewers gate this job; holds PROGRAM_KEYPAIR_SECRET, DEPLOYER_KEYPAIR, RPC_URL.
+    environment: deploy-${{ inputs.cluster }}
+    env:
+      VERSION: ${{ inputs.version }}
+      CLUSTER: ${{ inputs.cluster }}
+      ASSETS: release
+      PLAN: out/plan.json
+    steps:
+      - name: Validate inputs
+        env:
+          COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "invalid version" >&2; exit 1; }
+          # At most 19 digits always fits the deployer's u64.
+          [[ "$COMPUTE_UNIT_PRICE" =~ ^[0-9]{1,19}$ ]] || { echo "compute_unit_price must be a non-negative integer" >&2; exit 1; }
+
+      - name: Checkout deploy tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/deploy/v${{ inputs.version }}
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: deploy
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
+
+      - name: Build deployer
+        run: |
+          cargo build --release --locked --manifest-path packages/deployer/Cargo.toml
+          echo "$PWD/packages/deployer/target/release" >> "$GITHUB_PATH"
+
+      - name: Download release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download "v${VERSION}" --dir "$ASSETS" \
+            --pattern program-ids.json --pattern "*.${CLUSTER}.so" --pattern "*.${CLUSTER}.json"
+
+      - name: Check release
+        run: scripts/deploy-step.sh check
+
+      - name: Write deployer keypair
+        env:
+          DEPLOYER_KEYPAIR: ${{ secrets.DEPLOYER_KEYPAIR }}
+        run: |
+          set +x
+          umask 077
+          printf '%s' "$DEPLOYER_KEYPAIR" > "$RUNNER_TEMP/deployer.json"
+          echo "KEYPAIR=$RUNNER_TEMP/deployer.json" >> "$GITHUB_ENV"
+
+      - name: Plan
+        id: plan
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          HYPER_SENDERS: ${{ inputs.hyper_senders }}
+          POLYMER_EMITTERS: ${{ inputs.polymer_emitters }}
+          LAYERZERO: ${{ inputs.layerzero }}
+          HYPER_RESERVE_LAMPORTS: ${{ inputs.hyper_reserve_lamports }}
+          LAYERZERO_RESERVE_LAMPORTS: ${{ inputs.layerzero_reserve_lamports }}
+          FINALIZE_LAYERZERO: ${{ inputs.finalize_layerzero }}
+        run: |
+          mkdir -p out
+          deployer plan --version "$VERSION" --cluster "$CLUSTER" \
+            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" \
+            --summary "$GITHUB_STEP_SUMMARY" --deployer-keypair "$KEYPAIR" 2>&1 \
+            | scripts/deploy-step.sh redact | tee out/plan.log
+          computed=$(sed -n 's/^plan_hash=//p' out/plan.log | tail -n 1)
+          [ -n "$computed" ]
+          echo "computed=$computed" >> "$GITHUB_OUTPUT"
+          if [ -n "$PLAN_HASH" ] && [ "$PLAN_HASH" = "$computed" ]; then
+            echo "execute=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "execute=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$PLAN_HASH" ]; then
+            reason="no plan_hash given"
+          else
+            reason="plan_hash differs: chain or inputs changed since review"
+          fi
+          echo "Dry run ($reason): nothing written. To execute, re-run with plan_hash=\`$computed\`." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Derive program keypairs
+        if: steps.plan.outputs.execute == 'true'
+        env:
+          PROGRAM_KEYPAIR_SECRET: ${{ secrets.PROGRAM_KEYPAIR_SECRET }}
+        run: node scripts/program-keypairs.mjs deploy "$ASSETS/program-ids.json" target/keys
+
+      - name: Deploy new programs
+        if: steps.plan.outputs.execute == 'true'
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
+        run: scripts/deploy-step.sh deploy 2>&1 | scripts/deploy-step.sh redact | tee out/deploy.log
+
+      - name: Apply
+        if: steps.plan.outputs.execute == 'true'
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
+        run: |
+          deployer apply --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR" \
+            --compute-unit-price "$COMPUTE_UNIT_PRICE" 2>&1 \
+            | scripts/deploy-step.sh redact | tee out/apply.log
+
+      - name: Verify
+        if: steps.plan.outputs.execute == 'true'
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+        run: scripts/deploy-step.sh verify 2>&1 | scripts/deploy-step.sh redact | tee out/verify.log
+
+      - name: Finalize
+        if: steps.plan.outputs.execute == 'true'
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+        run: scripts/deploy-step.sh finalize 2>&1 | scripts/deploy-step.sh redact | tee out/finalize.log
+
+      - name: Delete keys
+        if: always()
+        run: rm -rf target/keys "$RUNNER_TEMP/deployer.json"
+
+      - name: Upload deploy record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-v${{ inputs.version }}-${{ inputs.cluster }}
+          path: out/
+          if-no-files-found: ignore

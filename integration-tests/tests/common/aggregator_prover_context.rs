@@ -5,7 +5,6 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::{GetProofArgs, Proof};
 use eco_svm_std::Bytes32;
-use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
@@ -30,18 +29,7 @@ impl AggregatorProver<'_> {
     pub fn install(&mut self, authority: Pubkey) {
         self.add_program(aggregator_prover::ID, AGGREGATOR_PROVER_BIN)
             .unwrap();
-        let program = self.get_account(&aggregator_prover::ID).unwrap();
-        let program_data_address =
-            Pubkey::find_program_address(&[aggregator_prover::ID.as_ref()], &program.owner).0;
-        let mut program_data = self.get_account(&program_data_address).unwrap();
-        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
-            slot: 0,
-            upgrade_authority_address: Some(authority),
-        })
-        .unwrap();
-        program_data.data[..metadata.len()].copy_from_slice(&metadata);
-        self.set_account(program_data_address, program_data)
-            .unwrap();
+        self.set_upgrade_authority(&aggregator_prover::ID, Some(authority));
     }
 
     pub fn init(&mut self, authority: &Keypair, provers: Vec<Pubkey>) -> TransactionResult {
