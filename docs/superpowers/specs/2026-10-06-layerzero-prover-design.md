@@ -34,7 +34,7 @@ Sources: `LayerZero-Labs/LayerZero-v2@9c741e7f` (`packages/layerzero-v2/solana/p
 
 ### 2.2 Inbound delivery is a push, sized by the transaction
 
-LayerZero's executor delivers by calling our `lz_receive` as a top-level instruction, in a transaction it builds from what our `lz_receive_types_v2` returns: `[ComputeBudget] → executor::pre_execute → lz_receive → executor::post_execute`. Each delivered pair needs its `Proof` PDA as a **static** account key (a not-yet-existing per-message address cannot come from a lookup table), so a pair costs ~97 bytes (64 in the message, 32 key, 1 index). With the fixed accounts in an ALT, the 1232-byte packet fits **~8 pairs per message** (estimate; pinned by measurement, §6).
+LayerZero's executor delivers by calling our `lz_receive` as a top-level instruction, in a transaction it builds from what our `lz_receive_types_v2` returns: `[ComputeBudget] → executor::pre_execute → lz_receive → executor::post_execute`. Each delivered pair needs its `Proof` PDA as a **static** account key (a not-yet-existing per-message address cannot come from a lookup table), so a pair costs ~97 bytes (64 in the message, 32 key, 1 index). With the fixed accounts in an ALT, the 1232-byte packet fits **7 pairs per message** (measured; pinned by test, §6).
 
 ### 2.3 Endpoint receive semantics we rely on
 
@@ -95,7 +95,7 @@ Called only through `portal::prove` (`portal_dispatcher` must equal `portal::sta
 
 - `domain_id` is the destination LayerZero EID (as on EVM, where `domainID` is used directly as `dstEid`); must be ≤ `u32::MAX` and a configured peer's `eid` (`UnknownPeer`).
 - `data` is exactly 32 bytes: the receiving EVM `LayerZeroProver` (`InvalidData` otherwise). It must equal that peer's `address` (`InvalidReceiver`): a send to any other address could never be received, so failing early is cheaper than a stranded fee.
-- `proof_data.intent_hashes_claimants` is non-empty and ≤ `MAX_INTENTS_PER_PROVE` (provisionally 16; final value is the largest batch for which `[portal::prove, layerzero_prover::send]` fits one v0 transaction with ALTs, pinned by a test, §6).
+- `proof_data.intent_hashes_claimants` is non-empty and ≤ `MAX_INTENTS_PER_PROVE` (21, measured: the largest batch for which `[portal::prove, layerzero_prover::send]` fits one v0 transaction with ALTs, pinned by a test, §6).
 - `payload = proof_data.to_bytes()` (8-byte `CHAIN_ID` header ‖ 64-byte pairs — the exact `encodedProofs` the EVM `_handleCrossChainMessage` parses). Claimants pass through unchanged, including the `CANCELLED` sentinel.
 - Creates `PendingSend` with `rent_payer = payer`. If it already exists with identical content, no-op (re-proving a batch that is still pending is idempotent).
 
