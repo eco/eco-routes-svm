@@ -12,6 +12,7 @@ released_crates=(
     programs/aggregator-prover/Cargo.toml
     programs/flash-fulfiller/Cargo.toml
     programs/hyper-prover/Cargo.toml
+    programs/layerzero-prover/Cargo.toml
     programs/local-prover/Cargo.toml
     programs/polymer-prover/Cargo.toml
     programs/portal/Cargo.toml
