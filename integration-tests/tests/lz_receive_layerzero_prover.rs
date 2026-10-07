@@ -171,17 +171,12 @@ fn non_peer_sender_rejected_even_if_endpoint_path_exists() {
 fn wrong_receiver_in_clear_accounts_rejected() {
     let mut context = ready();
     let params = receive_params(&peers()[0], 1, pairs(&[(1, Pubkey::new_unique())]));
-    context.layerzero_prover().verify(&params).unwrap();
-    let mut accounts = layerzero_prover::instructions::lz_receive_accounts(
-        &params,
-        &ProofData::from_bytes(&params.message).unwrap(),
-    );
-    accounts[6].pubkey = layerzero::AddressLocator::Address(Pubkey::new_unique());
 
-    let instruction = context
+    let result = context
         .layerzero_prover()
-        .lz_receive_instruction(&params, accounts);
-    let result = context.layerzero_prover().send(vec![instruction], &[]);
+        .deliver_with(&params, |accounts| {
+            accounts[6].pubkey = layerzero::AddressLocator::Address(Pubkey::new_unique());
+        });
 
     assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidStore)));
 }
@@ -194,17 +189,12 @@ fn proof_account_mismatch_rejected() {
         1,
         pairs(&[(1, Pubkey::new_unique()), (2, Pubkey::new_unique())]),
     );
-    context.layerzero_prover().verify(&params).unwrap();
-    let mut accounts = layerzero_prover::instructions::lz_receive_accounts(
-        &params,
-        &ProofData::from_bytes(&params.message).unwrap(),
-    );
-    accounts.pop();
 
-    let instruction = context
+    let result = context
         .layerzero_prover()
-        .lz_receive_instruction(&params, accounts);
-    let result = context.layerzero_prover().send(vec![instruction], &[]);
+        .deliver_with(&params, |accounts| {
+            accounts.pop();
+        });
 
     assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidProof)));
 }

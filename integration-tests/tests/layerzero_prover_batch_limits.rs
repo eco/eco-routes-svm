@@ -15,7 +15,6 @@
 //! `[payer (s,w), execution context PDA (w)]` with 16 / 8 data bytes - the
 //! devnet E2E confirms the real executor fits the same count.
 
-use anchor_lang::{InstructionData, ToAccountMetas};
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::constants::{lz_receive_gas, MAX_INTENTS_PER_PROVE, MAX_PAIRS_PER_MESSAGE};
@@ -30,8 +29,8 @@ use solana_sdk::message::{v0, AddressLookupTableAccount, VersionedMessage};
 use solana_sdk::pubkey::Pubkey;
 
 use crate::common::layerzero_prover_context::{
-    build_lz_receive_instruction, build_send_message_instruction, peers, receive_params,
-    send_accounts, BASE_CHAIN_ID, BASE_EID,
+    build_lz_receive_instruction, build_prove_instruction, build_send_message_instruction, peers,
+    receive_params, send_accounts, BASE_CHAIN_ID, BASE_EID, COMPUTE_UNIT_LIMIT,
 };
 
 pub mod common;
@@ -92,36 +91,7 @@ fn outbound_message(n: usize) -> v0::Message {
     let pending = PendingSend::pda(BASE_EID, &receiver, &payload).0;
     let dispatcher = portal::state::dispatcher_pda(&layerzero_prover::ID).0;
 
-    let prove = Instruction {
-        program_id: portal::ID,
-        accounts: portal::accounts::Prove {
-            prover: layerzero_prover::ID,
-            dispatcher,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(
-            markers
-                .iter()
-                .map(|marker| AccountMeta::new_readonly(*marker, false)),
-        )
-        .chain([
-            AccountMeta::new(payer, true),
-            AccountMeta::new_readonly(Store::pda().0, false),
-            AccountMeta::new(pending, false),
-            AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
-        ])
-        .collect(),
-        data: portal::instruction::Prove {
-            args: portal::instructions::ProveArgs {
-                prover: layerzero_prover::ID,
-                source_chain_domain_id: BASE_EID.into(),
-                intent_hashes: hashes,
-                data: receiver.to_vec(),
-            },
-        }
-        .data(),
-    };
+    let prove = build_prove_instruction(payer, hashes, BASE_EID.into(), receiver.to_vec(), pending);
     let mut send = build_send_message_instruction(pending, payer, payer, BASE_EID, &receiver, 1);
     let workers: Vec<AccountMeta> = (0..4 + 4 * DVN_COUNT)
         .map(|i| AccountMeta::new_readonly(Pubkey::new_from_array([0x40 + i as u8; 32]), false))
@@ -148,7 +118,7 @@ fn outbound_message(n: usize) -> v0::Message {
     compile(
         &payer,
         &[
-            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
             prove,
             send,
         ],
@@ -185,7 +155,7 @@ fn inbound_len(n: usize) -> usize {
     transaction_len(compile(
         &payer,
         &[
-            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
             ComputeBudgetInstruction::set_compute_unit_price(1),
             wrapper(16),
             lz_receive,

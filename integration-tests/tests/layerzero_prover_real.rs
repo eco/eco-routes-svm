@@ -10,31 +10,16 @@ use mock_layerzero_endpoint::{
     ReceiveLibraryConfig, SendLibraryConfig,
 };
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use solana_sdk::account::Account;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
-use crate::common::layerzero_prover_context::{
-    anchor_account_data, peers, receive_params, BASE_CHAIN_ID,
-};
+use crate::common::layerzero_prover_context::{self, peers, receive_params, BASE_CHAIN_ID};
 
 pub mod common;
 
 fn stage<T: AccountSerialize>(context: &mut common::Context, address: Pubkey, account: &T) {
-    let data = anchor_account_data(account);
-    context
-        .set_account(
-            address,
-            Account {
-                lamports: 1_000_000_000,
-                data,
-                owner: ENDPOINT_ID,
-                executable: false,
-                rent_epoch: 0,
-            },
-        )
-        .unwrap();
+    context.set_anchor_account(address, ENDPOINT_ID, account);
 }
 
 /// Guards against `add_program` silently leaving the mock in place: the
@@ -145,11 +130,7 @@ fn init_path_and_clear_against_real_endpoint() {
             inbound_nonce: 1,
         },
     );
-    let mut hasher = tiny_keccak::Keccak::v256();
-    tiny_keccak::Hasher::update(&mut hasher, &params.guid);
-    tiny_keccak::Hasher::update(&mut hasher, &params.message);
-    let mut hash = [0u8; 32];
-    tiny_keccak::Hasher::finalize(hasher, &mut hash);
+    let hash = layerzero_prover_context::payload_hash(&params);
     let (payload_hash, payload_bump) =
         layerzero::payload_hash_pda(&store, peer.eid, &peer.address, 1);
     stage(

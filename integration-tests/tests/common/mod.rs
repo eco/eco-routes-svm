@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
+use anchor_lang::{AccountSerialize, AnchorSerialize, Discriminator, Event, Space};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -16,6 +16,7 @@ use litesvm::LiteSVM;
 use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
+use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::clock::Clock;
 use solana_sdk::instruction::{AccountMeta, Instruction, InstructionError};
 use solana_sdk::message::Message;
@@ -384,6 +385,48 @@ impl Context {
         self.set_account(address, account).unwrap();
     }
 
+    /// Sets the upgrade authority recorded in `program_id`'s ProgramData
+    /// (`None` simulates `solana program set-upgrade-authority --final`).
+    pub fn set_upgrade_authority(&mut self, program_id: &Pubkey, authority: Option<Pubkey>) {
+        let address = program_data_address(program_id);
+        let mut program_data = self.get_account(&address).unwrap();
+        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: authority,
+        })
+        .unwrap();
+        program_data.data[..metadata.len()].copy_from_slice(&metadata);
+        self.set_account(address, program_data).unwrap();
+    }
+
+    /// Stages an Anchor `account` at `address`, owned by `owner`.
+    pub fn set_anchor_account<T: AccountSerialize>(
+        &mut self,
+        address: Pubkey,
+        owner: Pubkey,
+        account: &T,
+    ) {
+        self.set_account(
+            address,
+            solana_sdk::account::Account {
+                lamports: 1_000_000_000,
+                data: anchor_account_data(account),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
+    /// Makes `prover` usable as a `reward.prover`: the local, Hyperlane and
+    /// Polymer provers ship in the default context, LayerZero needs installing.
+    pub fn ready_prover(&mut self, prover: &Pubkey) {
+        if *prover == layerzero_prover::ID {
+            self.layerzero_prover().install(Pubkey::new_unique());
+        }
+    }
+
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }
@@ -492,6 +535,27 @@ impl Context {
 
         result.map_err(Box::new)
     }
+}
+
+/// The programs a portal `reward.prover` can name, each ready to use after
+/// [`Context::ready_prover`].
+pub const CONCRETE_PROVERS: [Pubkey; 4] = [
+    local_prover::ID,
+    hyper_prover::ID,
+    polymer_prover::ID,
+    layerzero_prover::ID,
+];
+
+/// The upgradeable-loader ProgramData account of `program_id`.
+pub fn program_data_address(program_id: &Pubkey) -> Pubkey {
+    solana_loader_v3_interface::get_program_data_address(program_id)
+}
+
+/// Serializes an Anchor account (mock or ours) for `set_account`.
+pub fn anchor_account_data<T: AccountSerialize>(account: &T) -> Vec<u8> {
+    let mut data = Vec::new();
+    account.try_serialize(&mut data).unwrap();
+    data
 }
 
 pub fn sol_amount(amount: f64) -> u64 {
