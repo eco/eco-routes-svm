@@ -1638,11 +1638,13 @@ dependencies = [
  "eco-svm-std",
  "flash-fulfiller",
  "hyper-prover",
+ "layerzero-prover",
  "litesvm",
  "local-prover",
  "malicious-proof-closer",
  "malicious-prover",
  "mock-igp",
+ "mock-layerzero-endpoint",
  "mock-polymer-prover",
  "polymer-prover",
  "portal",
@@ -1985,6 +1987,14 @@ name = "mock-igp"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+]
+
+[[package]]
+name = "mock-layerzero-endpoint"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "tiny-keccak",
 ]
 
 [[package]]

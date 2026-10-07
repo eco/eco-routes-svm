@@ -30,6 +30,7 @@ mod aggregator_prover_context;
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
+pub mod layerzero_prover_context;
 mod local_prover_context;
 pub mod polymer_prover_context;
 mod portal_context;
@@ -47,6 +48,9 @@ const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
 const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
 const MOCK_POLYMER_PROVER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/mock_polymer_prover.so");
+
+const MOCK_LAYERZERO_ENDPOINT_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/mock_layerzero_endpoint.so");
 
 pub type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -96,6 +100,13 @@ impl Default for Context {
         svm.add_program(
             polymer_prover::polymer::POLYMER_PROVER_ID,
             MOCK_POLYMER_PROVER_BIN,
+        )
+        .unwrap();
+        // The mock declares LayerZero's EndpointV2 ID (identical on mainnet and
+        // devnet). `layerzero_prover_real` replaces it with the dumped binary.
+        svm.add_program(
+            layerzero_prover::layerzero::ENDPOINT_ID,
+            MOCK_LAYERZERO_ENDPOINT_BIN,
         )
         .unwrap();
 
