@@ -331,14 +331,17 @@ The margin is thin. The cap assumes one address lookup table, a compute-unit-lim
 #### Inbound (executor V2)
 - `lz_receive_types_info` and `lz_receive_types_v2` - Executor discovery. Both derive from one `lz_receive_accounts` function, which is the single source of the account list.
 - `lz_receive` - CPIs `endpoint::clear` first, checks `sender == peer[src_eid].address` and `ProofData.destination == peer.chain_id`, then creates `Proof` PDAs (identical redelivery is a no-op, a conflicting proof fails with `IntentAlreadyProven`).
-- `close_proof` - Called by Portal during `withdraw`; refunds the proof rent to `pda_payer`.
 
 EVM `Inbox.prove` batches toward Solana must stay at or below `MAX_PAIRS_PER_MESSAGE` (7, measured against a modelled executor delivery transaction; to be confirmed on the devnet E2E). The EVM contract cannot enforce this and an over-cap message can never execute, so re-prove with a smaller batch.
 
 The cap of 7 assumes the executor resolves every static `lz_receive` account through the lookup table recorded by `set_alt`. That table must hold every address `required_alt_addresses` returns: the `Store` PDA, `pda_payer`, the system program, this program's event authority and ID, the endpoint program, the OApp registry, the endpoint settings and event authority, and the endpoint `Nonce` of every configured peer. `set_alt` checks this on-chain and also requires the table to be frozen (no authority) and never deactivated; any failure is `AltNotSet`.
 
+#### Proof query and cleanup
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination. Portal's `withdraw` and `refund` (and the aggregator) query it with the tail `[proof]`; query data is ignored.
+- `close_proof(args)` - Close the canonical proof with Portal's intent-scoped authorization. Portal's `close_proof` calls it after withdrawal, or for a cancellation at/after the reward deadline, with the cleanup tail `[proof, pda_payer]`; the rent goes back to `pda_payer`, which paid it in `lz_receive`. `withdraw` no longer closes the proof, so cleanup is a separate (permissionless) call.
+
 #### Funding
-Proof rent comes from the `pda_payer` reserve because the EVM sender's options carry gas only. An empty reserve makes delivery fail retryably, so monitor its balance. `pda_payer` must also be pre-funded before `init_path` / `set_path_config`, since it pays endpoint and ULN rent as the LayerZero delegate.
+Proof rent comes from the `pda_payer` reserve because the EVM sender's options carry gas only. An empty reserve makes delivery fail retryably, so monitor its balance. The rent only comes back when Portal's `close_proof` runs for the intent, and nobody but the reserve profits from it, so bundle cleanup with `withdraw` or run it from an operator job; otherwise every settled proof stays a permanent drain on the reserve. `pda_payer` must also be pre-funded before `init_path` / `set_path_config`, since it pays endpoint and ULN rent as the LayerZero delegate.
 
 #### EVM-side configuration
 - Whitelist the program's **`Store` PDA** on the EVM `LayerZeroProver` — it is the OApp address LayerZero reports as `origin.sender` — not the program ID.
@@ -421,7 +424,7 @@ See [Proof queries and cleanup](docs/prover-interface.md) for account order, pro
 - `prove_polymer_prover.rs` - PolymerProver reverse-direction log emission
 - `close_proof_polymer_prover.rs` - PolymerProver proof cleanup
 - `validate_polymer_prover_real.rs` - Ignored smoke test against Polymer's real deployed program
-- `init_layerzero_prover.rs`, `prove_layerzero_prover.rs`, `send_layerzero_prover.rs`, `lz_receive_layerzero_prover.rs`, `lz_receive_types_layerzero_prover.rs`, `close_proof_layerzero_prover.rs` - LayerZeroProver admin, outbound commit/send, inbound executor flow, receive-types discovery and proof cleanup (against `mock-layerzero-endpoint`)
+- `init_layerzero_prover.rs`, `prove_layerzero_prover.rs`, `send_layerzero_prover.rs`, `lz_receive_layerzero_prover.rs`, `lz_receive_types_layerzero_prover.rs`, `close_proof_layerzero_prover.rs` - LayerZeroProver admin, outbound commit/send, inbound executor flow, receive-types discovery, `get_proof` (direct and through the aggregator) and Portal `close_proof` cleanup (against `mock-layerzero-endpoint`)
 - `layerzero_prover_batch_limits.rs` - Pins the outbound and inbound batch ceilings
 - `layerzero_prover_real.rs` - Ignored test (needs `LZ_ENDPOINT_SO`) checking the hand-mirrored endpoint CPIs against LayerZero's dumped deployed binary
 

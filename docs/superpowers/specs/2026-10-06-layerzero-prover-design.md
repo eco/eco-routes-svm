@@ -8,7 +8,7 @@ Counterpart: `eco-routes` `contracts/prover/LayerZeroProver.sol` (LayerZero V2, 
 Add a LayerZero V2-backed prover to the Solana deployment, in **both directions**, so it can join the aggregator as a **liveness** member: a third independent bridge next to Hyperlane and Polymer, any one of which can prove an intent (1-of-N union, matching both aggregators today).
 
 - **Solana → EVM (outbound):** an intent published on an EVM chain and fulfilled on Solana is proven by sending `(intent_hash, claimant)` pairs through LayerZero to the EVM `LayerZeroProver`.
-- **EVM → Solana (inbound):** an intent published on Solana and fulfilled on an EVM chain is proven when the EVM `LayerZeroProver` sends pairs through LayerZero to this program, which writes standard `Proof` PDAs that `portal::withdraw`, `portal::refund` and `aggregator-prover::aggregate` consume unchanged.
+- **EVM → Solana (inbound):** an intent published on Solana and fulfilled on an EVM chain is proven when the EVM `LayerZeroProver` sends pairs through LayerZero to this program, which writes standard `Proof` PDAs that `portal::withdraw` and `portal::refund` read through this program's `get_proof` (directly, or through `aggregator-prover::get_proof` member framing) and that Portal's `close_proof` later cleans up — the prover interface of PR #102 (`docs/prover-interface.md`).
 
 Success: mainnet E2E both ways between Solana and Base, through the new aggregator pair, with every EVM fleet chain that has a LayerZero V2 endpoint configured as a peer.
 
@@ -65,7 +65,7 @@ programs/layerzero-prover/src/
 |---|---|---|
 | `Store` | `["Store"]` | The OApp address registered with the endpoint; signs `send`, `clear`, `register_oapp`. Holds `peers: Vec<Peer>` (≤ `MAX_PEERS` = 16), `alt: Pubkey` (the pinned lookup table returned to the executor), bumps. |
 | `LzReceiveTypes` | `["LzReceiveTypes", store]` | Required by the V2 executor at fixed seeds; holds `store`. |
-| `pda_payer` | `["pda_payer"]` | System-owned lamport reserve. Pays `Proof` rent in `lz_receive`; `close_proof` refunds to it. **Also the LayerZero delegate** (§2.4: must sign and pay). |
+| `pda_payer` | `["pda_payer"]` | System-owned lamport reserve. Pays `Proof` rent in `lz_receive`; `close_proof` (run through Portal's separate cleanup) refunds to it. **Also the LayerZero delegate** (§2.4: must sign and pay). |
 | `PendingSend` | `["pending_send", keccak(dst_eid_le ‖ receiver ‖ payload)]` | Outbound commit: `{ dst_eid: u32, receiver: Bytes32, payload: Vec<u8>, rent_payer: Pubkey }`. |
 | `Proof` | `eco_svm_std::prover::Proof::pda(intent_hash, ID)` | Standard `ProofAccount(Proof { destination, claimant })`, byte-compatible with `hyper-prover`'s. |
 
@@ -127,9 +127,14 @@ Implements the executor's V2 interface (V1 `lz_receive_types` is not implemented
 
 If `pda_payer` lacks rent, `lz_receive` fails and the message stays verified; it is retried after a top-up. An over-cap message (more pairs than fit the delivery transaction) can never execute; the remedy is re-proving the intents from the EVM Inbox in smaller batches (the cap is enforced off-chain, §5).
 
-### 3.7 `close_proof`
+### 3.7 `get_proof` and `close_proof`
 
-Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&crate::ID)`; closes the `ProofAccount` to `pda_payer`. Takes no other dependency, so it cannot fail once the program is finalized — required because `portal::refund` CPIs it on proven cancellations.
+Both follow PR #102's prover interface (`docs/prover-interface.md`) exactly as `hyper-prover` does:
+
+- **`get_proof(GetProofArgs { intent_hash, destination, data }) -> Option<Proof>`**, accounts `[proof]` (read-only). Answered by the shared `Proof::get(&proof, &crate::ID, &args)`: the account must be `Proof::pda(intent_hash, ID)` (`ProverError::InvalidProof` otherwise); missing/pre-funded/not-ours → `None`; a proof for another destination or with a zero claimant → `None`; an owned proof that does not decode exactly is an error. `data` is ignored, like the other concrete provers. Portal's `withdraw` and `refund` query it with the tail `[proof]`; the aggregator forwards the same single-account member group.
+- **`close_proof(CloseProofArgs { intent_hash, data })`**, accounts `[portal_proof_closer (signer), proof (mut), pda_payer (mut)]`. The signer must be Portal's intent-scoped `proof_closer_pda(&args.intent_hash)` and the proof `Proof::pda(&args.intent_hash, ID)` — both bound to the same hash, so a closer forwarded by a malicious prover for its own intent cannot close another intent's proof. Rent goes to `pda_payer`, the reserve that paid it in `lz_receive` (like hyper-prover's PDA payer; Local/Polymer instead pay a signing recipient). Portal's cleanup tail is therefore `[proof, pda_payer]`. Takes no other dependency, so it cannot fail once the program is finalized.
+
+`withdraw` no longer closes the proof: Portal's permissionless `close_proof` does, after an authentic withdrawal marker or for a cancellation at/after the reward deadline. A proven cancellation refunds immediately through `refund` (which leaves the proof) and is cleaned up separately once the deadline passes. Nobody but `pda_payer` profits from cleaning up a LayerZero proof, so the operator must bundle `close_proof` with `withdraw` or run it from a job (§5).
 
 ### 3.8 Errors
 
@@ -137,13 +142,13 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 
 ## 4. Security properties
 
-- **Prover-scoped dispatcher and closer.** `prove` accepts only `dispatcher_pda(&crate::ID)`; `close_proof` only `proof_closer_pda(&crate::ID)` — the load-bearing boundary every prover keeps.
+- **Prover-scoped dispatcher, intent-scoped closer.** `prove` accepts only `dispatcher_pda(&crate::ID)` — the load-bearing boundary every prover keeps. `close_proof` accepts only `proof_closer_pda(&intent_hash)` and only for `Proof::pda(&intent_hash, ID)` (PR #102); the intent hash already commits to `reward.prover`.
 - **Who can create a `Proof`.** Only `lz_receive` after a successful `clear` of a DVN-verified message from a configured peer whose header chain matches the peer's chain. Trust = the pinned DVN set per path (the same trust the EVM `LayerZeroProver` already accepts).
 - **No admin after finalization.** Delegate is a program PDA; setup is upgrade-authority-gated; finalization removes both. No `skip`/`nilify`/`burn` exists afterwards: an unverifiable nonce would block later nonces on that path (DVNs verify every message, so this is a liveness risk, not a safety one, and the remedy is a new release).
 - **Pinned config.** Every path pins send/receive library and ULN/executor config explicitly; nothing follows `DEFAULT_MESSAGE_LIB`, so LayerZero governance cannot change our DVN set.
 - **Permissionless `send`** transmits only portal-attested commits to their configured peer with on-chain options.
-- **`pda_payer` is not a value store for users**: it holds only operator-funded rent float, and only `lz_receive` debits it (one rent-exempt `Proof` per verified pair, refunded on close). It **can** be drained, though: anyone can make the EVM peers send proofs for junk or already-withdrawn intents, and each such pair burns ~1.22M lamports of `Proof` rent that no `withdraw` ever reclaims, at roughly the attacker's own LayerZero fee cost per message — the same exposure as hyper-prover's `pda_payer`. An empty reserve only makes delivery fail retryably, so the mitigation is the balance alert (§5) and top-ups.
-- **Atomic release.** Like every prover, it compiles against portal's ID for `dispatcher_pda`/`proof_closer_pda`. It joins the current portal without a portal redeploy (portal derives per-prover PDAs for any prover); it must be built from the tree that matches the deployed portal.
+- **`pda_payer` is not a value store for users**: it holds only operator-funded rent float, and only `lz_receive` debits it (one rent-exempt `Proof` per verified pair, refunded on close). It **can** be drained, though: anyone can make the EVM peers send proofs for junk or already-withdrawn intents, and each such pair burns ~1.22M lamports of `Proof` rent that no cleanup ever reclaims (there is no withdrawal or cancellation to authorize Portal's `close_proof`), at roughly the attacker's own LayerZero fee cost per message — the same exposure as hyper-prover's `pda_payer`. An empty reserve only makes delivery fail retryably, so the mitigation is the balance alert (§5) and top-ups.
+- **Atomic release.** Like every prover, it compiles against portal's ID for `dispatcher_pda`/`proof_closer_pda` and implements PR #102's `get_proof`/`close_proof` ABI. That ABI is not the one the currently deployed portal speaks, so this program ships in the same release (same tree, new IDs) as the #102 portal and provers; it cannot join an older portal.
 
 ## 5. Cross-repo touchpoints
 
@@ -158,7 +163,7 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 **eco-solver** —
 - Solana-source prove: build `[ComputeBudget, portal::prove(prover = EcoZ…, domain = dst EID, data = EVM LayerZeroProver), layerzero_prover::send]` as v0 with ALTs (LayerZero accounts + FulfillMarkers); fee from simulating `quote_send`; batch ≤ `MAX_INTENTS_PER_PROVE`.
 - EVM-source prove toward Solana: `Inbox.prove` via `LayerZeroProver` with `domain = 30168`, receiver = `Store` PDA; **batch ≤ `MAX_PAIRS_PER_MESSAGE` (7, measured)** — the EVM contract cannot enforce it.
-- Aggregator: add LayerZero as a member to the member listener / aggregate job; `pda_payer` balance alert.
+- Aggregator: add LayerZero as a member to the member listener; withdraw through the aggregator with LayerZero's `[proof]` member group, and clean up with Portal `close_proof` using LayerZero's `[proof, pda_payer]` member group. A cleanup job (or bundling cleanup with `withdraw`) is needed to return proof rent to `pda_payer`; `pda_payer` balance alert.
 
 ## 6. Testing
 
@@ -168,7 +173,7 @@ Identical to `hyper-prover`: signer must be `portal::state::proof_closer_pda(&cr
 - `init` validation (peer set rules, authority gate), `init_path` CPIs recorded with the pinned config.
 - `prove` via `portal::prove`: dispatcher gate, unknown EID, wrong receiver, empty/over-cap, idempotent re-commit, `CANCELLED` claimant passes through.
 - `send`: options floor, closes commit to `rent_payer`, rejects foreign `rent_payer`, permissionless caller.
-- `lz_receive`: clear-before-state ordering (a failed clear leaves no proof), unknown peer, wrong sender, chain-id mismatch, account count/address mismatch, idempotent redelivery, conflicting proof, `pda_payer` underfunded then retried, full flow into `aggregator-prover::aggregate` → `portal::withdraw` → `close_proof` rent back to `pda_payer`, and proven-cancellation `refund`.
+- `lz_receive`: clear-before-state ordering (a failed clear leaves no proof), unknown peer, wrong sender, chain-id mismatch, account count/address mismatch, idempotent redelivery, conflicting proof, `pda_payer` underfunded then retried, `get_proof` on a delivered proof, full flow `portal::withdraw` (query `[proof]`) → Portal `close_proof` (cleanup `[proof, pda_payer]`) with rent back to `pda_payer`, the same through `aggregator-prover::get_proof` member framing, and proven-cancellation `refund` followed by cleanup after the reward deadline. LayerZero is also a row of #102's cross-prover tables (`get_proof.rs`, `close_proof_security.rs`).
 - `lz_receive_types_v2` output equals the accounts `lz_receive` accepts.
 - **Size pins:** largest `[portal::prove, send]` v0 transaction (sets `MAX_INTENTS_PER_PROVE`) and largest delivery transaction shaped as the executor builds it (sets `MAX_PAIRS_PER_MESSAGE`), each with a one-over failure.
 
