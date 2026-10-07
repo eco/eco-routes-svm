@@ -34,7 +34,6 @@ fn query(
 fn concrete_provers_return_only_valid_canonical_proofs() {
     for prover in common::CONCRETE_PROVERS {
         let mut context = common::Context::default();
-        context.ready_prover(&prover);
         let hash: Bytes32 = [12; 32].into();
         let proof = Proof::pda(&hash, &prover).0;
         let claimant = Pubkey::new_unique();

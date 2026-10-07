@@ -5,14 +5,15 @@ use crate::instructions::LayerZeroProverError;
 use crate::layerzero::{
     self, message_lib_info_pda, uln_settings_pda, ExecutorConfig, InitConfigParams,
     SetConfigParams, UlnConfig, CONFIG_TYPE_EXECUTOR, CONFIG_TYPE_RECEIVE_ULN,
-    CONFIG_TYPE_SEND_ULN, ENDPOINT_ID, INIT_CONFIG_DISCRIMINATOR, NIL_DVN_COUNT,
+    CONFIG_TYPE_SEND_ULN, ENDPOINT_ID, INIT_CONFIG_DISCRIMINATOR, NIL_CONFIRMATIONS, NIL_DVN_COUNT,
     SET_CONFIG_DISCRIMINATOR, ULN_ID,
 };
 use crate::state::{pda_payer_pda, Store, MAX_PAYLOAD_LEN, PDA_PAYER_SEED};
 
 /// The path's full security config. Nothing may resolve to a LayerZero default
-/// (required or optional DVN count 0, confirmations 0, executor default), or LayerZero governance would
-/// control our DVN set after we finalize.
+/// (required or optional DVN count 0, confirmations 0, executor default), or
+/// LayerZero governance would control our DVN set after we finalize; nor may
+/// confirmations be `NIL_CONFIRMATIONS`, which ULN302 resolves to 0.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
 pub struct PathConfig {
     pub send_uln: UlnConfig,
@@ -25,8 +26,11 @@ impl PathConfig {
         [&self.send_uln, &self.receive_uln]
             .iter()
             .try_for_each(|uln| {
+                // Confirmations: 0 means "LayerZero default", and ULN302
+                // resolves NIL to an explicit 0 — neither is a pinned value.
                 require!(
                     uln.confirmations != 0
+                        && uln.confirmations != NIL_CONFIRMATIONS
                         && uln.required_dvn_count != 0
                         && uln.required_dvn_count != NIL_DVN_COUNT
                         && uln.required_dvns.len() == uln.required_dvn_count as usize,
@@ -115,23 +119,23 @@ pub fn set_path_config(ctx: Context<SetPathConfig>, eid: u32, config: PathConfig
     let delegate = ctx.accounts.pda_payer.key();
     let (_, bump) = pda_payer_pda();
     let seeds: &[&[u8]] = &[PDA_PAYER_SEED, &[bump]];
-    let a = &ctx.accounts;
+    let account = &ctx.accounts;
     let endpoint_head = [
-        a.endpoint_program.to_account_info(),
-        a.pda_payer.to_account_info(),
-        a.oapp_registry.to_account_info(),
-        a.message_lib_info.to_account_info(),
-        a.uln_settings.to_account_info(),
-        a.uln_program.to_account_info(),
+        account.endpoint_program.to_account_info(),
+        account.pda_payer.to_account_info(),
+        account.oapp_registry.to_account_info(),
+        account.message_lib_info.to_account_info(),
+        account.uln_settings.to_account_info(),
+        account.uln_program.to_account_info(),
     ];
 
     // ULN302 `init_config` tail: [payer, uln, send_config, receive_config, system_program]
     let init_tail = [
-        a.pda_payer.to_account_info(),
-        a.uln_settings.to_account_info(),
-        a.uln_send_config.to_account_info(),
-        a.uln_receive_config.to_account_info(),
-        a.system_program.to_account_info(),
+        account.pda_payer.to_account_info(),
+        account.uln_settings.to_account_info(),
+        account.uln_send_config.to_account_info(),
+        account.uln_receive_config.to_account_info(),
+        account.system_program.to_account_info(),
     ];
     layerzero::invoke(
         ENDPOINT_ID,
@@ -145,13 +149,13 @@ pub fn set_path_config(ctx: Context<SetPathConfig>, eid: u32, config: PathConfig
     // ULN302 `set_config` tail: [uln, send_config, receive_config, default_send,
     // default_receive, uln event_authority, uln program]
     let set_tail = [
-        a.uln_settings.to_account_info(),
-        a.uln_send_config.to_account_info(),
-        a.uln_receive_config.to_account_info(),
-        a.uln_default_send_config.to_account_info(),
-        a.uln_default_receive_config.to_account_info(),
-        a.uln_event_authority.to_account_info(),
-        a.uln_program.to_account_info(),
+        account.uln_settings.to_account_info(),
+        account.uln_send_config.to_account_info(),
+        account.uln_receive_config.to_account_info(),
+        account.uln_default_send_config.to_account_info(),
+        account.uln_default_receive_config.to_account_info(),
+        account.uln_event_authority.to_account_info(),
+        account.uln_program.to_account_info(),
     ];
     let accounts = [endpoint_head.as_slice(), &set_tail].concat();
     [

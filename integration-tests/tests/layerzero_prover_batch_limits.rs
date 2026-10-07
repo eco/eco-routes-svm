@@ -18,7 +18,9 @@
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::constants::{lz_receive_gas, MAX_INTENTS_PER_PROVE, MAX_PAIRS_PER_MESSAGE};
-use layerzero_prover::instructions::required_alt_addresses;
+use layerzero_prover::instructions::{
+    compact_accounts_with_alt, lz_receive_accounts, required_alt_addresses,
+};
 use layerzero_prover::state::{PendingSend, Store};
 use portal::state::FulfillMarker;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -30,7 +32,7 @@ use solana_sdk::pubkey::Pubkey;
 
 use crate::common::layerzero_prover_context::{
     build_lz_receive_instruction, build_prove_instruction, build_send_message_instruction, peers,
-    receive_params, send_accounts, BASE_CHAIN_ID, BASE_EID, COMPUTE_UNIT_LIMIT,
+    receive_params, resolve_locators, send_accounts, BASE_CHAIN_ID, BASE_EID, COMPUTE_UNIT_LIMIT,
 };
 
 pub mod common;
@@ -139,7 +141,12 @@ fn inbound_len(n: usize) -> usize {
             .collect(),
     );
     let params = receive_params(&peers()[0], u64::MAX, proof_data.clone());
-    let accounts = layerzero_prover::instructions::lz_receive_accounts(&params, &proof_data);
+    let table = required_alt_addresses(&Store::new(peers()).unwrap());
+    // `lz_receive_types_v2`'s answer, resolved as the executor does.
+    let accounts = resolve_locators(
+        std::slice::from_ref(&table),
+        compact_accounts_with_alt(lz_receive_accounts(&params, &proof_data), &table),
+    );
     let lz_receive = build_lz_receive_instruction(&params, accounts);
     let execution_context = Pubkey::new_unique();
     let wrapper = |data_len: usize| Instruction {
@@ -150,7 +157,6 @@ fn inbound_len(n: usize) -> usize {
         ],
         data: vec![0; data_len],
     };
-    let table = required_alt_addresses(&Store::new(peers()).unwrap());
 
     transaction_len(compile(
         &payer,

@@ -51,6 +51,7 @@ const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malic
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
 const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
 const MOCK_POLYMER_PROVER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/mock_polymer_prover.so");
 
@@ -95,6 +96,10 @@ impl Default for Context {
         svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN)
             .unwrap();
         svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
+            .unwrap();
+        // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
+        // can stage the admin that `LayerZeroProver::install` configures.
+        svm.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
             .unwrap();
         // The mock declares Polymer's devnet ID, which is what non-mainnet
         // polymer-prover builds CPI into. Under `--features mainnet` this
@@ -419,14 +424,6 @@ impl Context {
         .unwrap();
     }
 
-    /// Makes `prover` usable as a `reward.prover`: the local, Hyperlane and
-    /// Polymer provers ship in the default context, LayerZero needs installing.
-    pub fn ready_prover(&mut self, prover: &Pubkey) {
-        if *prover == layerzero_prover::ID {
-            self.layerzero_prover().install(Pubkey::new_unique());
-        }
-    }
-
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }
@@ -537,8 +534,8 @@ impl Context {
     }
 }
 
-/// The programs a portal `reward.prover` can name, each ready to use after
-/// [`Context::ready_prover`].
+/// The programs a portal `reward.prover` can name, each loaded by
+/// [`Context::default`].
 pub const CONCRETE_PROVERS: [Pubkey; 4] = [
     local_prover::ID,
     hyper_prover::ID,

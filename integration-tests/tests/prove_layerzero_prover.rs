@@ -1,4 +1,5 @@
-use anchor_lang::{InstructionData, ToAccountMetas};
+use anchor_lang::prelude::Rent;
+use anchor_lang::{InstructionData, Space, ToAccountMetas};
 use eco_svm_std::prover::{IntentHashClaimant, ProofData, ProveArgs};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::constants::MAX_INTENTS_PER_PROVE;
@@ -49,6 +50,55 @@ fn prove_commits_pending_send() {
         ProofData::from_bytes(&payload).unwrap().destination,
         CHAIN_ID
     );
+}
+
+/// `PendingSend` holds only its batch, not the `INIT_SPACE` of a full one, so
+/// the solver fronts only the rent that batch needs.
+#[test]
+fn pending_send_is_sized_to_its_batch() {
+    let mut context = common::Context::default();
+    context.layerzero_prover().setup();
+    let hashes = fulfilled(&mut context, 1);
+    let receiver = peers()[0].address;
+    let address = context
+        .layerzero_prover()
+        .pending_send_for(BASE_EID, &receiver, &hashes);
+
+    context
+        .layerzero_prover()
+        .prove(hashes, BASE_EID.into(), receiver.to_vec())
+        .unwrap();
+
+    let account = context.get_account(&address).unwrap();
+    let pending = context.account::<PendingSend>(&address).unwrap();
+    let serialized_len = common::anchor_account_data(&pending).len();
+    assert_eq!(account.data.len(), serialized_len);
+    assert!(serialized_len < 8 + PendingSend::INIT_SPACE);
+    assert_eq!(
+        account.lamports,
+        Rent::default().minimum_balance(serialized_len)
+    );
+}
+
+/// A griefer pre-funding the content-addressed address cannot block the commit.
+#[test]
+fn prefunded_pending_send_still_created() {
+    let mut context = common::Context::default();
+    context.layerzero_prover().setup();
+    let hashes = fulfilled(&mut context, 1);
+    let receiver = peers()[0].address;
+    let address = context
+        .layerzero_prover()
+        .pending_send_for(BASE_EID, &receiver, &hashes);
+    context.airdrop(&address, 1_000_000).unwrap();
+
+    context
+        .layerzero_prover()
+        .prove(hashes.clone(), BASE_EID.into(), receiver.to_vec())
+        .unwrap();
+
+    let pending = context.account::<PendingSend>(&address).unwrap();
+    assert_eq!(pending.payload, context.layerzero_prover().payload(&hashes));
 }
 
 #[test]

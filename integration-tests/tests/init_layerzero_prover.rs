@@ -1,7 +1,8 @@
 use anchor_lang::prelude::borsh;
 use layerzero_prover::instructions::{required_alt_addresses, LayerZeroProverError, PathConfig};
 use layerzero_prover::layerzero::{
-    self, CONFIG_TYPE_EXECUTOR, CONFIG_TYPE_RECEIVE_ULN, CONFIG_TYPE_SEND_ULN, NIL_DVN_COUNT,
+    self, CONFIG_TYPE_EXECUTOR, CONFIG_TYPE_RECEIVE_ULN, CONFIG_TYPE_SEND_ULN, NIL_CONFIRMATIONS,
+    NIL_DVN_COUNT,
 };
 use layerzero_prover::state::{pda_payer_pda, Store, MAX_PAYLOAD_LEN};
 use mock_layerzero_endpoint::{
@@ -164,8 +165,12 @@ fn set_path_config_pins_send_receive_and_executor() {
 
 #[test]
 fn set_path_config_rejects_anything_left_on_layerzero_defaults() {
-    let mutations: [fn(&mut PathConfig); 11] = [
+    let mutations: [fn(&mut PathConfig); 14] = [
         |c| c.send_uln.confirmations = 0,
+        |c| c.receive_uln.confirmations = 0,
+        // ULN302 resolves NIL confirmations to an explicit 0.
+        |c| c.send_uln.confirmations = NIL_CONFIRMATIONS,
+        |c| c.receive_uln.confirmations = NIL_CONFIRMATIONS,
         |c| c.receive_uln.required_dvn_count = 0,
         |c| c.receive_uln.required_dvn_count = NIL_DVN_COUNT,
         |c| {
@@ -231,10 +236,29 @@ fn set_alt_rejects_non_lookup_table_account() {
     let not_a_table = Pubkey::new_unique();
     context.airdrop(&not_a_table, 1_000_000_000).unwrap();
 
-    assert!(context
-        .layerzero_prover()
-        .set_alt(&authority, not_a_table)
-        .is_err());
+    let result = context.layerzero_prover().set_alt(&authority, not_a_table);
+
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidLookupTable)));
+}
+
+#[test]
+fn set_alt_rejects_malformed_lookup_table_data() {
+    let (mut context, authority) = initialized();
+    let alt = context.layerzero_prover().create_alt();
+    let mut account = context.get_account(&alt).unwrap();
+    // Uninitialized tag, then a trailing partial address.
+    let mut uninitialized = account.clone();
+    uninitialized.data[..4].copy_from_slice(&0u32.to_le_bytes());
+    account.data.push(0);
+
+    [uninitialized, account].into_iter().for_each(|staged| {
+        context.set_account(alt, staged).unwrap();
+        context.expire_blockhash();
+
+        let result = context.layerzero_prover().set_alt(&authority, alt);
+
+        assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidLookupTable)));
+    });
 }
 
 fn initialized() -> (common::Context, Keypair) {
@@ -261,7 +285,7 @@ fn set_alt_rejects_table_with_authority() {
 
     let result = context.layerzero_prover().set_alt(&authority, alt);
 
-    assert!(result.is_err_and(common::is_error(LayerZeroProverError::AltNotSet)));
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::LookupTableNotFrozen)));
 }
 
 #[test]
@@ -274,7 +298,9 @@ fn set_alt_rejects_deactivated_table() {
 
     let result = context.layerzero_prover().set_alt(&authority, alt);
 
-    assert!(result.is_err_and(common::is_error(LayerZeroProverError::AltNotSet)));
+    assert!(result.is_err_and(common::is_error(
+        LayerZeroProverError::LookupTableDeactivated
+    )));
 }
 
 #[test]
@@ -292,7 +318,9 @@ fn set_alt_rejects_table_missing_a_peer_nonce() {
 
     let result = context.layerzero_prover().set_alt(&authority, alt);
 
-    assert!(result.is_err_and(common::is_error(LayerZeroProverError::AltNotSet)));
+    assert!(result.is_err_and(common::is_error(
+        LayerZeroProverError::LookupTableMissingAddress
+    )));
     assert_eq!(
         context.account::<Store>(&Store::pda().0).unwrap().alt,
         Pubkey::default()

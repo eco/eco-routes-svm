@@ -28,7 +28,7 @@ pub fn lz_receive<'info>(
 ) -> Result<()> {
     require!(
         ctx.remaining_accounts.len() >= CLEAR_ACCOUNTS_LEN,
-        LayerZeroProverError::InvalidEndpoint
+        LayerZeroProverError::MissingClearAccounts
     );
     let (clear_accounts, proofs) = ctx.remaining_accounts.split_at(CLEAR_ACCOUNTS_LEN);
     let store = ctx.accounts.store.key();
@@ -63,10 +63,8 @@ pub fn lz_receive<'info>(
         .store
         .peer(params.src_eid)
         .ok_or(LayerZeroProverError::UnknownPeer)?;
-    require!(
-        peer.address == Bytes32::from(params.sender),
-        LayerZeroProverError::InvalidSender
-    );
+    let sender: Bytes32 = params.sender.into();
+    require!(peer.address == sender, LayerZeroProverError::InvalidSender);
     // The endpoint authenticates `src_eid`, so the self-reported header cannot
     // claim a chain other than the peer's (EVM `_handleCrossChainMessage` rule).
     let proof_data = ProofData::from_bytes(&params.message)?;
@@ -114,15 +112,18 @@ fn mark_intent_hash_proven<'info>(
             recorded.destination == destination && recorded.claimant == claimant,
             LayerZeroProverError::IntentAlreadyProven
         ),
-        None => ProofAccount::from(prover::Proof::new(destination, claimant)).init(
-            proof,
-            &ctx.accounts.pda_payer,
-            &ctx.accounts.system_program,
-            &[
-                &[PDA_PAYER_SEED, &[payer_bump]],
-                &[PROOF_SEED, intent_hash.as_ref(), &[proof_bump]],
-            ],
-        )?,
+        None => {
+            let proof_account: ProofAccount = prover::Proof::new(destination, claimant).into();
+            proof_account.init(
+                proof,
+                &ctx.accounts.pda_payer,
+                &ctx.accounts.system_program,
+                &[
+                    &[PDA_PAYER_SEED, &[payer_bump]],
+                    &[PROOF_SEED, intent_hash.as_ref(), &[proof_bump]],
+                ],
+            )?
+        }
     }
 
     emit_cpi!(IntentProven::new(intent_hash, claimant, destination));

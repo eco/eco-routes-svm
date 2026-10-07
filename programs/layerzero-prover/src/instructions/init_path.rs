@@ -60,13 +60,13 @@ pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
     let (_, bump) = pda_payer_pda();
     let seeds: &[&[u8]] = &[PDA_PAYER_SEED, &[bump]];
     let new_lib = uln_settings_pda().0;
-    let a = &ctx.accounts;
-    let endpoint = a.endpoint_program.to_account_info();
-    let pda_payer = a.pda_payer.to_account_info();
-    let registry = a.oapp_registry.to_account_info();
-    let system = a.system_program.to_account_info();
-    let event_authority = a.endpoint_event_authority.to_account_info();
-    let message_lib_info = a.message_lib_info.to_account_info();
+    let account = &ctx.accounts;
+    let endpoint = account.endpoint_program.to_account_info();
+    let pda_payer = account.pda_payer.to_account_info();
+    let registry = account.oapp_registry.to_account_info();
+    let system = account.system_program.to_account_info();
+    let event_authority = account.endpoint_event_authority.to_account_info();
+    let message_lib_info = account.message_lib_info.to_account_info();
 
     layerzero::invoke(
         ENDPOINT_ID,
@@ -80,8 +80,8 @@ pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
             endpoint.clone(),
             pda_payer.clone(),
             registry.clone(),
-            a.nonce.to_account_info(),
-            a.pending_nonce.to_account_info(),
+            account.nonce.to_account_info(),
+            account.pending_nonce.to_account_info(),
             system.clone(),
         ],
         &[delegate],
@@ -95,7 +95,7 @@ pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
             endpoint.clone(),
             pda_payer.clone(),
             registry.clone(),
-            a.send_library_config.to_account_info(),
+            account.send_library_config.to_account_info(),
             system.clone(),
         ],
         &[delegate],
@@ -112,7 +112,7 @@ pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
             endpoint.clone(),
             pda_payer.clone(),
             registry.clone(),
-            a.receive_library_config.to_account_info(),
+            account.receive_library_config.to_account_info(),
             system,
         ],
         &[delegate],
@@ -130,7 +130,7 @@ pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
             endpoint.clone(),
             pda_payer.clone(),
             registry.clone(),
-            a.send_library_config.to_account_info(),
+            account.send_library_config.to_account_info(),
             message_lib_info.clone(),
             event_authority.clone(),
             endpoint.clone(),
@@ -151,7 +151,7 @@ pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
             endpoint.clone(),
             pda_payer,
             registry,
-            a.receive_library_config.to_account_info(),
+            account.receive_library_config.to_account_info(),
             message_lib_info,
             event_authority,
             endpoint,

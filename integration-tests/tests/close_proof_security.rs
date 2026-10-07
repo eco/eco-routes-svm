@@ -18,7 +18,6 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
     for prover in common::CONCRETE_PROVERS {
         for substitute_hash in [false, true] {
             let mut context = common::Context::default();
-            context.ready_prover(&prover);
             let victim_hash: Bytes32 = [3; 32].into();
             let victim_proof = Proof::pda(&victim_hash, &prover).0;
             context.set_proof(

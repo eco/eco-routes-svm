@@ -123,8 +123,6 @@ impl PendingSend {
     }
 }
 
-impl AccountExt for PendingSend {}
-
 #[account]
 #[derive(InitSpace)]
 pub struct ProofAccount(pub Proof);

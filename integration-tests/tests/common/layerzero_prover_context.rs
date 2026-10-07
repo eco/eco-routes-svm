@@ -28,8 +28,6 @@ use crate::common::{
     cleanup_recipient, program_data_address, sol_amount, Context, TransactionResult,
 };
 
-const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
-
 pub const BASE_EID: u32 = 30184;
 pub const BASE_CHAIN_ID: u64 = 8453;
 pub const OP_EID: u32 = 30111;
@@ -67,11 +65,10 @@ impl Context {
 }
 
 impl LayerZeroProver<'_> {
-    /// Adds the program with `authority` as upgrade authority, initializes the
-    /// mock endpoint's settings account and funds `pda_payer`.
+    /// Makes `authority` the program's upgrade authority (the program itself
+    /// is loaded by `Context::default`), initializes the mock endpoint's
+    /// settings account and funds `pda_payer`.
     pub fn install(&mut self, authority: Pubkey) {
-        self.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
-            .unwrap();
         self.set_upgrade_authority(&layerzero_prover::ID, Some(authority));
 
         let payer = self.payer.pubkey();
@@ -595,17 +592,71 @@ impl LayerZeroProver<'_> {
         self.send(vec![instruction], &[])
     }
 
+    /// `lz_receive_types_v2` with the accounts `lz_receive_types_info` names:
+    /// the store and the lookup table it records.
     pub fn lz_receive_types_v2(&mut self, params: LzReceiveParams) -> TransactionResult {
+        let alt = self.account::<Store>(&Store::pda().0).unwrap().alt;
+        self.lz_receive_types_v2_with_alt(params, alt)
+    }
+
+    pub fn lz_receive_types_v2_with_alt(
+        &mut self,
+        params: LzReceiveParams,
+        alt: Pubkey,
+    ) -> TransactionResult {
         let instruction = Instruction {
             program_id: layerzero_prover::ID,
             accounts: layerzero_prover::accounts::LzReceiveTypesV2 {
                 store: Store::pda().0,
+                alt,
             }
             .to_account_metas(None),
             data: layerzero_prover::instruction::LzReceiveTypesV2 { params }.data(),
         };
         self.send(vec![instruction], &[])
     }
+
+    /// The addresses of the lookup table staged at `alt`, in table order.
+    pub fn lookup_table(&self, alt: &Pubkey) -> Vec<Pubkey> {
+        let account = self.get_account(alt).unwrap();
+        AddressLookupTable::deserialize(&account.data)
+            .unwrap()
+            .addresses
+            .to_vec()
+    }
+
+    /// Resolves `lz_receive_types_v2`'s locators the way the executor does,
+    /// reading each of `alts` from its staged lookup table.
+    pub fn resolve_locators(
+        &self,
+        alts: &[Pubkey],
+        accounts: Vec<AccountMetaRef>,
+    ) -> Vec<AccountMetaRef> {
+        let tables: Vec<Vec<Pubkey>> = alts.iter().map(|alt| self.lookup_table(alt)).collect();
+        resolve_locators(&tables, accounts)
+    }
+}
+
+/// The executor's `AltIndex` resolution: `AltIndex(table, index)` becomes the
+/// `Address` at `tables[table][index]`; `Address` passes through. Any other
+/// locator panics (`lz_receive_types_v2` never returns one).
+pub fn resolve_locators(
+    tables: &[Vec<Pubkey>],
+    accounts: Vec<AccountMetaRef>,
+) -> Vec<AccountMetaRef> {
+    accounts
+        .into_iter()
+        .map(|meta| AccountMetaRef {
+            pubkey: match meta.pubkey {
+                AddressLocator::AltIndex(table, index) => {
+                    AddressLocator::Address(tables[table as usize][index as usize])
+                }
+                AddressLocator::Address(pubkey) => AddressLocator::Address(pubkey),
+                other => panic!("unexpected locator {other:?}"),
+            },
+            is_writable: meta.is_writable,
+        })
+        .collect()
 }
 
 /// `lz_receive` as the executor would build it from `accounts` (all

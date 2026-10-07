@@ -20,6 +20,12 @@ pub const MAX_PAIRS_PER_MESSAGE: usize = 7;
 
 /// Same floor the EVM `LayerZeroProver` computes, so a permissionless
 /// `send_message` caller cannot under-gas the EVM `lzReceive`.
+///
+/// These must equal the EVM `LayerZeroProver`'s `MIN_GAS_LIMIT` (its
+/// constructor `minGasLimit`, deployed as 200000 by eco-routes
+/// `scripts/Deploy.s.sol` `deployLayerZeroProver`) and its `GAS_PER_INTENT`
+/// constant (50_000). An EVM prover deployed with a higher floor would receive
+/// under-gassed messages that need a manual `lzReceive` retry.
 pub const MIN_GAS_LIMIT: u128 = 200_000;
 pub const GAS_PER_INTENT: u128 = 50_000;
 
