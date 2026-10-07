@@ -4,7 +4,7 @@ use anchor_lang::{
     system_program, AccountSerialize, AnchorDeserialize, InstructionData, ToAccountMetas,
 };
 use derive_more::{Deref, DerefMut};
-use eco_svm_std::prover::{IntentHashClaimant, ProofData};
+use eco_svm_std::prover::{GetProofArgs, IntentHashClaimant, Proof, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::instructions::{
     required_alt_addresses, InitArgs, PathConfig, QuoteMessageArgs, ADDRESS_LOOKUP_TABLE_PROGRAM_ID,
@@ -706,5 +706,37 @@ impl LayerZeroProver<'_> {
             },
         )
         .unwrap();
+    }
+}
+
+/// Portal `close_proof` cleanup tail for our proof of `intent_hash`:
+/// `[proof, pda_payer]`, the rent going back to the reserve that paid it.
+pub fn cleanup_tail(intent_hash: &Bytes32) -> Vec<AccountMeta> {
+    vec![
+        AccountMeta::new(Proof::pda(intent_hash, &layerzero_prover::ID).0, false),
+        AccountMeta::new(pda_payer_pda().0, false),
+    ]
+}
+
+impl LayerZeroProver<'_> {
+    /// Calls our `get_proof` directly (query tail `[proof]`) and decodes the
+    /// `Option<Proof>` it returns.
+    pub fn get_proof(&mut self, intent_hash: Bytes32, destination: u64) -> Option<Proof> {
+        let result = self
+            .send_instruction(Instruction {
+                program_id: layerzero_prover::ID,
+                accounts: layerzero_prover::accounts::GetProof {
+                    proof: Proof::pda(&intent_hash, &layerzero_prover::ID).0,
+                }
+                .to_account_metas(None),
+                data: layerzero_prover::instruction::GetProof {
+                    args: GetProofArgs::new(intent_hash, destination, vec![]),
+                }
+                .data(),
+            })
+            .unwrap();
+        assert_eq!(result.return_data.program_id, layerzero_prover::ID);
+
+        Option::<Proof>::try_from_slice(&result.return_data.data).unwrap()
     }
 }

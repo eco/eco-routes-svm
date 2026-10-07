@@ -1,4 +1,4 @@
-use anchor_lang::{AnchorDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::AnchorDeserialize;
 use eco_svm_std::prover::{GetProofArgs, IntentHashClaimant, IntentProven, Proof, ProofData};
 use eco_svm_std::CANCELLED;
 use layerzero_prover::instructions::LayerZeroProverError;
@@ -7,13 +7,13 @@ use layerzero_prover::state::{pda_payer_pda, ProofAccount, Store};
 use portal::instructions::PortalError;
 use portal::state::{vault_pda, WithdrawnMarker};
 use solana_sdk::account::Account;
-use solana_sdk::instruction::{AccountMeta, Instruction};
+use solana_sdk::instruction::AccountMeta;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 use crate::common::layerzero_prover_context::{
-    evm_peer, peers, receive_params, BASE_CHAIN_ID, BASE_EID, OP_CHAIN_ID,
+    cleanup_tail, evm_peer, peers, receive_params, BASE_CHAIN_ID, BASE_EID, OP_CHAIN_ID,
 };
 
 pub mod common;
@@ -307,31 +307,14 @@ fn delivered_proof_is_returned_by_get_proof() {
         .deliver(&receive_params(&peers()[0], 1, pairs(&[(1, claimant)])))
         .unwrap();
 
-    let query = |context: &mut common::Context, byte: u8, destination: u64| {
-        let hash = [byte; 32].into();
-        let result = context
-            .send_instruction(Instruction {
-                program_id: layerzero_prover::ID,
-                accounts: layerzero_prover::accounts::GetProof {
-                    proof: Proof::pda(&hash, &layerzero_prover::ID).0,
-                }
-                .to_account_metas(None),
-                data: layerzero_prover::instruction::GetProof {
-                    args: GetProofArgs::new(hash, destination, vec![]),
-                }
-                .data(),
-            })
-            .unwrap();
-        assert_eq!(result.return_data.program_id, layerzero_prover::ID);
-        Option::<Proof>::try_from_slice(&result.return_data.data).unwrap()
-    };
+    let mut prover = context.layerzero_prover();
 
     assert_eq!(
-        query(&mut context, 1, BASE_CHAIN_ID),
+        prover.get_proof([1; 32].into(), BASE_CHAIN_ID),
         Some(Proof::new(BASE_CHAIN_ID, claimant))
     );
-    assert_eq!(query(&mut context, 1, OP_CHAIN_ID), None);
-    assert_eq!(query(&mut context, 2, BASE_CHAIN_ID), None);
+    assert_eq!(prover.get_proof([1; 32].into(), OP_CHAIN_ID), None);
+    assert_eq!(prover.get_proof([2; 32].into(), BASE_CHAIN_ID), None);
 }
 
 /// Inbound delivery → Portal `withdraw` (query tail `[proof]`, proof left in
@@ -373,15 +356,7 @@ fn delivered_proof_withdraws_and_cleanup_refunds_rent_to_pda_payer() {
 
     context
         .portal()
-        .close_proof(
-            BASE_CHAIN_ID,
-            route_hash,
-            reward,
-            vec![
-                AccountMeta::new(proof_address, false),
-                AccountMeta::new(pda_payer_pda().0, false),
-            ],
-        )
+        .close_proof(BASE_CHAIN_ID, route_hash, reward, cleanup_tail(&hash))
         .unwrap();
 
     assert!(context.get_account(&proof_address).is_none());
@@ -506,10 +481,7 @@ fn proven_cancellation_refunds_then_cleans_up_after_deadline() {
     assert_eq!(context.balance(&reward.creator), reward.native_amount);
     assert!(context.get_account(&proof_address).is_some());
 
-    let cleanup = vec![
-        AccountMeta::new(proof_address, false),
-        AccountMeta::new(pda_payer_pda().0, false),
-    ];
+    let cleanup = cleanup_tail(&hash);
     assert!(context
         .portal()
         .close_proof(BASE_CHAIN_ID, route_hash, reward.clone(), cleanup.clone())

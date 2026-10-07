@@ -13,7 +13,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{Context, ProverQuery, TransactionResult};
+use crate::common::{cleanup_recipient, Context, ProverQuery, TransactionResult};
 
 const AGGREGATOR_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/aggregator_prover.so");
 
@@ -97,18 +97,9 @@ impl AggregatorProver<'_> {
 
     pub fn cleanup_accounts(&self, intent_hash: &Bytes32, provers: &[Pubkey]) -> ProverQuery {
         let query = member_queries(provers.iter().map(|prover| {
-            // Hyperlane and LayerZero pin rent to their PDA payer; the rest
-            // pay a signing recipient.
-            let (recipient, is_signer) = if *prover == hyper_prover::ID {
-                (hyper_prover::state::pda_payer_pda().0, false)
-            } else if *prover == layerzero_prover::ID {
-                (layerzero_prover::state::pda_payer_pda().0, false)
-            } else {
-                (self.payer.pubkey(), true)
-            };
             let cleanup = [
                 AccountMeta::new(Proof::pda(intent_hash, prover).0, false),
-                AccountMeta::new(recipient, is_signer),
+                cleanup_recipient(prover, self.payer.pubkey()),
             ]
             .into();
 

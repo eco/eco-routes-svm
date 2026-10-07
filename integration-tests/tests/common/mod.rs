@@ -17,7 +17,7 @@ use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::clock::Clock;
-use solana_sdk::instruction::{Instruction, InstructionError};
+use solana_sdk::instruction::{AccountMeta, Instruction, InstructionError};
 use solana_sdk::message::Message;
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
@@ -496,6 +496,19 @@ impl Context {
 
 pub fn sol_amount(amount: f64) -> u64 {
     (amount * 1_000_000_000.0) as u64
+}
+
+/// The rent recipient a concrete prover's cleanup tail ends with: Hyperlane
+/// and LayerZero pin it to their (non-signing) PDA payer, the others pay a
+/// signing recipient.
+pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey) -> AccountMeta {
+    if *prover == hyper_prover::ID {
+        AccountMeta::new(hyper_prover::state::pda_payer_pda().0, false)
+    } else if *prover == layerzero_prover::ID {
+        AccountMeta::new(layerzero_prover::state::pda_payer_pda().0, false)
+    } else {
+        AccountMeta::new(signer, true)
+    }
 }
 
 pub fn contains_event<E>(expected: E) -> impl Fn(TransactionMetadata) -> bool

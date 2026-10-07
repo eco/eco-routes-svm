@@ -58,13 +58,7 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                     )
                     .unwrap();
             }
-            let (recipient, recipient_signs) = if prover == hyper_prover::ID {
-                (hyper_prover::state::pda_payer_pda().0, false)
-            } else if prover == layerzero_prover::ID {
-                (layerzero_prover::state::pda_payer_pda().0, false)
-            } else {
-                (context.payer.pubkey(), true)
-            };
+            let recipient = common::cleanup_recipient(&prover, context.payer.pubkey());
             let result = context.portal().close_proof(
                 CHAIN_ID,
                 route_hash,
@@ -73,7 +67,7 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                     AccountMeta::new_readonly(own_proof, false),
                     AccountMeta::new_readonly(prover, false),
                     AccountMeta::new(victim_proof, false),
-                    AccountMeta::new(recipient, recipient_signs),
+                    recipient,
                 ],
             );
             let code = match (prover, substitute_hash) {
@@ -96,13 +90,14 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                 (program, false) if program == polymer_prover::ID => {
                     polymer_prover::instructions::PolymerProverError::InvalidProof as u32
                 }
-                (_, true) => {
+                (program, true) if program == layerzero_prover::ID => {
                     layerzero_prover::instructions::LayerZeroProverError::InvalidPortalProofCloser
                         as u32
                 }
-                (_, false) => {
+                (program, false) if program == layerzero_prover::ID => {
                     layerzero_prover::instructions::LayerZeroProverError::InvalidProof as u32
                 }
+                (program, _) => unreachable!("no expected error for prover {program}"),
             };
             assert!(
                 result.clone().is_err_and(common::reached_program(prover)),

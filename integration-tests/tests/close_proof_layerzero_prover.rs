@@ -11,7 +11,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
-use crate::common::layerzero_prover_context::BASE_CHAIN_ID;
+use crate::common::layerzero_prover_context::{cleanup_tail, BASE_CHAIN_ID};
 
 pub mod common;
 
@@ -136,12 +136,7 @@ fn withdraw_leaves_proof_and_cleanup_refunds_pda_payer() {
 
     context
         .portal()
-        .close_proof(
-            BASE_CHAIN_ID,
-            route_hash,
-            reward,
-            cleanup_tail(proof, pda_payer_pda().0),
-        )
+        .close_proof(BASE_CHAIN_ID, route_hash, reward, cleanup_tail(&hash))
         .unwrap();
 
     assert!(context.get_account(&proof).is_none());
@@ -201,22 +196,13 @@ fn cleanup_without_withdrawal_refuses_a_payable_proof() {
     );
     context.warp_to_timestamp(reward.deadline.try_into().unwrap());
 
-    let result = context.portal().close_proof(
-        BASE_CHAIN_ID,
-        route_hash,
-        reward,
-        cleanup_tail(proof, pda_payer_pda().0),
-    );
+    let result =
+        context
+            .portal()
+            .close_proof(BASE_CHAIN_ID, route_hash, reward, cleanup_tail(&hash));
 
     assert!(result.is_err_and(common::is_error(PortalError::IntentNotCancelled)));
     assert!(context.get_account(&proof).is_some());
-}
-
-fn cleanup_tail(proof: Pubkey, pda_payer: Pubkey) -> Vec<AccountMeta> {
-    vec![
-        AccountMeta::new(proof, false),
-        AccountMeta::new(pda_payer, false),
-    ]
 }
 
 #[test]
