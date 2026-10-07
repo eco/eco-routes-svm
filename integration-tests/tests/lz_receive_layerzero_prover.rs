@@ -95,7 +95,13 @@ fn replayed_delivery_fails() {
     context.layerzero_prover().deliver(&params).unwrap();
     context.expire_blockhash();
 
-    assert!(context.layerzero_prover().lz_receive(&params).is_err());
+    let result = context.layerzero_prover().lz_receive(&params);
+
+    // The first delivery's `clear` closed the PayloadHash, so the endpoint
+    // rejects the replay before `lz_receive` changes any state.
+    assert!(result.is_err_and(common::is_error(
+        anchor_lang::error::ErrorCode::AccountNotInitialized
+    )));
 }
 
 #[test]
@@ -109,6 +115,43 @@ fn chain_id_mismatch_rejected() {
 
     assert!(result.is_err_and(common::is_error(LayerZeroProverError::ChainIdMismatch)));
     assert!(proof(&context, 1).is_none());
+}
+
+#[test]
+fn unknown_src_eid_rejected() {
+    let mut context = ready();
+    let stranger = evm_peer(40_245, BASE_CHAIN_ID, 0xba);
+    context
+        .layerzero_prover()
+        .force_nonce(stranger.eid, stranger.address.into());
+    let params = receive_params(&stranger, 1, pairs(&[(1, Pubkey::new_unique())]));
+
+    let result = context.layerzero_prover().deliver(&params);
+
+    assert!(result.is_err_and(common::is_error(LayerZeroProverError::UnknownPeer)));
+    assert!(proof(&context, 1).is_none());
+}
+
+/// A griefer pre-funding a `Proof` PDA cannot block its creation.
+#[test]
+fn prefunded_proof_pda_still_created() {
+    let mut context = ready();
+    let alice = Pubkey::new_unique();
+    context
+        .airdrop(
+            &Proof::pda(&[1; 32].into(), &layerzero_prover::ID).0,
+            1_000_000,
+        )
+        .unwrap();
+
+    context
+        .layerzero_prover()
+        .deliver(&receive_params(&peers()[0], 1, pairs(&[(1, alice)])))
+        .unwrap();
+
+    let proof = proof(&context, 1).unwrap();
+    assert_eq!(proof.claimant, alice);
+    assert_eq!(proof.destination, BASE_CHAIN_ID);
 }
 
 #[test]

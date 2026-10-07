@@ -9,7 +9,8 @@
 //! Inbound: the executor's delivery transaction modelled as
 //! `[ComputeBudget limit, ComputeBudget price, executor pre_execute,
 //! lz_receive, executor post_execute]`. Our ALT holds the fixed `lz_receive`
-//! accounts and every peer's Nonce; the PayloadHash and each new `Proof` PDA
+//! accounts and every peer's Nonce (`required_alt_addresses`, the contents
+//! `set_alt` enforces); the PayloadHash and each new `Proof` PDA
 //! are static. `pre_execute`/`post_execute` are modelled as
 //! `[payer (s,w), execution context PDA (w)]` with 16 / 8 data bytes - the
 //! devnet E2E confirms the real executor fits the same count.
@@ -18,8 +19,8 @@ use anchor_lang::{InstructionData, ToAccountMetas};
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use layerzero_prover::constants::{lz_receive_gas, MAX_INTENTS_PER_PROVE, MAX_PAIRS_PER_MESSAGE};
-use layerzero_prover::layerzero::{self, ENDPOINT_ID};
-use layerzero_prover::state::{pda_payer_pda, PendingSend, Store};
+use layerzero_prover::instructions::required_alt_addresses;
+use layerzero_prover::state::{PendingSend, Store};
 use portal::state::FulfillMarker;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_packet::PACKET_DATA_SIZE;
@@ -38,14 +39,31 @@ pub mod common;
 const DVN_COUNT: usize = 4;
 const EXECUTOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xe0; 32]);
 
-fn transaction_len(payer: &Pubkey, instructions: &[Instruction], table: Vec<Pubkey>) -> usize {
+/// Solana's per-transaction account lock limit.
+const MAX_TX_ACCOUNT_LOCKS: usize = 64;
+
+fn compile(payer: &Pubkey, instructions: &[Instruction], table: Vec<Pubkey>) -> v0::Message {
     let alt = AddressLookupTableAccount {
         key: Pubkey::new_unique(),
         addresses: table,
     };
-    let message = v0::Message::try_compile(payer, instructions, &[alt], Hash::default()).unwrap();
+    v0::Message::try_compile(payer, instructions, &[alt], Hash::default()).unwrap()
+}
+
+fn transaction_len(message: v0::Message) -> usize {
     // compact-u16 signature count, one signature, then the message.
     1 + 64 + VersionedMessage::V0(message).serialize().len()
+}
+
+/// Every account the transaction loads: the static `account_keys` plus each
+/// lookup's `writable_indexes` and `readonly_indexes` (solana-message v0).
+fn account_count(message: &v0::Message) -> usize {
+    message.account_keys.len()
+        + message
+            .address_table_lookups
+            .iter()
+            .map(|lookup| lookup.writable_indexes.len() + lookup.readonly_indexes.len())
+            .sum::<usize>()
 }
 
 fn ceiling(len: impl Fn(usize) -> usize, max: usize) -> usize {
@@ -55,7 +73,7 @@ fn ceiling(len: impl Fn(usize) -> usize, max: usize) -> usize {
         .unwrap_or(0)
 }
 
-fn outbound_len(n: usize) -> usize {
+fn outbound_message(n: usize) -> v0::Message {
     let payer = Pubkey::new_unique();
     let receiver = peers()[0].address;
     let hashes: Vec<Bytes32> = (0..n).map(|i| [i as u8 + 1; 32].into()).collect();
@@ -127,7 +145,7 @@ fn outbound_len(n: usize) -> usize {
         .chain(workers.into_iter().map(|meta| meta.pubkey))
         .collect();
 
-    transaction_len(
+    compile(
         &payer,
         &[
             ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
@@ -136,6 +154,10 @@ fn outbound_len(n: usize) -> usize {
         ],
         table,
     )
+}
+
+fn outbound_len(n: usize) -> usize {
+    transaction_len(outbound_message(n))
 }
 
 fn inbound_len(n: usize) -> usize {
@@ -158,29 +180,9 @@ fn inbound_len(n: usize) -> usize {
         ],
         data: vec![0; data_len],
     };
-    let store = Store::pda().0;
-    let event_authority =
-        Pubkey::find_program_address(&[b"__event_authority"], &layerzero_prover::ID).0;
-    let table = [
-        store,
-        pda_payer_pda().0,
-        anchor_lang::system_program::ID,
-        event_authority,
-        layerzero_prover::ID,
-        ENDPOINT_ID,
-        layerzero::oapp_registry_pda(&store).0,
-        layerzero::endpoint_settings_pda().0,
-        layerzero::endpoint_event_authority().0,
-    ]
-    .into_iter()
-    .chain(
-        peers()
-            .iter()
-            .map(|peer| layerzero::nonce_pda(&store, peer.eid, &peer.address).0),
-    )
-    .collect();
+    let table = required_alt_addresses(&Store::new(peers()).unwrap());
 
-    transaction_len(
+    transaction_len(compile(
         &payer,
         &[
             ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
@@ -190,7 +192,7 @@ fn inbound_len(n: usize) -> usize {
             wrapper(8),
         ],
         table,
-    )
+    ))
 }
 
 #[test]
@@ -200,6 +202,11 @@ fn outbound_ceiling_matches_max_intents_per_prove() {
         measured, MAX_INTENTS_PER_PROVE,
         "outbound ceiling measured at {measured}"
     );
+    // Fitting the packet is not enough: the transaction must also stay within
+    // the account lock limit, counting the accounts loaded through the ALT.
+    let accounts = account_count(&outbound_message(MAX_INTENTS_PER_PROVE));
+    println!("outbound at {MAX_INTENTS_PER_PROVE} intents: {accounts} accounts");
+    assert!(accounts <= MAX_TX_ACCOUNT_LOCKS);
 }
 
 #[test]
