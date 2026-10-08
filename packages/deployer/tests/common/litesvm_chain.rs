@@ -1,24 +1,41 @@
 use anchor_lang::{AnchorDeserialize, AnchorSerialize, Discriminator};
-use deployer::{chain, Chain};
+use deployer::{chain, transaction, Chain};
 use layerzero_prover::instructions::PathConfig;
 use layerzero_prover::layerzero::{uln_receive_config_pda, uln_send_config_pda, ULN_ID};
 use solana_sdk::account::Account;
 use solana_sdk::clock::Clock;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
-use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
-use solana_sdk::signer::Signer;
-use solana_sdk::transaction::Transaction;
 
 use crate::common::Context;
 
-pub struct LitesvmChain<'a>(pub &'a mut Context);
+pub struct LitesvmChain<'a> {
+    context: &'a mut Context,
+    /// Micro-lamports per compute unit, paid as each transaction's priority fee.
+    compute_unit_price: u64,
+}
+
+impl<'a> LitesvmChain<'a> {
+    pub fn new(context: &'a mut Context) -> Self {
+        Self {
+            context,
+            compute_unit_price: 0,
+        }
+    }
+
+    pub fn with_compute_unit_price(self, compute_unit_price: u64) -> Self {
+        Self {
+            compute_unit_price,
+            ..self
+        }
+    }
+}
 
 impl Chain for LitesvmChain<'_> {
     fn account(&self, address: &Pubkey) -> Result<Option<Account>, chain::Error> {
-        Ok(self.0.get_account(address))
+        Ok(self.context.get_account(address))
     }
 
     fn send(
@@ -26,15 +43,18 @@ impl Chain for LitesvmChain<'_> {
         instructions: &[Instruction],
         signers: &[&Keypair],
     ) -> Result<Signature, chain::Error> {
-        let payer = signers.first().expect("a transaction needs a fee payer");
-        let transaction = Transaction::new(
+        let transaction = transaction::signed(
+            instructions,
             signers,
-            Message::new(instructions, Some(&payer.pubkey())),
-            self.0.latest_blockhash(),
-        );
+            self.context.latest_blockhash(),
+            self.compute_unit_price,
+        )
+        .map_err(|error| chain::Error::SendFailed {
+            reason: error.to_string(),
+        })?;
 
         let signature = self
-            .0
+            .context
             .send_transaction(transaction)
             .map(|metadata| metadata.signature)
             .map_err(|failure| chain::Error::SendFailed {
@@ -49,11 +69,11 @@ impl Chain for LitesvmChain<'_> {
     }
 
     fn slot(&self) -> Result<u64, chain::Error> {
-        Ok(self.0.get_sysvar::<Clock>().slot)
+        Ok(self.context.get_sysvar::<Clock>().slot)
     }
 
     fn genesis_hash(&self) -> Result<Hash, chain::Error> {
-        Ok(self.0.genesis_hash)
+        Ok(self.context.genesis_hash)
     }
 }
 
@@ -84,7 +104,7 @@ impl LitesvmChain<'_> {
                 owner: ULN_ID,
                 ..Account::default()
             };
-            self.0.set_account(address, config).unwrap();
+            self.context.set_account(address, config).unwrap();
         });
     }
 }

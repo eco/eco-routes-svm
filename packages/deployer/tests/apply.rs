@@ -38,6 +38,7 @@ const SLOT_HASHES_SPAN: u64 = 512;
 const PEER_CHAIN_ID: u64 = 30184;
 const LOOKUP_TABLE_META_SIZE: usize = 56;
 const LOOKUP_TABLE_AUTHORITY_OFFSET: usize = 21;
+const TRANSFER_LAMPORTS: u64 = 1_000_000;
 
 type ErrorCheck = fn(&readback::Error) -> bool;
 
@@ -78,7 +79,7 @@ impl Env {
     }
 
     fn chain(&mut self) -> LitesvmChain<'_> {
-        LitesvmChain(&mut self.context)
+        LitesvmChain::new(&mut self.context)
     }
 
     fn plan(&mut self, inputs: RawInputs) -> Result<Plan, plan::Error> {
@@ -97,10 +98,14 @@ impl Env {
         )
     }
 
+    /// At the plan's compute-unit price, as `deployer apply` runs it.
     fn apply(&mut self, plan: &Plan) -> Result<Vec<Step>, apply::Error> {
         let deployer = self.deployer.insecure_clone();
+        let mut chain = self
+            .chain()
+            .with_compute_unit_price(plan.inputs.compute_unit_price);
         let mut steps = Vec::new();
-        apply(&mut self.chain(), plan, &deployer, &mut |step| {
+        apply(&mut chain, plan, &deployer, &mut |step| {
             steps.push(step.clone())
         })?;
 
@@ -233,6 +238,54 @@ fn apply_initializes_hyper_polymer_and_aggregator() {
     let live = config::read(&env.chain(), &plan.release).unwrap();
     live.deviation(&plan.expected_configs).unwrap();
     readback(&env.chain(), &plan).unwrap();
+}
+
+#[test]
+fn apply_pays_the_priority_fee_for_the_whole_compute_unit_limit() {
+    let spent = |compute_unit_price: &str| {
+        let mut env = Env::new();
+        let plan = env
+            .plan(RawInputs {
+                compute_unit_price: compute_unit_price.into(),
+                ..inputs(HYPER_SENDER)
+            })
+            .unwrap();
+        let before = env.balance(&env.deployer.pubkey());
+        env.apply(&plan).unwrap();
+
+        before - env.balance(&env.deployer.pubkey())
+    };
+    // Two reserve transfers, three prover inits, LayerZero `init`, `init_path`,
+    // `set_path_config` and two lookup-table transactions.
+    let transactions = 10;
+
+    let unpriced = spent("0");
+    let priced = spent("3");
+
+    // 3 micro-lamports for 1.4M units is 4.2 lamports, rounded up.
+    assert_eq!(priced - unpriced, transactions * 5);
+}
+
+#[test]
+fn a_priced_transaction_costs_the_signature_fee_and_the_priority_fee() {
+    let mut env = Env::new();
+    let payer = env.deployer.insecure_clone();
+    let transfer = solana_system_interface::instruction::transfer(
+        &payer.pubkey(),
+        &Pubkey::new_unique(),
+        TRANSFER_LAMPORTS,
+    );
+    let before = env.balance(&payer.pubkey());
+
+    env.chain()
+        .with_compute_unit_price(3)
+        .send(&[transfer], &[&payer])
+        .unwrap();
+
+    assert_eq!(
+        before - env.balance(&payer.pubkey()),
+        TRANSFER_LAMPORTS + 5_000 + 5
+    );
 }
 
 #[test]
@@ -725,7 +778,7 @@ fn apply_fills_alt_in_chunks_for_the_maximum_peer_set() {
     readback(&env.chain(), &plan).unwrap();
 }
 
-/// `init` as an earlier, interrupted run sent it.
+/// `init` sent outside `apply`, with `peers`.
 fn init_layerzero_store(env: &mut Env, peers: Vec<Peer>) {
     let store = store_address();
     let deployer = env.deployer.insecure_clone();
@@ -775,19 +828,19 @@ fn apply_resumes_from_an_initialized_store() {
 }
 
 #[test]
-fn apply_appends_the_peers_an_interrupted_run_left_out() {
+fn apply_initializes_every_peer_in_one_init_transaction() {
     let mut env = Env::new();
-    let plan = env.plan(inputs_with_peer_count(20)).unwrap();
+    let max_peers = layerzero_prover::state::MAX_PEERS as u32;
+    let plan = env.plan(inputs_with_peer_count(max_peers)).unwrap();
     let peers = plan.expected_configs.layerzero_peers.clone().unwrap();
-    init_layerzero_store(&mut env, peers[..16].to_vec());
 
     let report = env.apply(&plan).unwrap();
 
     assert_eq!(
         sent(&report)[5..7],
         [
-            (LAYERZERO_PROVER, "init", false),
-            (LAYERZERO_PROVER, "add_peers", true),
+            (LAYERZERO_PROVER, "init", true),
+            (LAYERZERO_PROVER, "init_path", true),
         ]
     );
     assert_eq!(store(&env).peers, peers);
@@ -795,11 +848,11 @@ fn apply_appends_the_peers_an_interrupted_run_left_out() {
 }
 
 #[test]
-fn apply_refuses_a_store_whose_peers_are_not_the_first_planned_ones() {
+fn apply_refuses_a_store_holding_only_the_first_planned_peers() {
     let mut env = Env::new();
     let plan = env.plan(inputs_with_peer_count(20)).unwrap();
     let peers = plan.expected_configs.layerzero_peers.clone().unwrap();
-    init_layerzero_store(&mut env, peers[4..].to_vec());
+    init_layerzero_store(&mut env, peers[..16].to_vec());
 
     let error = env.apply(&plan).unwrap_err();
 
@@ -811,7 +864,7 @@ fn apply_refuses_a_store_whose_peers_are_not_the_first_planned_ones() {
         ),
         "{error:?}"
     );
-    assert_eq!(store(&env).peers, peers[4..]);
+    assert_eq!(store(&env).peers, peers[..16]);
 }
 
 #[test]

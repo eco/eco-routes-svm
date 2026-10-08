@@ -1349,7 +1349,6 @@ dependencies = [
  "solana-address-lookup-table-interface",
  "solana-cluster-type",
  "solana-commitment-config",
- "solana-compute-budget-interface",
  "solana-loader-v3-interface 8.0.1",
  "solana-rpc-client",
  "solana-rpc-client-api",
@@ -1359,6 +1358,7 @@ dependencies = [
  "solana-system-interface 3.2.0",
  "tempfile",
  "thiserror 2.0.20",
+ "wincode",
 ]
 
 [[package]]

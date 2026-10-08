@@ -10,6 +10,8 @@ use layerzero_prover::state::{Peer, Store, MAX_PEERS};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 const EVM_ADDRESS_LEN: usize = 20;
+/// ULN302's `DVN_MAX_LEN`, for the required and the optional list alike.
+pub const MAX_DVNS: u8 = 16;
 
 const HYPER_SENDERS: &str = "hyper_senders";
 const POLYMER_EMITTERS: &str = "polymer_emitters";
@@ -32,6 +34,8 @@ pub enum Error {
     UnpinnedPath { eid: u32 },
     #[error("layerzero path for eid {eid} has DVNs that are not strictly ascending")]
     UnsortedDvns { eid: u32 },
+    #[error("layerzero path for eid {eid} has more than {MAX_DVNS} required or optional DVNs, which ULN302 rejects")]
+    TooManyDvns { eid: u32 },
     #[error("{input}: {value:?} is not a u64 lamport amount")]
     InvalidLamports { input: &'static str, value: String },
     #[error("{COMPUTE_UNIT_PRICE}: {value:?} is not a u64 micro-lamport price")]
@@ -298,6 +302,7 @@ fn parse_layerzero_peers(value: &str) -> Result<Vec<LayerZeroPeer>, Error> {
             let path: PathConfig = path.into();
             path.validate().map_err(|_| Error::UnpinnedPath { eid })?;
             require_sorted_dvns(eid, &path)?;
+            require_dvn_limit(eid, &path)?;
 
             Ok(LayerZeroPeer {
                 eid,
@@ -329,6 +334,18 @@ fn require_sorted_dvns(eid: u32, path: &PathConfig) -> Result<(), Error> {
     }
 }
 
+fn require_dvn_limit(eid: u32, path: &PathConfig) -> Result<(), Error> {
+    let within_limit = [&path.send_uln, &path.receive_uln]
+        .into_iter()
+        .flat_map(|uln| [&uln.required_dvns, &uln.optional_dvns])
+        .all(|dvns| dvns.len() <= MAX_DVNS.into());
+
+    match within_limit {
+        true => Ok(()),
+        false => Err(Error::TooManyDvns { eid }),
+    }
+}
+
 fn parse_lamports(input: &'static str, value: &str) -> Result<u64, Error> {
     value.trim().parse().map_err(|_| Error::InvalidLamports {
         input,
@@ -354,6 +371,9 @@ fn reject_duplicates<T>(
 
 #[cfg(test)]
 mod tests {
+    use std::ops::RangeInclusive;
+    use std::slice;
+
     use super::*;
 
     const VALID_ADDRESS: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
@@ -387,6 +407,37 @@ mod tests {
     fn peer_json(eid: u32, address: &str, uln: &str) -> String {
         format!(
             r#"{{"eid":{eid},"address":"{address}","chain_id":{eid},"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}"#
+        )
+    }
+
+    /// `required` and `optional` distinct, ascending DVNs; no optional DVNs is NIL.
+    fn uln_with_dvns(required: u8, optional: u8) -> String {
+        let dvns = |range: RangeInclusive<u8>| {
+            range
+                .map(|index| {
+                    let mut bytes = [0u8; 32];
+                    bytes[31] = index;
+
+                    format!(r#""{}""#, Pubkey::new_from_array(bytes))
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let (optional_count, threshold) = match optional {
+            0 => (u8::MAX, 0),
+            count => (count, 1),
+        };
+
+        format!(
+            r#"{{"confirmations":15,"required_dvn_count":{required},"optional_dvn_count":{optional_count},"optional_dvn_threshold":{threshold},"required_dvns":[{}],"optional_dvns":[{}]}}"#,
+            dvns(1..=required),
+            dvns(101..=100 + optional)
+        )
+    }
+
+    fn peer_with_ulns(send: &str, receive: &str) -> String {
+        format!(
+            r#"{{"eid":30184,"address":"{VALID_ADDRESS}","chain_id":30184,"path":{{"send_uln":{send},"receive_uln":{receive},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}"#
         )
     }
 
@@ -612,6 +663,41 @@ mod tests {
             Err(Error::UnsortedDvns { eid: 30184 })
         ));
         assert!(rejected([DVN, OTHER_DVN]).is_ok());
+    }
+
+    #[test]
+    fn layerzero_accepts_as_many_dvns_as_uln302() {
+        let uln = uln_with_dvns(MAX_DVNS, MAX_DVNS);
+        let layerzero = layerzero_json(&[peer_with_ulns(&uln, &uln)]);
+
+        assert!(Inputs::parse(RawInputs {
+            layerzero,
+            ..raw_inputs()
+        })
+        .is_ok());
+    }
+
+    #[test]
+    fn layerzero_rejects_more_dvns_than_uln302() {
+        let valid = uln_with_dvns(1, 0);
+        [
+            uln_with_dvns(MAX_DVNS + 1, 0),
+            uln_with_dvns(1, MAX_DVNS + 1),
+        ]
+        .iter()
+        .flat_map(|uln| [peer_with_ulns(uln, &valid), peer_with_ulns(&valid, uln)])
+        .for_each(|peer| {
+            assert!(
+                matches!(
+                    Inputs::parse(RawInputs {
+                        layerzero: layerzero_json(slice::from_ref(&peer)),
+                        ..raw_inputs()
+                    }),
+                    Err(Error::TooManyDvns { eid: 30184 })
+                ),
+                "{peer}"
+            );
+        });
     }
 
     #[test]

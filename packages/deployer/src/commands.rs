@@ -10,7 +10,7 @@ use solana_sdk::signature::{read_keypair_file, Keypair};
 use solana_sdk::signer::Signer;
 
 use crate::apply::{self, Step};
-use crate::chain::{self, Chain, Priced};
+use crate::chain::{self, Chain};
 use crate::classify::{self, classify, ProgramState, Status};
 use crate::cli::{ActionsArgs, ApplyArgs, Command, PlanArgs, SelectionArgs};
 use crate::funding::Funding;
@@ -104,10 +104,10 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
         }
         Command::Apply(args) => {
             let deployer = read_keypair(&args.chain.deployer_keypair)?;
-            let rpc = RpcChain::new(args.chain.rpc_url.clone());
             let file: PlanFile = read_json(&args.plan)?;
             let price = Inputs::parse(file.document.inputs)?.compute_unit_price;
-            let mut chain = Priced::new(rpc, price);
+            let mut chain =
+                RpcChain::new(args.chain.rpc_url.clone()).with_compute_unit_price(price);
 
             apply(&mut chain, args, &deployer, out)
         }

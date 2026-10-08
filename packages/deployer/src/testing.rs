@@ -85,11 +85,6 @@ pub fn release_address(program: &str) -> Pubkey {
 }
 
 pub fn plan(reserve_lamports: u64) -> Plan {
-    plan_with_peers(reserve_lamports, 1)
-}
-
-/// `plan`, with LayerZero peers at eids and chain IDs `1..=peers`.
-pub fn plan_with_peers(reserve_lamports: u64, peers: u32) -> Plan {
     let names = [
         HYPER_PROVER,
         LOCAL_PROVER,
@@ -129,18 +124,12 @@ pub fn plan_with_peers(reserve_lamports: u64, peers: u32) -> Plan {
     let uln = format!(
         r#"{{"confirmations":15,"required_dvn_count":1,"optional_dvn_count":255,"optional_dvn_threshold":0,"required_dvns":["{DVN}"],"optional_dvns":[]}}"#
     );
-    let peers = (1..=peers)
-        .map(|eid| {
-            format!(
-                r#"{{"eid":{eid},"address":"{SENDER}","chain_id":{eid},"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}"#
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
     let inputs = Inputs::parse(RawInputs {
         hyper_senders: SENDER.into(),
         polymer_emitters: SENDER.into(),
-        layerzero: format!(r#"{{"peers":[{peers}]}}"#),
+        layerzero: format!(
+            r#"{{"peers":[{{"eid":1,"address":"{SENDER}","chain_id":1,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
+        ),
         hyper_reserve_lamports: reserve_lamports.to_string(),
         layerzero_reserve_lamports: reserve_lamports.to_string(),
         compute_unit_price: "0".into(),

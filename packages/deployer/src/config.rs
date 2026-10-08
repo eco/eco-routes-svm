@@ -54,8 +54,7 @@ pub struct Configs {
 }
 
 impl Configs {
-    /// Fails when a config exists and differs from `expected`. An absent config passes, and so do
-    /// LayerZero peers `add_peers` has yet to complete: a prefix of the expected ones.
+    /// Fails when a config exists and differs from `expected`; an absent config passes.
     pub fn conflict(&self, expected: &Self) -> Result<(), Mismatch> {
         self.compare(expected, true, |_| true)?;
 
@@ -126,13 +125,6 @@ impl Configs {
                 |((program, actual), (_, expected))| match (&actual, &expected) {
                     (None, _) if absent_passes => Ok(()),
                     (actual, expected) if actual == expected => Ok(()),
-                    (Some(actual), Some(expected))
-                        if absent_passes
-                            && program == LAYERZERO_PROVER
-                            && expected.starts_with(actual) =>
-                    {
-                        Ok(())
-                    }
                     _ => Err(Mismatch {
                         program,
                         expected: describe(&expected),

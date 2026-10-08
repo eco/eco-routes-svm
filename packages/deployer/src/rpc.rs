@@ -5,13 +5,11 @@ use solana_rpc_client_api::config::RpcSendTransactionConfig;
 use solana_sdk::account::Account;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
-use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
-use solana_sdk::signer::Signer;
-use solana_sdk::transaction::Transaction;
 
 use crate::chain::{self, Chain};
+use crate::transaction;
 
 /// The validator rebroadcasts a transaction until it lands or its blockhash expires (about 60
 /// seconds); this many attempts cover a congested leader without flooding the endpoint.
@@ -22,13 +20,26 @@ const REDACTED_URL: &str = "<rpc-url>";
 pub struct RpcChain {
     client: RpcClient,
     url: String,
+    /// Micro-lamports per compute unit, paid as each transaction's priority fee.
+    compute_unit_price: u64,
 }
 
 impl RpcChain {
     pub fn new(url: String) -> Self {
         let client = RpcClient::new_with_commitment(url.clone(), CommitmentConfig::confirmed());
 
-        Self { client, url }
+        Self {
+            client,
+            url,
+            compute_unit_price: 0,
+        }
+    }
+
+    pub fn with_compute_unit_price(self, compute_unit_price: u64) -> Self {
+        Self {
+            compute_unit_price,
+            ..self
+        }
     }
 
     /// The RPC URL is a secret (it carries the API key): no error text may contain it.
@@ -76,13 +87,12 @@ impl Chain for RpcChain {
         let send_failed = |error| chain::Error::SendFailed {
             reason: self.describe(error),
         };
-        let payer = signers.first().expect("a transaction needs a fee payer");
         let blockhash = self.client.get_latest_blockhash().map_err(send_failed)?;
-        let transaction = Transaction::new(
-            signers,
-            Message::new(instructions, Some(&payer.pubkey())),
-            blockhash,
-        );
+        let transaction =
+            transaction::signed(instructions, signers, blockhash, self.compute_unit_price)
+                .map_err(|error| chain::Error::SendFailed {
+                    reason: error.to_string(),
+                })?;
         let config = RpcSendTransactionConfig {
             preflight_commitment: Some(CommitmentLevel::Confirmed),
             max_retries: Some(SEND_MAX_RETRIES),
@@ -119,6 +129,8 @@ impl Chain for RpcChain {
 
 #[cfg(test)]
 mod tests {
+    use solana_sdk::signer::Signer;
+
     use super::*;
 
     /// The second is normalized by the HTTP client (a `/` is added), so its errors echo a URL

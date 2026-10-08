@@ -8,7 +8,7 @@ use solana_sdk::rent::Rent;
 
 use crate::chain::{self, Chain};
 use crate::plan::{Action, Plan, HYPER_PROVER, LAYERZERO_PROVER};
-use crate::{layerzero, layerzero_state};
+use crate::{layerzero, layerzero_state, transaction};
 
 /// The configs', `Store`'s and lookup table's rent, `solana-verify`'s verification PDAs, and the
 /// unpriced verify and finalize transactions. Each is far below this for any input set that fits
@@ -24,9 +24,6 @@ const SIGNATURE_FEE_LAMPORTS: u64 = 5_000;
 const DEPLOY_WRITE_BYTES: usize = 900;
 const DEPLOY_COMPUTE_UNIT_LIMIT: u64 = 10_000;
 const DEPLOY_SETUP_TRANSACTIONS: u64 = 2;
-/// Every `apply` transaction stays within this: LayerZero setup sets it explicitly, the rest run
-/// at most two instructions at the 200k default.
-const APPLY_COMPUTE_UNIT_LIMIT: u64 = 1_400_000;
 /// Two reserve transfers and three prover inits; LayerZero's are `layerzero::setup_transactions`.
 const APPLY_FIXED_TRANSACTIONS: u64 = 5;
 
@@ -189,9 +186,11 @@ fn transaction_fees(plan: &Plan, deployed_lengths: &[usize]) -> u64 {
     });
     let peers: Vec<Peer> = plan.inputs.layerzero_peers.iter().map(Into::into).collect();
     let applies = APPLY_FIXED_TRANSACTIONS + layerzero::setup_transactions(&peers);
+    // What `transaction::signed` charges each `apply` transaction, with the deployer as sole signer.
+    let apply_fee = transaction::priority_fee(price).saturating_add(SIGNATURE_FEE_LAMPORTS);
 
     deploys
-        .chain([fee(price, APPLY_COMPUTE_UNIT_LIMIT, 1).saturating_mul(applies)])
+        .chain([apply_fee.saturating_mul(applies)])
         .fold(0, u64::saturating_add)
 }
 

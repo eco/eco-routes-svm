@@ -163,7 +163,7 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
 
     let mut planned = Vec::new();
     commands::plan(
-        &LitesvmChain(&mut context),
+        &LitesvmChain::new(&mut context),
         &plan_args(directory.path(), deployer.pubkey()),
         &deployer.pubkey(),
         &mut planned,
@@ -183,7 +183,7 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
         .for_each(|(address, account)| context.set_account(*address, account.clone()).unwrap());
     let mut applied = Vec::new();
     commands::apply(
-        &mut LitesvmChain(&mut context),
+        &mut LitesvmChain::new(&mut context),
         &apply_args(directory.path()),
         &deployer,
         &mut applied,
@@ -222,7 +222,7 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
 
     // `apply` wrote the configs the hash covers, so the plan is spent: a rerun needs a new plan.
     let rerun = commands::apply(
-        &mut LitesvmChain(&mut context),
+        &mut LitesvmChain::new(&mut context),
         &apply_args(directory.path()),
         &deployer,
         &mut Vec::new(),

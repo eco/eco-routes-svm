@@ -13,6 +13,7 @@ pub mod readback;
 pub mod rpc;
 pub mod selection;
 pub mod setup;
+pub mod transaction;
 pub mod uln;
 
 #[cfg(test)]

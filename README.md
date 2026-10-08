@@ -636,7 +636,7 @@ Runs on one cluster never overlap: a dispatch waits while another run on that cl
 | `polymer_emitters` | Comma-separated EVM addresses of the EVM PolymerProver |
 | `layerzero` | JSON, see below |
 | `hyper_reserve_lamports`, `layerzero_reserve_lamports` | Top-ups for each prover's `pda_payer`, default `0`. Only the shortfall is sent; a balance is never reduced. The plan fails unless the LayerZero reserve covers the endpoint and ULN accounts its paths still need (about 0.036 SOL per peer) and stays rent-exempt; the summary shows both |
-| `compute_unit_price` | Micro-lamports per compute unit for deploys and init transactions, default `0` (none). Part of the plan hash, and the funding estimate includes the priority fees it adds; deploy and `apply` take it from the plan |
+| `compute_unit_price` | Micro-lamports per compute unit, default `0` (none). Program deploys take it per compute unit; `apply` turns it into each v1 transaction's priority fee, price × 1.4M compute units. Part of the plan hash, and the funding estimate includes the priority fees it adds; deploy and `apply` take it from the plan |
 
 Inputs for a program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any input the program's own `init` would: more than 20 hyper senders or Polymer emitters, and a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses.
 
@@ -701,7 +701,7 @@ The hash covers the release, the binaries, the cluster's genesis hash, the deplo
 **3. Approve** the `deploy` job, or reject it to stop. Once approved it plans again and fails without writing if the hash differs from the approved plan's (the chain changed while it waited); otherwise it:
 
 1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
-2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init` with the first 16 peers, `add_peers` with the rest, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
+2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init` with every peer, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
 3. reads every config back and compares it with the inputs; any difference fails the run with every program still upgradeable;
 4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record, and fails unless the rebuild matches the deployed bytecode;
 5. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
@@ -732,8 +732,8 @@ After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separ
 
 | Limit | Value |
 |---|---|
-| LayerZero peers | at most 32 (`MAX_PEERS`); `init` carries the first 16 and `add_peers` the rest, 16 per transaction |
-| Required DVNs per ULN config | at most 7 with no optional DVNs; optional DVNs lower it. The limit is the 1232-byte transaction: the plan rejects any `init` or `set_path_config` that would not fit with its compute-unit limit and price instructions. The limit is 1.4M: `set_path_config` used about 238k compute units against devnet's ULN302, over the 200k default |
+| LayerZero peers | at most 32 (`MAX_PEERS`); `init` carries them all in one v1 transaction |
+| DVNs per ULN config | at most 16 required and 16 optional (ULN302's `DVN_MAX_LEN`, checked at plan). Every `init` and `set_path_config` also fits the 4096-byte v1 transaction limit (the largest, `set_path_config` with 16 + 16 DVNs on both ULN configs, is 2788 bytes); the plan rejects any over it. Every `apply` transaction sets a 1.4M compute-unit limit and its priority fee in its config: v1 budgets no compute units unless the limit is set, and `set_path_config` used about 249k against devnet's ULN302 |
 | DVN lists | strictly ascending by public key |
 
 #### Manual fallback
@@ -777,7 +777,7 @@ solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deploy
 | `hyper_prover` | `whitelisted_senders`: the EVM HyperProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
 | `polymer_prover` | `whitelisted_emitters`: the EVM PolymerProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
 | `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
-| `layerzero_prover` | `init` with the first 16 peers, `add_peers` with the rest, then `init_path` and `set_path_config` per peer, a frozen lookup table of `required_alt_addresses`, and `set_alt`; see [Administration and finalization](#administration-and-finalization) | deployer, as payer and upgrade authority |
+| `layerzero_prover` | `init` with every peer (one v1 transaction), then `init_path` and `set_path_config` per peer, a frozen lookup table of `required_alt_addresses`, and `set_alt`; see [Administration and finalization](#administration-and-finalization) | deployer, as payer and upgrade authority |
 
 Every config is permanent. Read each one back and compare it with what you sent:
 

@@ -346,7 +346,6 @@ impl From<config::Mismatch> for Error {
 #[cfg(test)]
 mod tests {
     use layerzero_prover::instructions::required_alt_addresses;
-    use solana_compute_budget_interface::ComputeBudgetInstruction;
     use solana_sdk::rent::Rent;
 
     use super::*;
@@ -420,7 +419,7 @@ mod tests {
         let aggregator = release_address(AGGREGATOR_PROVER);
         let hyper_reserve = pda(hyper_prover::state::PDA_PAYER_SEED, HYPER_PROVER);
         let layerzero_reserve = pda(layerzero_prover::state::PDA_PAYER_SEED, LAYERZERO_PROVER);
-        assert_eq!(chain.sent.len(), 13);
+        assert_eq!(chain.sent.len(), 11);
         assert_eq!(keys(&chain.sent[0]), vec![payer, hyper_reserve]);
         assert_eq!(keys(&chain.sent[1]), vec![payer, layerzero_reserve]);
         assert_eq!(chain.sent[2].program_id, hyper);
@@ -465,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn layerzero_instructions_target_the_release_address_with_a_compute_unit_limit() {
+    fn layerzero_instructions_target_the_release_address_without_compute_budget_instructions() {
         let plan = plan(5_000_000);
         let deployer = Keypair::new();
         let payer = deployer.pubkey();
@@ -478,13 +477,13 @@ mod tests {
 
         applied(&mut chain, &plan, &deployer).unwrap();
 
-        let [init_path_limit, init_path, set_path_config_limit, set_path_config, create, extend, freeze, set_alt] =
-            &chain.sent[5..]
-        else {
-            panic!("expected eight LayerZero instructions after the prover inits");
+        let [init_path, set_path_config, create, extend, freeze, set_alt] = &chain.sent[5..] else {
+            panic!("expected six LayerZero instructions after the prover inits");
         };
-        let limit = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
-        assert_eq!([init_path_limit, set_path_config_limit], [&limit, &limit]);
+        assert!(chain
+            .sent
+            .iter()
+            .all(|instruction| instruction.program_id != solana_sdk_ids::compute_budget::id()));
         assert_eq!(init_path.program_id, program);
         assert_eq!(
             keys(init_path)[..5],
@@ -559,7 +558,7 @@ mod tests {
             result,
             Err(Error::LayerZero(layerzero::Error::StoreMissing { address })) if address == store
         ));
-        let init = &chain.sent[6];
+        let init = &chain.sent[5];
         assert_eq!(init.program_id, program);
         assert_eq!(
             keys(init),
@@ -587,6 +586,8 @@ mod tests {
                 (POLYMER_PROVER, INIT, true),
                 (AGGREGATOR_PROVER, INIT, true),
                 (LAYERZERO_PROVER, INIT, true),
+                (LAYERZERO_PROVER, "init_path", true),
+                (LAYERZERO_PROVER, "set_path_config", true),
             ]
         );
     }
@@ -616,7 +617,7 @@ mod tests {
         let report = applied(&mut chain, &plan, &Keypair::new()).unwrap();
 
         assert!(report[..2].iter().all(|step| step.signature.is_none()));
-        assert_eq!(chain.sent.len(), 11);
+        assert_eq!(chain.sent.len(), 9);
     }
 
     #[test]
