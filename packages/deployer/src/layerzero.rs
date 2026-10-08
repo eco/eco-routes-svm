@@ -1,7 +1,7 @@
 use anchor_lang::{system_program, InstructionData, ToAccountMetas};
 use layerzero_prover::instructions::{required_alt_addresses, InitArgs, PathConfig};
 use layerzero_prover::layerzero::{self, ENDPOINT_ID, LZ_RECEIVE_TYPES_SEED, ULN_ID};
-use layerzero_prover::state::{Peer, PDA_PAYER_SEED};
+use layerzero_prover::state::{Peer, Store, PDA_PAYER_SEED};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table, freeze_lookup_table,
 };
@@ -21,6 +21,10 @@ use crate::layerzero_state::{self, Path};
 use crate::plan::{Plan, LAYERZERO_PROVER};
 
 const ALT_EXTEND_CHUNK: usize = 20;
+/// Peers `init` carries; `add_peers` appends the rest, as many per transaction. With the
+/// compute-unit instructions both fit a packet at 16 (1172 and 1006 bytes) and `init` stops at 17,
+/// so `MAX_PEERS` (32) takes one `add_peers`.
+const PEERS_PER_TRANSACTION: usize = 16;
 /// The transaction maximum: `init_path` and `set_path_config` nest several endpoint and ULN302
 /// CPIs whose cost on the real programs is unmeasured, and the default 200k must not decide it.
 const COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
@@ -57,15 +61,27 @@ pub struct Action {
     pub signature: Option<Signature>,
 }
 
-/// Rejects a setup whose `init` or any `set_path_config` would not fit one legacy transaction
-/// with its compute-unit limit and the price `apply --compute-unit-price` prepends: deployer as
-/// sole signer and fee payer, built with the real instructions at `program`.
+/// Rejects a setup whose `init`, any `add_peers` or any `set_path_config` would not fit one legacy
+/// transaction with its compute-unit limit and the price `apply --compute-unit-price` prepends:
+/// deployer as sole signer and fee payer, built with the real instructions at `program`.
 pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Result<(), Error> {
     let deployer = Pubkey::new_from_array([1; 32]);
+    let store_peers: Vec<Peer> = peers.iter().map(Into::into).collect();
+    let mut batches = store_peers.chunks(PEERS_PER_TRANSACTION);
     let init = (
         "init".to_owned(),
-        init_instruction(program, &deployer, peers.iter().map(Into::into).collect()),
+        init_instruction(
+            program,
+            &deployer,
+            batches.next().unwrap_or_default().to_vec(),
+        ),
     );
+    let add_peers = batches.map(|batch| {
+        (
+            "add_peers".to_owned(),
+            add_peers_instruction(program, &deployer, batch.to_vec()),
+        )
+    });
     let set_path_configs = peers.iter().map(|peer| {
         (
             format!("set_path_config for eid {}", peer.eid),
@@ -74,6 +90,7 @@ pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Res
     });
 
     std::iter::once(init)
+        .chain(add_peers)
         .chain(set_path_configs)
         .try_for_each(|(transaction, instruction)| {
             let size = priced_transaction_size(&deployer, instruction);
@@ -87,6 +104,19 @@ pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Res
                 }),
             }
         })
+}
+
+/// Every transaction `apply` sends for a LayerZero setup of `peers` from scratch: `init`,
+/// `add_peers`, `init_path` and `set_path_config` per peer, and the lookup table's.
+pub fn setup_transactions(peers: &[Peer]) -> u64 {
+    let store = Store::new(peers.to_vec()).expect("planned peers must form a valid store");
+    let extends = required_alt_addresses(&store)
+        .len()
+        .div_ceil(ALT_EXTEND_CHUNK);
+    // `create` shares the first extend's transaction and `freeze` shares `set_alt`'s.
+    let lookup_table = extends + 1;
+
+    (peers.len().div_ceil(PEERS_PER_TRANSACTION) + 2 * peers.len() + lookup_table) as u64
 }
 
 fn priced_transaction_size(deployer: &Pubkey, instruction: Instruction) -> usize {
@@ -121,6 +151,14 @@ pub fn apply<C: Chain>(
     let mut landed = |name, signature| observe(&Action { name, signature });
 
     landed("init", init(chain, plan, &program, deployer, &peers)?);
+    missing_peers(chain, &program, &peers)?
+        .chunks(PEERS_PER_TRANSACTION)
+        .try_for_each(|batch| {
+            let instruction = add_peers_instruction(&program, &deployer.pubkey(), batch.to_vec());
+            landed("add_peers", send(chain, deployer, &limited(instruction))?);
+
+            Ok::<_, Error>(())
+        })?;
     peers.iter().try_for_each(|(peer, _)| {
         landed("init_path", init_path(chain, &program, deployer, peer)?);
 
@@ -152,13 +190,34 @@ fn init(
     if !live.is_absent() {
         return Ok(None);
     }
-    let peers = peers.iter().map(|(peer, _)| *peer).collect();
+    let first = peers
+        .iter()
+        .take(PEERS_PER_TRANSACTION)
+        .map(|(peer, _)| *peer)
+        .collect();
 
     send(
         chain,
         deployer,
-        &limited(init_instruction(program, &deployer.pubkey(), peers)),
+        &limited(init_instruction(program, &deployer.pubkey(), first)),
     )
+}
+
+/// The planned peers the `Store` lacks. `init` already refused a `Store` whose peers are not a
+/// prefix of the planned ones.
+fn missing_peers(
+    chain: &impl Chain,
+    program: &Pubkey,
+    peers: &[(Peer, PathConfig)],
+) -> Result<Vec<Peer>, Error> {
+    let address = layerzero_state::store_address(program);
+    let store = config::layerzero_store(chain, program)?.ok_or(Error::StoreMissing { address })?;
+
+    Ok(peers
+        .iter()
+        .skip(store.peers.len())
+        .map(|(peer, _)| *peer)
+        .collect())
 }
 
 fn init_path(
@@ -281,6 +340,21 @@ fn init_instruction(program: &Pubkey, deployer: &Pubkey, peers: Vec<Peer>) -> In
     }
 }
 
+fn add_peers_instruction(program: &Pubkey, deployer: &Pubkey, peers: Vec<Peer>) -> Instruction {
+    let accounts = layerzero_prover::accounts::AddPeers {
+        authority: *deployer,
+        program: *program,
+        program_data: config::program_data_address(program),
+        store: layerzero_state::store_address(program),
+    };
+
+    Instruction {
+        program_id: *program,
+        accounts: accounts.to_account_metas(None),
+        data: layerzero_prover::instruction::AddPeers { peers }.data(),
+    }
+}
+
 fn init_path_instruction(program: &Pubkey, deployer: &Pubkey, peer: &Peer) -> Instruction {
     let store = layerzero_state::store_address(program);
     let accounts = layerzero_prover::accounts::InitPath {
@@ -366,6 +440,8 @@ fn pda_payer_address(program: &Pubkey) -> Pubkey {
 
 #[cfg(test)]
 mod tests {
+
+    use anchor_lang::AccountSerialize;
     use layerzero_prover::layerzero::{ExecutorConfig, UlnConfig};
     use layerzero_prover::state::MAX_PEERS;
     use solana_sdk::account::Account;
@@ -375,7 +451,10 @@ mod tests {
 
     use super::*;
     use crate::chain::Priced;
-    use crate::testing::{full_setup, plan, uln_account_data, FullSetup};
+    use crate::testing::{
+        full_setup, plan, plan_with_peers, release_address, uln_account_data, FullSetup,
+        RecordingChain,
+    };
 
     const PACKET_DATA_SIZE: usize = 1232;
     /// The most required DVNs per ULN (same on send and receive) whose `set_path_config` still fits
@@ -496,6 +575,67 @@ mod tests {
     }
 
     #[test]
+    fn a_store_holding_the_first_peers_gets_the_rest_from_add_peers() {
+        let plan = plan_with_peers(5_000_000, 20);
+        let program = release_address(LAYERZERO_PROVER);
+        let deployer = Keypair::new();
+        let peers = plan.expected_configs.layerzero_peers.clone().unwrap();
+        let store = Store {
+            peers: peers[..PEERS_PER_TRANSACTION].to_vec(),
+            alt: Pubkey::default(),
+        };
+        let mut data = Vec::new();
+        store.try_serialize(&mut data).unwrap();
+        let mut chain = RecordingChain::default();
+        chain.accounts.insert(
+            layerzero_state::store_address(&program),
+            Account {
+                owner: program,
+                data,
+                ..Account::default()
+            },
+        );
+
+        let actions = applied(&mut chain, &plan, &deployer).unwrap();
+
+        let names: Vec<_> = actions.iter().map(|action| action.name).take(3).collect();
+        let add_peers = add_peers_instruction(
+            &program,
+            &deployer.pubkey(),
+            peers[PEERS_PER_TRANSACTION..].to_vec(),
+        );
+        assert_eq!(names, ["init", "add_peers", "init_path"]);
+        assert!(actions[0].signature.is_none());
+        assert_eq!(
+            chain
+                .sent
+                .iter()
+                .filter(|instruction| instruction.data == add_peers.data)
+                .count(),
+            1
+        );
+        assert_eq!(chain.sent[1], add_peers);
+    }
+
+    #[test]
+    fn setup_transactions_counts_add_peers_and_lookup_table_extends() {
+        let peers = |count: u32| -> Vec<Peer> {
+            (1..=count)
+                .map(|eid| Peer {
+                    eid,
+                    address: [1; 32].into(),
+                    chain_id: eid.into(),
+                })
+                .collect()
+        };
+
+        // init, 2 per peer, create with the only extend, freeze with set_alt.
+        assert_eq!(setup_transactions(&peers(1)), 1 + 2 + 2);
+        // init and one add_peers, 2 per peer, three extends of 42 addresses, then set_alt.
+        assert_eq!(setup_transactions(&peers(MAX_PEERS as u32)), 2 + 64 + 4);
+    }
+
+    #[test]
     fn largest_transactions_fit_a_packet_with_a_compute_unit_price() {
         let program = Pubkey::new_unique();
         let deployer = Keypair::new();
@@ -516,21 +656,37 @@ mod tests {
         };
         let mut chain = Priced::new(SizingChain, 1_000_000);
 
+        let (first, rest) = peers.split_at(PEERS_PER_TRANSACTION);
+
         send(
             &mut chain,
             &deployer,
-            &[init_instruction(&program, &deployer.pubkey(), peers)],
+            &limited(init_instruction(
+                &program,
+                &deployer.pubkey(),
+                first.to_vec(),
+            )),
         )
         .unwrap();
         send(
             &mut chain,
             &deployer,
-            &[set_path_config_instruction(
+            &limited(add_peers_instruction(
+                &program,
+                &deployer.pubkey(),
+                rest.to_vec(),
+            )),
+        )
+        .unwrap();
+        send(
+            &mut chain,
+            &deployer,
+            &limited(set_path_config_instruction(
                 &program,
                 &deployer.pubkey(),
                 1,
                 &path,
-            )],
+            )),
         )
         .unwrap();
     }

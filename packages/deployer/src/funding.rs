@@ -1,13 +1,14 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use layerzero_prover::state::Peer;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
 
 use crate::chain::{self, Chain};
-use crate::layerzero_state;
 use crate::plan::{Action, Plan, HYPER_PROVER, LAYERZERO_PROVER};
+use crate::{layerzero, layerzero_state};
 
 /// The configs', `Store`'s and lookup table's rent, `solana-verify`'s verification PDAs, and the
 /// unpriced verify and finalize transactions. Each is far below this for any input set that fits
@@ -26,11 +27,8 @@ const DEPLOY_SETUP_TRANSACTIONS: u64 = 2;
 /// Every `apply` transaction stays within this: LayerZero setup sets it explicitly, the rest run
 /// at most two instructions at the 200k default.
 const APPLY_COMPUTE_UNIT_LIMIT: u64 = 1_400_000;
-/// Two reserve transfers, three prover inits, LayerZero `init`, and at most three lookup-table
-/// transactions (16 peers' nonces plus 10 fixed addresses, 20 per extend, then freeze with
-/// `set_alt`); each peer adds `init_path` and `set_path_config`.
-const APPLY_FIXED_TRANSACTIONS: u64 = 9;
-const APPLY_TRANSACTIONS_PER_PEER: u64 = 2;
+/// Two reserve transfers and three prover inits; LayerZero's are `layerzero::setup_transactions`.
+const APPLY_FIXED_TRANSACTIONS: u64 = 5;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -189,8 +187,8 @@ fn transaction_fees(plan: &Plan, deployed_lengths: &[usize]) -> u64 {
         fee(price, DEPLOY_COMPUTE_UNIT_LIMIT, 1).saturating_mul(writes)
             + fee(price, DEPLOY_COMPUTE_UNIT_LIMIT, 2) * DEPLOY_SETUP_TRANSACTIONS
     });
-    let peers = plan.inputs.layerzero_peers.len() as u64;
-    let applies = APPLY_FIXED_TRANSACTIONS + APPLY_TRANSACTIONS_PER_PEER * peers;
+    let peers: Vec<Peer> = plan.inputs.layerzero_peers.iter().map(Into::into).collect();
+    let applies = APPLY_FIXED_TRANSACTIONS + layerzero::setup_transactions(&peers);
 
     deploys
         .chain([fee(price, APPLY_COMPUTE_UNIT_LIMIT, 1).saturating_mul(applies)])
@@ -324,8 +322,8 @@ mod tests {
 
     const DEPLOYER: Pubkey = Pubkey::new_from_array([7; 32]);
     const RESERVE_LAMPORTS: u64 = 5_000_000;
-    /// `testing::plan` has one LayerZero peer: 9 + 2 `apply` transactions, one signature each.
-    const UNPRICED_APPLY_FEES: u64 = 11 * 5_000;
+    /// `testing::plan` has one LayerZero peer: 5 + 5 `apply` transactions, one signature each.
+    const UNPRICED_APPLY_FEES: u64 = 10 * 5_000;
     const FIXED: u64 = UNPRICED_APPLY_FEES + ALLOWANCE_LAMPORTS;
 
     fn funded(lamports: u64) -> RecordingChain {
@@ -446,7 +444,7 @@ mod tests {
 
         // Five 1,000-byte programs: 2 writes and 2 setup transactions each, at 10,000 units.
         let deploy_units = 5 * 4 * 10_000;
-        let apply_units = 11 * 1_400_000;
+        let apply_units = 10 * 1_400_000;
         assert_eq!(priced, Sol(unpriced.0 + deploy_units + apply_units));
         assert_eq!(fees(u64::MAX), Sol(u64::MAX));
     }

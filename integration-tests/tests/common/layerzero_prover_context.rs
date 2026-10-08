@@ -216,6 +216,22 @@ impl LayerZeroProver<'_> {
         self.send(vec![instruction], &[authority])
     }
 
+    pub fn add_peers(&mut self, authority: &Keypair, peers: Vec<Peer>) -> TransactionResult {
+        let instruction = Instruction {
+            program_id: layerzero_prover::ID,
+            accounts: layerzero_prover::accounts::AddPeers {
+                authority: authority.pubkey(),
+                program: layerzero_prover::ID,
+                program_data: self.program_data(),
+                store: Store::pda().0,
+            }
+            .to_account_metas(None),
+            data: layerzero_prover::instruction::AddPeers { peers }.data(),
+        };
+
+        self.send(vec![instruction], &[authority])
+    }
+
     pub fn init_path(&mut self, authority: &Keypair, peer: &Peer) -> TransactionResult {
         let store = Store::pda().0;
         let instruction = Instruction {

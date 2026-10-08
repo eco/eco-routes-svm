@@ -6,14 +6,18 @@
 //! transaction (FulfillMarkers, store, dispatcher, LayerZero accounts, four
 //! DVN worker quadruples). The `PendingSend` PDA is new per batch -> static.
 //!
-//! Inbound: the executor's delivery transaction modelled as
-//! `[ComputeBudget limit, ComputeBudget price, executor pre_execute,
-//! lz_receive, executor post_execute]`. Our ALT holds the fixed `lz_receive`
-//! accounts and every peer's Nonce (`required_alt_addresses`, the contents
-//! `set_alt` enforces); the PayloadHash and each new `Proof` PDA
-//! are static. `pre_execute`/`post_execute` are modelled as
-//! `[payer (s,w), execution context PDA (w)]` with 16 / 8 data bytes - the
-//! devnet E2E confirms the real executor fits the same count.
+//! Inbound: LayerZero's executor delivery transaction as observed on devnet
+//! (2026-10-08, executor `6doghB24…`): `[ComputeBudget price, executor
+//! pre_execute, lz_receive, ComputeBudget limit, ComputeBudget heap frame,
+//! executor post_execute]` with two lookup tables, the executor's own
+//! (system program, endpoint program, settings and event authority, its
+//! config) first and ours (`required_alt_addresses`, the contents `set_alt`
+//! enforces) second. The execution context, the PayloadHash and each new
+//! `Proof` PDA are static. The executor refuses anything over
+//! `EXECUTOR_MAX_TX_SIZE`, its own limit below the packet size. The model
+//! reproduces the delivered 657 / 1142 bytes for 1 / 6 pairs; for 7 the
+//! executor dropped the price instruction and still measured 1227 > 1220, so
+//! the ceiling is taken on that leanest shape.
 
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
@@ -21,6 +25,7 @@ use layerzero_prover::constants::{lz_receive_gas, MAX_INTENTS_PER_PROVE, MAX_PAI
 use layerzero_prover::instructions::{
     compact_accounts_with_alt, lz_receive_accounts, required_alt_addresses,
 };
+use layerzero_prover::layerzero;
 use layerzero_prover::state::{PendingSend, Store};
 use portal::state::FulfillMarker;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -40,15 +45,22 @@ pub mod common;
 const DVN_COUNT: usize = 4;
 const EXECUTOR_PROGRAM: Pubkey = Pubkey::new_from_array([0xe0; 32]);
 
+/// The executor's own delivery-size limit (its error: "Transaction size is
+/// too large: 1227 > 1220"), below `PACKET_DATA_SIZE`.
+const EXECUTOR_MAX_TX_SIZE: usize = 1220;
+
 /// Solana's per-transaction account lock limit.
 const MAX_TX_ACCOUNT_LOCKS: usize = 64;
 
-fn compile(payer: &Pubkey, instructions: &[Instruction], table: Vec<Pubkey>) -> v0::Message {
-    let alt = AddressLookupTableAccount {
-        key: Pubkey::new_unique(),
-        addresses: table,
-    };
-    v0::Message::try_compile(payer, instructions, &[alt], Hash::default()).unwrap()
+fn compile(payer: &Pubkey, instructions: &[Instruction], tables: Vec<Vec<Pubkey>>) -> v0::Message {
+    let tables: Vec<_> = tables
+        .into_iter()
+        .map(|addresses| AddressLookupTableAccount {
+            key: Pubkey::new_unique(),
+            addresses,
+        })
+        .collect();
+    v0::Message::try_compile(payer, instructions, &tables, Hash::default()).unwrap()
 }
 
 fn transaction_len(message: v0::Message) -> usize {
@@ -67,9 +79,9 @@ fn account_count(message: &v0::Message) -> usize {
             .sum::<usize>()
 }
 
-fn ceiling(len: impl Fn(usize) -> usize, max: usize) -> usize {
+fn ceiling(len: impl Fn(usize) -> usize, limit: usize, max: usize) -> usize {
     (1..=max)
-        .take_while(|&n| len(n) <= PACKET_DATA_SIZE)
+        .take_while(|&n| len(n) <= limit)
         .last()
         .unwrap_or(0)
 }
@@ -124,7 +136,7 @@ fn outbound_message(n: usize) -> v0::Message {
             prove,
             send,
         ],
-        table,
+        vec![table],
     )
 }
 
@@ -132,7 +144,7 @@ fn outbound_len(n: usize) -> usize {
     transaction_len(outbound_message(n))
 }
 
-fn inbound_len(n: usize) -> usize {
+fn inbound_len(n: usize, with_price: bool) -> usize {
     let payer = Pubkey::new_unique();
     let proof_data = ProofData::new(
         BASE_CHAIN_ID,
@@ -140,7 +152,9 @@ fn inbound_len(n: usize) -> usize {
             .map(|i| IntentHashClaimant::new([i as u8 + 1; 32].into(), [7; 32].into()))
             .collect(),
     );
-    let params = receive_params(&peers()[0], u64::MAX, proof_data.clone());
+    let mut params = receive_params(&peers()[0], u64::MAX, proof_data.clone());
+    // The executor passes 2 bytes of extra data.
+    params.extra_data = vec![0; 2];
     let table = required_alt_addresses(&Store::new(peers()).unwrap());
     // `lz_receive_types_v2`'s answer, resolved as the executor does.
     let accounts = resolve_locators(
@@ -149,31 +163,51 @@ fn inbound_len(n: usize) -> usize {
     );
     let lz_receive = build_lz_receive_instruction(&params, accounts);
     let execution_context = Pubkey::new_unique();
-    let wrapper = |data_len: usize| Instruction {
+    let executor_config = Pubkey::new_unique();
+    let executor_table = vec![
+        anchor_lang::system_program::ID,
+        layerzero::ENDPOINT_ID,
+        layerzero::endpoint_settings_pda().0,
+        layerzero::endpoint_event_authority().0,
+        executor_config,
+    ];
+    let executor = |extra: &[AccountMeta], data_len: usize| Instruction {
         program_id: EXECUTOR_PROGRAM,
-        accounts: vec![
+        accounts: [
             AccountMeta::new(payer, true),
             AccountMeta::new(execution_context, false),
-        ],
+        ]
+        .into_iter()
+        .chain(extra.iter().cloned())
+        .chain([AccountMeta::new_readonly(executor_config, false)])
+        .collect(),
         data: vec![0; data_len],
     };
 
-    transaction_len(compile(
-        &payer,
-        &[
-            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
-            ComputeBudgetInstruction::set_compute_unit_price(1),
-            wrapper(16),
+    let price = with_price.then(|| ComputeBudgetInstruction::set_compute_unit_price(1));
+    let instructions: Vec<Instruction> = price
+        .into_iter()
+        .chain([
+            executor(
+                &[AccountMeta::new_readonly(
+                    anchor_lang::system_program::ID,
+                    false,
+                )],
+                17,
+            ),
             lz_receive,
-            wrapper(8),
-        ],
-        table,
-    ))
+            ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+            ComputeBudgetInstruction::request_heap_frame(256 * 1024),
+            executor(&[], 9),
+        ])
+        .collect();
+
+    transaction_len(compile(&payer, &instructions, vec![executor_table, table]))
 }
 
 #[test]
 fn outbound_ceiling_matches_max_intents_per_prove() {
-    let measured = ceiling(outbound_len, 64);
+    let measured = ceiling(outbound_len, PACKET_DATA_SIZE, 64);
     assert_eq!(
         measured, MAX_INTENTS_PER_PROVE,
         "outbound ceiling measured at {measured}"
@@ -187,7 +221,16 @@ fn outbound_ceiling_matches_max_intents_per_prove() {
 
 #[test]
 fn inbound_ceiling_matches_max_pairs_per_message() {
-    let measured = ceiling(inbound_len, 64);
+    // Calibration against the devnet delivery transactions.
+    assert_eq!(
+        [
+            inbound_len(1, true),
+            inbound_len(6, true),
+            inbound_len(7, false)
+        ],
+        [657, 1142, 1227]
+    );
+    let measured = ceiling(|n| inbound_len(n, false), EXECUTOR_MAX_TX_SIZE, 64);
     assert_eq!(
         measured, MAX_PAIRS_PER_MESSAGE,
         "inbound ceiling measured at {measured}"

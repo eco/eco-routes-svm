@@ -587,8 +587,6 @@ mod tests {
                 (POLYMER_PROVER, INIT, true),
                 (AGGREGATOR_PROVER, INIT, true),
                 (LAYERZERO_PROVER, INIT, true),
-                (LAYERZERO_PROVER, "init_path", true),
-                (LAYERZERO_PROVER, "set_path_config", true),
             ]
         );
     }

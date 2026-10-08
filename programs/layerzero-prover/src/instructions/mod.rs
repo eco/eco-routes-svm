@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+mod add_peers;
 mod close_proof;
 mod get_proof;
 mod init;
@@ -12,6 +13,7 @@ mod send_message;
 mod set_alt;
 mod set_path_config;
 
+pub use add_peers::*;
 pub use close_proof::*;
 pub use get_proof::*;
 pub use init::*;

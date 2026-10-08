@@ -5,13 +5,13 @@
 | Program rent (locked once final) | 0.000000000 SOL |
 | Largest buffer (refunded) | 0.000000000 SOL |
 | Reserve top-ups | 0.010000000 SOL |
-| Transaction fees at 0 micro-lamports per compute unit | 0.000055000 SOL |
+| Transaction fees at 0 micro-lamports per compute unit | 0.000050000 SOL |
 | Account rent and unpriced fees allowance | 0.200000000 SOL |
-| **Required** | 0.210055000 SOL |
+| **Required** | 0.210050000 SOL |
 | Balance of `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx` | 0.000000001 SOL |
 | LayerZero path rent (paid by its reserve) | 0.035614320 SOL |
 | LayerZero reserve after top-up | 0.005000000 SOL |
 
-**Short by 0.210054999 SOL**: fund `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx`, then plan again.
+**Short by 0.210049999 SOL**: fund `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx`, then plan again.
 
 **LayerZero reserve short by 0.031505200 SOL**: raise `layerzero_reserve_lamports` to at least 36505200.

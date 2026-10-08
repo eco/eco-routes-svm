@@ -775,6 +775,46 @@ fn apply_resumes_from_an_initialized_store() {
 }
 
 #[test]
+fn apply_appends_the_peers_an_interrupted_run_left_out() {
+    let mut env = Env::new();
+    let plan = env.plan(inputs_with_peer_count(20)).unwrap();
+    let peers = plan.expected_configs.layerzero_peers.clone().unwrap();
+    init_layerzero_store(&mut env, peers[..16].to_vec());
+
+    let report = env.apply(&plan).unwrap();
+
+    assert_eq!(
+        sent(&report)[5..7],
+        [
+            (LAYERZERO_PROVER, "init", false),
+            (LAYERZERO_PROVER, "add_peers", true),
+        ]
+    );
+    assert_eq!(store(&env).peers, peers);
+    readback(&env.chain(), &plan).unwrap();
+}
+
+#[test]
+fn apply_refuses_a_store_whose_peers_are_not_the_first_planned_ones() {
+    let mut env = Env::new();
+    let plan = env.plan(inputs_with_peer_count(20)).unwrap();
+    let peers = plan.expected_configs.layerzero_peers.clone().unwrap();
+    init_layerzero_store(&mut env, peers[4..].to_vec());
+
+    let error = env.apply(&plan).unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            apply::Error::Plan(deployer::plan::Error::ConfigMismatch(mismatch))
+                if mismatch.program == LAYERZERO_PROVER
+        ),
+        "{error:?}"
+    );
+    assert_eq!(store(&env).peers, peers[4..]);
+}
+
+#[test]
 fn apply_initializes_a_path_whose_nonce_address_was_prefunded() {
     let mut env = Env::new();
     let plan = env.plan(inputs(HYPER_SENDER)).unwrap();

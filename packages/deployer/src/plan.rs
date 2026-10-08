@@ -54,7 +54,7 @@ pub enum Error {
     ConfigMismatch(#[from] config::Mismatch),
     #[error(transparent)]
     LayerZero(#[from] layerzero::Error),
-    #[error("{program} is live (immutable) but has no config, so it can never be initialized; raise its salt in scripts/program-salts.json to redeploy it at a new address")]
+    #[error("{program} is live (immutable) but its config is missing or incomplete, so it can never be completed; raise its salt in scripts/program-salts.json to redeploy it at a new address")]
     LiveWithoutConfig { program: &'static str },
     #[error("unknown cluster {value:?}, expected devnet or mainnet")]
     UnknownCluster { value: String },
@@ -212,7 +212,8 @@ impl Plan {
         Ok(plan)
     }
 
-    /// Rejects `live` configs that differ from the inputs, and live programs that lack one.
+    /// Rejects `live` configs that differ from the inputs, and live programs whose config is
+    /// missing or incomplete.
     pub fn verify_configs(&self, live: &Configs) -> Result<(), Error> {
         live.conflict(&self.expected_configs)?;
 
@@ -220,10 +221,11 @@ impl Plan {
 
         live.entries()
             .into_iter()
-            .filter(|(program, values)| {
-                values.is_none() || (*program == LAYERZERO_PROVER && layerzero_incomplete)
+            .zip(self.expected_configs.entries())
+            .filter(|((program, values), (_, expected))| {
+                values != expected || (*program == LAYERZERO_PROVER && layerzero_incomplete)
             })
-            .try_for_each(|(program, _)| match self.programs.get(program) {
+            .try_for_each(|((program, _), _)| match self.programs.get(program) {
                 Some(planned) if planned.state.status == Status::Live => {
                     Err(Error::LiveWithoutConfig { program })
                 }
@@ -812,6 +814,8 @@ mod hex_array {
 
 #[cfg(test)]
 mod tests {
+    use layerzero_prover::state::Peer;
+
     use super::*;
 
     const VALID_ADDRESS: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
@@ -1279,6 +1283,43 @@ mod tests {
     }
 
     #[test]
+    fn peers_add_peers_has_yet_to_append_plan_unless_the_program_is_live() {
+        let with_store_peers = |status: Status, store_peers: fn(&mut Vec<Peer>)| {
+            let mut fixture = Fixture {
+                raw: RawInputs {
+                    layerzero: format!(
+                        r#"{{"peers":[{},{}]}}"#,
+                        peer_json(1, VALID_ADDRESS),
+                        peer_json(2, VALID_ADDRESS)
+                    ),
+                    ..raw_inputs()
+                },
+                ..fixture()
+            }
+            .with_expected_configs();
+            fixture.state(LAYERZERO_PROVER).status = status;
+            store_peers(fixture.configs.layerzero_peers.as_mut().unwrap());
+            fixture.configs.layerzero_paths.truncate(1);
+
+            fixture.plan()
+        };
+        let first_only: fn(&mut Vec<Peer>) = |peers| peers.truncate(1);
+        let second_only: fn(&mut Vec<Peer>) = |peers| {
+            peers.remove(0);
+        };
+
+        assert!(with_store_peers(Status::Partial, first_only).is_ok());
+        assert!(matches!(
+            with_store_peers(Status::Live, first_only),
+            Err(Error::LiveWithoutConfig { program }) if program == LAYERZERO_PROVER
+        ));
+        assert!(matches!(
+            with_store_peers(Status::Partial, second_only),
+            Err(Error::ConfigMismatch(mismatch)) if mismatch.program == LAYERZERO_PROVER
+        ));
+    }
+
+    #[test]
     fn live_program_with_matching_config_plans() {
         let mut live = fixture().with_expected_configs();
         live.state(HYPER_PROVER).status = Status::Live;
@@ -1501,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn the_maximum_number_of_peers_fits_one_init_transaction() {
+    fn the_maximum_number_of_peers_fits_init_and_add_peers() {
         let peers = (1..=layerzero_prover::state::MAX_PEERS as u32)
             .map(|eid| peer_json(eid, &format!("0x{eid:040x}")))
             .collect::<Vec<_>>()
