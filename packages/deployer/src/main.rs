@@ -11,7 +11,8 @@ fn main() -> ExitCode {
     match commands::run(&command, &mut stdout()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("{error:?}");
+            // The message says what to do next; the debug form adds the variant and its sources.
+            eprintln!("error: {error}\n{error:?}");
 
             ExitCode::FAILURE
         }

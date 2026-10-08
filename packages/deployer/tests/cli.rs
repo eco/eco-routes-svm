@@ -229,3 +229,25 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
     );
     assert!(matches!(rerun, Err(Error::PlanChanged { expected, .. }) if expected == hash));
 }
+
+#[test]
+fn a_failing_command_prints_its_message_then_its_detail() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_deployer"))
+        .args([
+            "actions",
+            "--plan",
+            "missing-plan.json",
+            "--action",
+            "deploy",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        stderr.starts_with("error: cannot read missing-plan.json: "),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Read {"), "{stderr}");
+}
