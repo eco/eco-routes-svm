@@ -609,6 +609,8 @@ The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl ra
 
 Three manual workflows take a published release to devnet or mainnet. Each is one dispatch with two jobs: `plan` reads the chain and writes the plan to its job summary without approval or keys; the second job waits for the `release` environment's approval, plans again, and writes only if that plan's hash equals the one the reviewer approved. Rejecting the job is the dry run: nothing is written.
 
+Runs on one cluster never overlap: a dispatch waits while another run on that cluster is in progress, including one waiting for approval. GitHub keeps only one waiting run per cluster, so a newer dispatch cancels an older waiting one, which has written nothing; dispatch it again once the cluster is free.
+
 | Workflow | Does |
 |---|---|
 | `Deploy` (`deploy.yml`) | deploys, initializes, reads back and verifies every new program, and leaves them upgradeable for testing |
@@ -691,6 +693,7 @@ The addresses above are placeholders; use the DVN and executor addresses LayerZe
 | New | no account | deploy, initialize, verify |
 | Partial | bytecode equals the release, authority is the deployer | resume: finish what is missing, then verify |
 | Live | bytecode equals the release, immutable, config equal to the inputs | skip |
+| Closed | the program account, its programdata closed | the run fails: the address is burned (see [Recovery](#recovery)) |
 | Foreign | anything else, including lamports someone sent to the program or programdata address | the run fails: someone else holds the address, and the other programs would trust it |
 
 The hash covers the release, the binaries, the cluster's genesis hash, the deployer's key, the inputs and the on-chain facts the plan used.
@@ -700,23 +703,23 @@ The hash covers the release, the binaries, the cluster's genesis hash, the deplo
 1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
 2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init`, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
 3. reads every config back and compares it with the inputs; any difference fails the run with every program still upgradeable;
-4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record;
+4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record, and fails unless the rebuild matches the deployed bytecode;
 5. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
 
 Every program stays upgradeable after the run, so the provers can be tested end to end first.
 
 #### Finalizing
 
-After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then approve the `finalize` job. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
+After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then approve the `finalize` job. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final or closed. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
 
-- is not deployed, or not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`);
+- is not deployed, was closed, or is not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`);
 - has no verification record uploaded by the deployer (the deploy run's verify step writes it);
 - depends on a program that would stay upgradeable: `aggregator_prover` before its members, and any prover before `portal`. Dependencies come from the release's `program-ids.json`;
 - is `layerzero_prover` without its full setup on chain (every peer's path and the frozen lookup table). Finalizing it also revokes the `pda_payer` delegate, so wait for the manual gate in [Administration and finalization](#administration-and-finalization).
 
 #### Closing
 
-`Close` closes upgradeable programs of an abandoned release (`programs`: `all` for every upgradeable one, or a list) and returns their rent to the deployer. It is irreversible: the loader never redeploys a closed program ID, so a redeploy needs the program's salt raised and a new release. Lamports held by the program's own accounts stay locked for good, because only the program can sign for them: the `hyper_prover` and `layerzero_prover` `pda_payer` reserves (shown in the summary) and the LayerZero endpoint and ULN account rent. The plan refuses a final program, and any program a final one depends on.
+`Close` closes upgradeable programs of an abandoned release (`programs`: `all` for every upgradeable one, or a list) and returns their rent to the deployer, each before the programs it depends on. Programs already closed are skipped, so a run that stopped part-way can be dispatched again with the same `programs`. It is irreversible: the loader never redeploys a closed program ID, so a redeploy needs the program's salt raised and a new release. Lamports held by the program's own accounts stay locked for good, because only the program can sign for them: the `hyper_prover` and `layerzero_prover` `pda_payer` reserves (shown in the summary) and the LayerZero endpoint and ULN account rent. The plan refuses a final program, and any program a final one depends on.
 
 #### Recovery
 
@@ -785,7 +788,7 @@ anchor account <program>.Config "$config" --idl <program>.mainnet.json --provide
 
 If a config is wrong or was set by someone else, stop: that address is burned (see [Recovery](#recovery)).
 
-**5. Verify each new program** while you still hold its upgrade authority, since OtterSec only accepts a verify PDA uploaded by it. `verify-from-repo` rebuilds the deploy tag in the same pinned image the release built with, and fails unless the result matches the program on chain:
+**5. Verify each new program** while you still hold its upgrade authority, since OtterSec only accepts a verify PDA uploaded by it. `verify-from-repo` rebuilds the deploy tag in the same pinned image the release built with and uploads the record only if the result matches the program on chain. It exits 0 either way, so check that it printed `Program hash matches`:
 
 ```bash
 commit=$(git rev-parse "deploy/v<version>^{commit}")

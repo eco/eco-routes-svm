@@ -32,7 +32,7 @@ pub enum Command {
     #[command(name = "plan-close")]
     PlanClose(SelectionArgs),
     /// Print the programs `plan.json` assigns to an action, one per line, each after the
-    /// programs it depends on.
+    /// programs it depends on (before them for `close`).
     Actions(ActionsArgs),
 }
 

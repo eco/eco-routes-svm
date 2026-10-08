@@ -40,6 +40,8 @@ pub enum Error {
     },
     #[error("{program} is not ours to deploy: {reason}")]
     Foreign { program: String, reason: String },
+    #[error("{program} was closed and its address can never be deployed again; raise its salt in scripts/program-salts.json")]
+    Closed { program: String },
     #[error("no on-chain state for {program}")]
     MissingState { program: String },
     #[error("{program}: release address {release} differs from classified address {state}")]
@@ -121,6 +123,7 @@ pub enum PlannedStatus {
     New,
     Partial,
     Live,
+    Closed,
     Foreign,
 }
 
@@ -181,7 +184,7 @@ impl Plan {
                 let state = states.remove(name).ok_or_else(|| Error::MissingState {
                     program: name.clone(),
                 })?;
-                reject_foreign(name, program, &state)?;
+                reject_undeployable(name, program, &state)?;
 
                 Ok((name.clone(), state))
             })
@@ -377,6 +380,7 @@ impl From<&Status> for PlannedStatus {
             Status::New => Self::New,
             Status::Partial => Self::Partial,
             Status::Live => Self::Live,
+            Status::Closed => Self::Closed,
             Status::Foreign { .. } => Self::Foreign,
         }
     }
@@ -388,6 +392,7 @@ impl fmt::Display for PlannedStatus {
             Self::New => "new",
             Self::Partial => "partial",
             Self::Live => "live",
+            Self::Closed => "closed",
             Self::Foreign => "foreign",
         })
     }
@@ -524,20 +529,27 @@ fn require_compiled_layerzero(release: &Release) -> Result<(), Error> {
     }
 }
 
-fn reject_foreign(name: &str, program: &ReleaseProgram, state: &ProgramState) -> Result<(), Error> {
-    if let Status::Foreign { reason } = &state.status {
-        return Err(Error::Foreign {
-            program: name.into(),
+fn reject_undeployable(
+    name: &str,
+    program: &ReleaseProgram,
+    state: &ProgramState,
+) -> Result<(), Error> {
+    let program_name = name.into();
+
+    match &state.status {
+        Status::Foreign { reason } => Err(Error::Foreign {
+            program: program_name,
             reason: reason.clone(),
-        });
-    }
-    match program.address == state.address {
-        true => Ok(()),
-        false => Err(Error::AddressMismatch {
-            program: name.into(),
+        }),
+        Status::Closed => Err(Error::Closed {
+            program: program_name,
+        }),
+        _ if program.address != state.address => Err(Error::AddressMismatch {
+            program: program_name,
             release: program.address,
             state: state.address,
         }),
+        Status::New | Status::Partial | Status::Live => Ok(()),
     }
 }
 
@@ -547,7 +559,7 @@ fn actions(name: &str, status: &Status) -> Vec<Action> {
     let init = PROGRAMS_WITH_INIT.contains(&name).then_some(Action::Init);
 
     match status {
-        Status::Live | Status::Foreign { .. } => vec![],
+        Status::Live | Status::Closed | Status::Foreign { .. } => vec![],
         Status::New | Status::Partial => [deploy, init, Some(Action::Verify)]
             .into_iter()
             .flatten()
@@ -1357,6 +1369,17 @@ mod tests {
         assert!(matches!(
             foreign.plan(),
             Err(Error::Foreign { program, reason }) if program == "portal" && reason == "hash differs"
+        ));
+    }
+
+    #[test]
+    fn closed_program_fails_plan() {
+        let mut closed = fixture();
+        closed.state(HYPER_PROVER).status = Status::Closed;
+
+        assert!(matches!(
+            closed.plan(),
+            Err(Error::Closed { program }) if program == HYPER_PROVER
         ));
     }
 

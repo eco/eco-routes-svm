@@ -2,7 +2,8 @@ name: 'Setup deployer'
 description: 'Toolchains, the deployer built from the checked-out deploy tag, the release assets and the deployer keypair'
 # Shared by both jobs of deploy.yml, finalize.yml and close.yml. Expects the deploy/v<version> tag
 # checked out and VERSION, CLUSTER and ASSETS in the job's environment. Given the deployer
-# keypair (the approved job only), writes it and exports KEYPAIR and DEPLOYER (its address).
+# keypair (the approved job only), also installs the Solana CLI and Node, which only that job
+# runs, writes the keypair and exports KEYPAIR and DEPLOYER (its address).
 inputs:
   rust-version:
     description: 'Rust version to install'
@@ -31,12 +32,14 @@ runs:
         cache-key-suffix: deploy
 
     - name: Setup Anchor
+      if: inputs.deployer-keypair != ''
       uses: ./.github/actions/setup-anchor
       with:
         anchor-version: ${{ inputs.anchor-version }}
         solana-version: ${{ inputs.solana-version }}
 
     - name: Setup Node
+      if: inputs.deployer-keypair != ''
       uses: actions/setup-node@v7
       with:
         node-version: 22

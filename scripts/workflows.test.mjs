@@ -257,3 +257,48 @@ test("close closes each planned program and returns its rent to the deployer", (
   );
   rmSync(bin, { recursive: true });
 });
+
+test("verify fails when solana-verify reports a hash mismatch, which it exits 0 on", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const verify = (report) => {
+    const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
+    const stub = (name, body) => writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+    stub("solana-verify", `echo "${report}"`);
+    stub("solana-keygen", "echo DeployerPubkey");
+    stub("deployer", '[ "$*" = "actions --plan plan.json --action verify" ] && echo hyper_prover');
+    writeFileSync(join(bin, "program-ids.json"), '{"hyper_prover":{"address":"HyperAddress"}}');
+    const result = spawnSync("bash", [script, "verify"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        RPC_URL: "http://rpc",
+        KEYPAIR: "deployer.json",
+        CLUSTER: "devnet",
+        VERIFY_IMAGE: "image",
+        ASSETS: bin,
+        PLAN: "plan.json",
+      },
+    });
+    rmSync(bin, { recursive: true });
+
+    return result;
+  };
+
+  const matched = verify("Program hash matches ✅");
+  const mismatched = verify("Program hashes do not match ❌");
+
+  assert.equal(matched.status, 0, matched.stderr);
+  assert.notEqual(mismatched.status, 0);
+  assert.match(mismatched.stderr, /hyper_prover: the build from \w+ does not match the deployed bytecode/);
+});
+
+test("finalize.yml and close.yml differ only in their operation", () => {
+  const steps = (name, operation, title) =>
+    workflow(name)
+      .replace(/^\s*#.*\n|^\s*description: .*\n/gm, "")
+      .replaceAll(operation, "<operation>")
+      .replaceAll(title, "<Operation>");
+
+  assert.equal(steps("close.yml", "close", "Close"), steps("finalize.yml", "finalize", "Finalize"));
+});

@@ -22,7 +22,11 @@ pub enum Status {
     New,
     Partial,
     Live,
-    Foreign { reason: String },
+    /// Its programdata was closed: the address is burned and can never hold a program again.
+    Closed,
+    Foreign {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +53,7 @@ pub fn classify(
         return Ok(foreign(address, "not a program"));
     };
     let Some(programdata) = chain.account(&programdata_address)? else {
-        return Ok(foreign(address, "programdata account missing"));
+        return Ok(state(address, Status::Closed, None, None));
     };
     let Some((authority, elf)) = split_programdata(&programdata) else {
         return Ok(foreign(address, "malformed programdata"));
@@ -367,16 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn foreign_when_programdata_is_missing() {
+    fn closed_when_programdata_is_missing() {
         let mut chain = deployed(RELEASE_SO, Some(deployer()));
         chain.accounts.remove(&programdata_address());
 
-        assert_eq!(
-            classified(&chain).status,
-            Status::Foreign {
-                reason: "programdata account missing".to_owned()
-            }
-        );
+        assert_eq!(classified(&chain).status, Status::Closed);
     }
 
     #[test]

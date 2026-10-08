@@ -75,12 +75,18 @@ verify() {
     features=(-- --features mainnet)
   fi
   deployer actions --plan "$PLAN" --action verify | while read -r program; do
-    local address
+    local address output
     address=$(program_address "$program")
     echo "verifying ${program} ${address} at ${commit}"
-    solana-verify verify-from-repo -u "$RPC_URL" --program-id "$address" "$REPOSITORY_URL" \
+    # On a hash mismatch solana-verify uploads no record but still exits 0.
+    output=$(solana-verify verify-from-repo -u "$RPC_URL" --program-id "$address" "$REPOSITORY_URL" \
       --commit-hash "$commit" --library-name "$program" --base-image "$VERIFY_IMAGE" \
-      -k "$KEYPAIR" -y ${features[@]+"${features[@]}"}
+      -k "$KEYPAIR" -y ${features[@]+"${features[@]}"} </dev/null)
+    printf '%s\n' "$output"
+    grep -qF 'Program hash matches' <<<"$output" || {
+      echo "${program}: the build from ${commit} does not match the deployed bytecode; no verification record was uploaded" >&2
+      return 1
+    }
     if [ "$CLUSTER" = mainnet ]; then
       solana-verify remote submit-job -u "$RPC_URL" --program-id "$address" --uploader "$uploader"
     fi

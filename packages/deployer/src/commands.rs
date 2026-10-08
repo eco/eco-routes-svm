@@ -16,8 +16,8 @@ use crate::cli::{ActionsArgs, ApplyArgs, Command, PlanArgs, SelectionArgs};
 use crate::funding::Funding;
 use crate::inputs::{self, Inputs, RawInputs};
 use crate::plan::{
-    self, Cluster, Plan, PlanDocument, PlanFile, PlanHash, PlannedProgramFile, PlannedStatus,
-    Release, ReleaseProgram,
+    self, Action, Cluster, Plan, PlanDocument, PlanFile, PlanHash, PlannedProgramFile,
+    PlannedStatus, Release, ReleaseProgram,
 };
 use crate::rpc::RpcChain;
 use crate::selection::{self, Operation, Programs, Selection};
@@ -78,8 +78,6 @@ pub enum Error {
     },
 }
 
-/// The `program-ids.json` entry fields the plan needs; `seed` and `salt` only matter to
-/// `scripts/program-keypairs.mjs`.
 /// The fields of either plan file that `actions` needs.
 #[derive(Deserialize)]
 struct ActionsFile {
@@ -87,6 +85,8 @@ struct ActionsFile {
     programs: BTreeMap<String, PlannedProgramFile>,
 }
 
+/// The `program-ids.json` entry fields the plan needs; `seed` and `salt` only matter to
+/// `scripts/program-keypairs.mjs`.
 #[derive(Deserialize)]
 struct ProgramId {
     address: String,
@@ -190,8 +190,6 @@ pub fn apply(
     print_hash(out, &expected)
 }
 
-/// Reads `plan.json` only. It was written by the `plan` step, whose hash the workflow compared
-/// with the reviewed one before anything ran.
 /// Writes `plan.json` for finalizing or closing the selected programs and prints its hash.
 pub fn plan_selection(
     chain: &impl Chain,
@@ -224,14 +222,19 @@ pub fn plan_selection(
 }
 
 /// Reads only `plan.json`, from any plan kind. It was written by the plan step, whose hash the
-/// workflow compared with the reviewed one before anything ran. Dependencies come first, so a
-/// finalize run that stops part-way never leaves a final program depending on an upgradeable one.
+/// workflow compared with the reviewed one before anything ran. A program comes after its
+/// dependencies, or before them for `close`, so a run that stops part-way never leaves a final
+/// program depending on an upgradeable one, nor a program depending on a closed one.
 pub fn actions(args: &ActionsArgs, out: &mut impl Write) -> Result<(), Error> {
     let ActionsFile { release, programs } = read_json(&args.plan)?;
     let action = args.action.into();
+    let dependencies_first = release.dependency_order();
+    let order = match action {
+        Action::Close => dependencies_first.into_iter().rev().collect(),
+        _ => dependencies_first,
+    };
 
-    release
-        .dependency_order()
+    order
         .into_iter()
         .filter(|name| {
             programs
@@ -649,6 +652,11 @@ mod tests {
                 .collect()
         }
 
+        /// As `solana program close` leaves it: the program account without its programdata.
+        fn close(&self, chain: &mut RecordingChain, name: &str) {
+            chain.accounts.remove(&programdata_address(name));
+        }
+
         fn deploy(&self, chain: &mut RecordingChain, name: &str) {
             self.deploy_as(chain, name, &binary(name), Some(self.deployer.pubkey()));
         }
@@ -661,7 +669,7 @@ mod tests {
             authority: Option<Pubkey>,
         ) {
             let program = release_address(name);
-            let programdata = Pubkey::find_program_address(&[b"data", name.as_bytes()], &program).0;
+            let programdata = programdata_address(name);
             let owner = solana_sdk_ids::bpf_loader_upgradeable::id();
             let mut data = bincode::serialize(&UpgradeableLoaderState::ProgramData {
                 slot: 1,
@@ -686,6 +694,11 @@ mod tests {
                     chain.accounts.insert(address, account);
                 });
         }
+    }
+
+    /// Not the loader's PDA: classification follows the program account's pointer.
+    fn programdata_address(name: &str) -> Pubkey {
+        Pubkey::find_program_address(&[b"data", name.as_bytes()], &release_address(name)).0
     }
 
     fn binary(name: &str) -> Vec<u8> {
@@ -1062,6 +1075,37 @@ mod tests {
             summary.contains("- hyper_prover `pda_payer`: 1234 lamports"),
             "{summary}"
         );
+    }
+
+    #[test]
+    fn plan_close_lists_dependents_first() {
+        let env = Env::new();
+        let chain = env.tested_chain(&[]);
+
+        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+
+        assert_eq!(
+            env.actions(ActionKind::Close),
+            [
+                AGGREGATOR_PROVER,
+                POLYMER_PROVER,
+                LOCAL_PROVER,
+                LAYERZERO_PROVER,
+                HYPER_PROVER
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_close_runs_again_after_a_close_that_stopped_part_way() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.close(&mut chain, AGGREGATOR_PROVER);
+
+        env.plan_selection(&chain, Operation::Close, "aggregator_prover,hyper_prover")
+            .unwrap();
+
+        assert_eq!(env.actions(ActionKind::Close), [HYPER_PROVER]);
     }
 
     #[test]

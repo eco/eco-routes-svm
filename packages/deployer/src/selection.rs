@@ -45,6 +45,8 @@ pub enum Error {
     Foreign { program: String, reason: String },
     #[error("{program} is not deployed; run the deploy workflow first")]
     NotDeployed { program: String },
+    #[error("{program} was closed and can never be finalized")]
+    Closed { program: String },
     #[error("{program} is already final and cannot be closed")]
     AlreadyFinal { program: String },
     #[error("{program} has no config; a final program could never be initialized")]
@@ -448,8 +450,9 @@ fn reject_unknown(selected: &Programs, release: &Release) -> Result<(), Error> {
         })
 }
 
-/// The selected programs still upgradeable. Finalize refuses an undeployed one; close refuses a
-/// final one it was asked for by name.
+/// The selected programs still upgradeable. Finalize refuses an undeployed one and a closed one
+/// it was asked for by name; close refuses a final one it was asked for by name and passes over
+/// closed ones, so a close that stopped part-way can be run again.
 fn targets(
     operation: Operation,
     selected: &Programs,
@@ -466,6 +469,9 @@ fn targets(
         .filter_map(|(name, state)| match (operation, &state.status, selected) {
             (_, Status::Partial, _) => Some(Ok(name.clone())),
             (Operation::Finalize, Status::New, _) => Some(Err(Error::NotDeployed {
+                program: name.clone(),
+            })),
+            (Operation::Finalize, Status::Closed, Programs::Named(_)) => Some(Err(Error::Closed {
                 program: name.clone(),
             })),
             (Operation::Close, Status::Live, Programs::Named(_)) => {
@@ -732,6 +738,40 @@ mod tests {
         assert!(matches!(
             named_final,
             Err(Error::AlreadyFinal { program }) if program == HYPER_PROVER
+        ));
+    }
+
+    #[test]
+    fn close_runs_again_after_one_that_stopped_part_way() {
+        let again = |selected| {
+            build(Operation::Close, selected, |observed| {
+                set_status(observed, AGGREGATOR_PROVER, Status::Closed)
+            })
+        };
+
+        assert_eq!(
+            targeted(&again("aggregator_prover,layerzero_prover").unwrap()),
+            [LAYERZERO_PROVER]
+        );
+        assert!(!targeted(&again("all").unwrap()).contains(&AGGREGATOR_PROVER));
+    }
+
+    #[test]
+    fn finalize_passes_over_closed_programs_but_refuses_one_named() {
+        let close_aggregator =
+            |observed: &mut Observed| set_status(observed, AGGREGATOR_PROVER, Status::Closed);
+        let all = build(Operation::Finalize, "all", close_aggregator).unwrap();
+        let named = build(Operation::Finalize, AGGREGATOR_PROVER, close_aggregator);
+        let dependent = build(Operation::Finalize, "all", |observed| {
+            set_status(observed, HYPER_PROVER, Status::Closed)
+        });
+
+        assert!(!targeted(&all).contains(&AGGREGATOR_PROVER));
+        assert!(matches!(named, Err(Error::Closed { program }) if program == AGGREGATOR_PROVER));
+        assert!(matches!(
+            dependent,
+            Err(Error::DependencyNotFinal { program, dependency })
+                if program == AGGREGATOR_PROVER && dependency == HYPER_PROVER
         ));
     }
 
