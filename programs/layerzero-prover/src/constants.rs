@@ -3,11 +3,12 @@
 /// and LayerZero accounts in address lookup tables; pinned by
 /// `layerzero_prover_batch_limits::outbound_ceiling_matches_max_intents_per_prove`.
 ///
-/// The margin is thin. The measurement assumes exactly one lookup table, a
-/// compute-unit-limit instruction only, and at most 4 DVNs per path. A second
-/// table or a compute-unit-price instruction pushes 21 over the packet limit;
-/// the fallback is to send `portal::prove` and `send_message` in separate
-/// transactions (the `PendingSend` commit persists between them).
+/// The margin is thin. The measurement assumes exactly one lookup table and at
+/// most 4 DVNs per path; 21 intents serialize to 1214 bytes, so a
+/// compute-unit-price instruction (12 bytes) still fits but a second table
+/// pushes 21 over the packet limit. The fallback is to send `portal::prove`
+/// and `send_message` in separate transactions (the `PendingSend` commit
+/// persists between them).
 pub const MAX_INTENTS_PER_PROVE: usize = 21;
 
 /// Largest inbound batch the executor's delivery transaction can carry: every

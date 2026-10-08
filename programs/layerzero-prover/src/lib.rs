@@ -10,6 +10,7 @@ pub mod state;
 
 use instructions::*;
 use layerzero::{LzReceiveParams, LzReceiveTypesInfoResult, LzReceiveTypesV2Result};
+use state::Peer;
 
 #[program]
 pub mod layerzero_prover {
@@ -17,6 +18,10 @@ pub mod layerzero_prover {
 
     pub fn init(ctx: Context<Init>, args: InitArgs) -> Result<()> {
         instructions::init(ctx, args)
+    }
+
+    pub fn add_peers(ctx: Context<AddPeers>, peers: Vec<Peer>) -> Result<()> {
+        instructions::add_peers(ctx, peers)
     }
 
     pub fn init_path(ctx: Context<InitPath>, eid: u32) -> Result<()> {
