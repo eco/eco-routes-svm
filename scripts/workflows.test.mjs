@@ -20,17 +20,34 @@ for (const name of ["VERIFY_IMAGE", "SOLANA_VERIFY_VERSION"]) {
   });
 }
 
-test("deploy workflow runs steps with pipefail", () => {
-  const text = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
-  assert.match(text, /^defaults:\n {2}run:\n {4}shell: bash$/m);
-  assert.doesNotMatch(text, /\|\| true|continue-on-error/);
-});
+const DEPLOY_WORKFLOWS = { "deploy.yml": 5, "finalize.yml": 2, "close.yml": 2 };
+const workflow = (name) => readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8");
 
-test("deploy workflow tees only redacted output", () => {
-  const text = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
-  const tees = text.match(/^.*\| tee .*$/gm) ?? [];
-  assert.ok(tees.length >= 5);
-  tees.forEach((line) => assert.match(line, /deploy-step\.sh redact \| tee/));
+for (const [name, minimumTees] of Object.entries(DEPLOY_WORKFLOWS)) {
+  test(`${name} runs steps with pipefail`, () => {
+    const text = workflow(name);
+    assert.match(text, /^defaults:\n {2}run:\n {4}shell: bash$/m);
+    assert.doesNotMatch(text, /\|\| true|continue-on-error/);
+  });
+
+  test(`${name} tees only redacted output`, () => {
+    const tees = workflow(name).match(/^.*\| tee .*$/gm) ?? [];
+    assert.ok(tees.length >= minimumTees);
+    tees.forEach((line) => assert.match(line, /deploy-step\.sh redact \| tee/));
+  });
+
+  test(`${name} needs release approval and never overlaps another run on its cluster`, () => {
+    const text = workflow(name);
+    assert.match(text, /^ {4}environment: release$/m);
+    assert.match(text, /^concurrency:\n {2}group: deploy-\$\{\{ inputs\.cluster \}\}\n {2}cancel-in-progress: false$/m);
+    assert.match(text, /scripts\/deploy-step\.sh gate out\/plan\.log/);
+  });
+}
+
+test("deploy never finalizes or closes; each of the other workflows does only its own", () => {
+  assert.doesNotMatch(workflow("deploy.yml"), /deploy-step\.sh (finalize|close)(?![-\w])/);
+  assert.doesNotMatch(workflow("finalize.yml"), /deploy-step\.sh (deploy|close)\b|deployer apply/);
+  assert.doesNotMatch(workflow("close.yml"), /deploy-step\.sh (deploy|finalize)\b|deployer apply/);
 });
 
 test("redact strips the RPC URL and any URL-shaped token", () => {
@@ -134,4 +151,89 @@ test("deploy takes the compute-unit price from the reviewed plan, not the enviro
       "--program-id target/keys/portal-keypair.json --use-rpc --max-sign-attempts 20 " +
       `--with-compute-unit-price 7 ${binary}`,
   );
+});
+
+const firstStepScript = (text) => {
+  const steps = text.slice(text.indexOf("    steps:\n"));
+  const first = steps.match(/^ {6}- name: (.+)\n(?: {8}.*\n| *\n)*?(?= {6}- name:)/m);
+  assert.equal(first[1], "Validate inputs");
+
+  return first[0].slice(first[0].indexOf("        run: |\n") + "        run: |\n".length).replace(/^ {10}/gm, "");
+};
+
+for (const name of ["finalize.yml", "close.yml"]) {
+  test(`${name} rejects a malformed programs input before anything runs`, () => {
+    const script = firstStepScript(workflow(name));
+    const validates = (programs) =>
+      spawnSync("bash", ["-c", script], {
+        encoding: "utf8",
+        env: { ...process.env, VERSION: "1.2.3", PROGRAMS: programs },
+      }).status === 0;
+
+    ["all", "hyper_prover", "aggregator_prover,hyper_prover"].forEach((value) => assert.ok(validates(value), value));
+    ["", "All", "hyper_prover,", ",hyper_prover", "hyper prover", "hyper_prover;rm", "all,hyper_prover"].forEach(
+      (value) => assert.ok(!validates(value), value),
+    );
+  });
+}
+
+// Runs `deploy-step.sh gate` on a plan log and returns its outputs and summary.
+const gate = (planHash, log) => {
+  const directory = mkdtempSync(join(tmpdir(), "gate-"));
+  const files = ["plan.log", "output", "summary"].map((name) => join(directory, name));
+  const [planLog, output, summary] = files;
+  [output, summary].forEach((path) => writeFileSync(path, ""));
+  writeFileSync(planLog, log);
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const { status } = spawnSync("bash", [script, "gate", planLog], {
+    encoding: "utf8",
+    env: { ...process.env, PLAN_HASH: planHash, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+  });
+  const result = { status, output: readFileSync(output, "utf8"), summary: readFileSync(summary, "utf8") };
+  rmSync(directory, { recursive: true });
+
+  return result;
+};
+
+test("gate executes only when the reviewed hash equals the computed one", () => {
+  const log = "planning\nplan_hash=abc\n";
+
+  assert.equal(gate("abc", log).output, "computed=abc\nexecute=true\n");
+  assert.equal(gate("", log).output, "computed=abc\nexecute=false\n");
+  assert.match(gate("", log).summary, /Dry run \(no plan_hash given\).*plan_hash=`abc`/);
+  assert.match(gate("abd", log).summary, /Dry run \(plan_hash differs/);
+  const missing = gate("abc", "no hash printed\n");
+  assert.notEqual(missing.status, 0);
+  assert.equal(missing.output, "");
+});
+
+test("close closes each planned program and returns its rent to the deployer", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
+  const calls = join(bin, "calls");
+  const stub = (name, body) => writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+  stub("solana", `echo "solana $*" >> "${calls}"`);
+  stub("solana-keygen", "echo DeployerPubkey");
+  stub("deployer", '[ "$*" = "actions --plan plan.json --action close" ] && echo hyper_prover');
+  writeFileSync(join(bin, "program-ids.json"), '{"hyper_prover":{"address":"HyperAddress"}}');
+
+  const { status, stderr } = spawnSync("bash", [script, "close"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      RPC_URL: "http://rpc",
+      KEYPAIR: "deployer.json",
+      ASSETS: bin,
+      PLAN: "plan.json",
+    },
+  });
+
+  assert.equal(status, 0, stderr);
+  assert.equal(
+    readFileSync(calls, "utf8"),
+    "solana program close -u http://rpc -k deployer.json --authority deployer.json " +
+      "--recipient DeployerPubkey --bypass-warning HyperAddress\n",
+  );
+  rmSync(bin, { recursive: true });
 });

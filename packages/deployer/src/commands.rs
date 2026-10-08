@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{read_keypair_file, Keypair};
 use solana_sdk::signer::Signer;
@@ -12,7 +12,7 @@ use solana_sdk::signer::Signer;
 use crate::apply::{self, Step};
 use crate::chain::{self, Chain, Priced};
 use crate::classify::{self, classify, ProgramState, Status};
-use crate::cli::{ActionsArgs, ApplyArgs, Command, PlanArgs};
+use crate::cli::{ActionsArgs, ApplyArgs, Command, PlanArgs, SelectionArgs};
 use crate::funding::Funding;
 use crate::inputs::{self, Inputs, RawInputs};
 use crate::plan::{
@@ -20,6 +20,7 @@ use crate::plan::{
     Release, ReleaseProgram,
 };
 use crate::rpc::RpcChain;
+use crate::selection::{self, Operation, Programs, Selection};
 use crate::{config, funding, readback};
 
 #[derive(Debug, thiserror::Error)]
@@ -40,6 +41,8 @@ pub enum Error {
     Plan(#[from] plan::Error),
     #[error(transparent)]
     Readback(#[from] readback::Error),
+    #[error(transparent)]
+    Selection(#[from] selection::Error),
     #[error("plan {expected} no longer matches the chain (now {actual}); plan again and review the new hash")]
     PlanChanged {
         expected: PlanHash,
@@ -54,12 +57,11 @@ pub enum Error {
     },
     #[error("{program}: {value:?} in program-ids.json is not an address")]
     InvalidAddress { program: String, value: String },
-    #[error("cannot read deployer keypair {path}")]
-    Keypair {
-        path: PathBuf,
-        #[source]
-        source: Box<dyn std::error::Error>,
-    },
+    #[error("{program}: dependency {dependency:?} in program-ids.json is not a released program")]
+    UnknownDependency { program: String, dependency: String },
+    /// Never carries the parser's error: it can quote the file, which holds the secret key.
+    #[error("cannot read deployer keypair {path}: {reason}")]
+    Keypair { path: PathBuf, reason: &'static str },
     #[error("cannot read {path}: {source}")]
     Read { path: PathBuf, source: io::Error },
     #[error("cannot write {path}: {source}")]
@@ -78,9 +80,17 @@ pub enum Error {
 
 /// The `program-ids.json` entry fields the plan needs; `seed` and `salt` only matter to
 /// `scripts/program-keypairs.mjs`.
+/// The fields of either plan file that `actions` needs.
+#[derive(Deserialize)]
+struct ActionsFile {
+    release: Release,
+    programs: BTreeMap<String, PlannedProgramFile>,
+}
+
 #[derive(Deserialize)]
 struct ProgramId {
     address: String,
+    dependencies: Vec<String>,
 }
 
 type Binaries = BTreeMap<String, Vec<u8>>;
@@ -101,6 +111,18 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
             let mut chain = Priced::new(rpc, price);
 
             apply(&mut chain, args, &deployer, out)
+        }
+        Command::PlanFinalize(args) => {
+            let deployer = read_keypair(&args.chain.deployer_keypair)?;
+            let chain = RpcChain::new(args.chain.rpc_url.clone());
+
+            plan_selection(&chain, Operation::Finalize, args, &deployer.pubkey(), out)
+        }
+        Command::PlanClose(args) => {
+            let deployer = read_keypair(&args.chain.deployer_keypair)?;
+            let chain = RpcChain::new(args.chain.rpc_url.clone());
+
+            plan_selection(&chain, Operation::Close, args, &deployer.pubkey(), out)
         }
         Command::Actions(args) => actions(args, out),
     }
@@ -131,7 +153,6 @@ pub fn plan(
         layerzero: inputs.layerzero.clone(),
         hyper_reserve_lamports: inputs.hyper_reserve_lamports.clone(),
         layerzero_reserve_lamports: inputs.layerzero_reserve_lamports.clone(),
-        finalize_layerzero: inputs.finalize_layerzero,
         compute_unit_price: inputs.compute_unit_price.clone(),
     };
     let document = PlanDocument {
@@ -174,16 +195,53 @@ pub fn apply(
 
 /// Reads `plan.json` only. It was written by the `plan` step, whose hash the workflow compared
 /// with the reviewed one before anything ran.
+/// Writes `plan.json` for finalizing or closing the selected programs and prints its hash.
+pub fn plan_selection(
+    chain: &impl Chain,
+    operation: Operation,
+    args: &SelectionArgs,
+    deployer: &Pubkey,
+    out: &mut impl Write,
+) -> Result<(), Error> {
+    let SelectionArgs {
+        version,
+        cluster,
+        program_ids,
+        assets,
+        out: plan_path,
+        summary,
+        programs,
+        ..
+    } = args;
+    let (release, binaries) = release(version, *cluster, program_ids, assets)?;
+    let selected: Programs = programs.parse()?;
+    let observed = selection::observe(chain, &release, &binaries, deployer)?;
+    let selection = Selection::build(operation, &selected, release, *deployer, observed)?;
+
+    write_json(plan_path, &selection.file(programs.clone()))?;
+    summary
+        .iter()
+        .try_for_each(|path| append(path, &selection.summary()))?;
+
+    print_hash(out, &selection.hash())
+}
+
+/// Reads only `plan.json`, from any plan kind. It was written by the plan step, whose hash the
+/// workflow compared with the reviewed one before anything ran. Dependencies come first, so a
+/// finalize run that stops part-way never leaves a final program depending on an upgradeable one.
 pub fn actions(args: &ActionsArgs, out: &mut impl Write) -> Result<(), Error> {
-    let file: PlanFile = read_json(&args.plan)?;
+    let ActionsFile { release, programs } = read_json(&args.plan)?;
     let action = args.action.into();
 
-    file.programs
-        .iter()
-        .filter(|(_, program)| program.actions.contains(&action))
-        .try_for_each(|(name, _)| {
-            writeln!(out, "{name}").map_err(|source| Error::Output { source })
+    release
+        .dependency_order()
+        .into_iter()
+        .filter(|name| {
+            programs
+                .get(*name)
+                .is_some_and(|program| program.actions.contains(&action))
         })
+        .try_for_each(|name| writeln!(out, "{name}").map_err(|source| Error::Output { source }))
 }
 
 fn rebuild(
@@ -262,17 +320,35 @@ fn release(
         .collect::<Result<Binaries, Error>>()?;
     let programs = ids
         .into_iter()
-        .map(|(name, ProgramId { address })| {
-            let program = ReleaseProgram {
-                address: address.parse().map_err(|_| Error::InvalidAddress {
-                    program: name.clone(),
-                    value: address,
-                })?,
-                so_sha256: sha256(&binaries[&name]),
-            };
+        .map(
+            |(
+                name,
+                ProgramId {
+                    address,
+                    dependencies,
+                },
+            )| {
+                if let Some(unknown) = dependencies
+                    .iter()
+                    .find(|dependency| !binaries.contains_key(*dependency))
+                {
+                    return Err(Error::UnknownDependency {
+                        program: name,
+                        dependency: unknown.clone(),
+                    });
+                }
+                let program = ReleaseProgram {
+                    address: address.parse().map_err(|_| Error::InvalidAddress {
+                        program: name.clone(),
+                        value: address,
+                    })?,
+                    so_sha256: sha256(&binaries[&name]),
+                    dependencies,
+                };
 
-            Ok((name, program))
-        })
+                Ok((name, program))
+            },
+        )
         .collect::<Result<_, Error>>()?;
     let release = Release {
         version: version.into(),
@@ -315,9 +391,12 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 }
 
 fn read_keypair(path: &Path) -> Result<Keypair, Error> {
-    read_keypair_file(path).map_err(|source| Error::Keypair {
+    read_keypair_file(path).map_err(|_| Error::Keypair {
         path: path.into(),
-        source,
+        reason: match path.exists() {
+            true => "not a JSON array of 64 bytes",
+            false => "no such file",
+        },
     })
 }
 
@@ -335,7 +414,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, Error> {
     })
 }
 
-fn write_json(path: &Path, document: &PlanFile) -> Result<(), Error> {
+fn write_json(path: &Path, document: &impl Serialize) -> Result<(), Error> {
     let json = serde_json::to_vec_pretty(document).expect("plan document must serialize");
 
     fs::write(path, json).map_err(|source| Error::Write {
@@ -382,8 +461,13 @@ mod tests {
     use crate::plan::{
         Action, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
     };
-    use crate::testing::{release_address, RecordingChain, DVN, EXECUTOR, SENDER};
+    use crate::selection::SelectionFile;
+    use crate::testing::{
+        self, dependencies, full_setup, release_address, RecordingChain, DVN, EXECUTOR, SENDER,
+    };
 
+    const VERIFY_PROGRAM_ID: Pubkey =
+        Pubkey::from_str_const("verifycLy8mB96wd9wqq3WDXQwM4oU6r42Th37Db9fC");
     const PROGRAMS: [&str; 5] = [
         AGGREGATOR_PROVER,
         HYPER_PROVER,
@@ -406,9 +490,10 @@ mod tests {
                 .iter()
                 .map(|name| {
                     let entry = format!(
-                        r#"{{"address":"{}","seed":"{}","salt":0}}"#,
+                        r#"{{"address":"{}","seed":"{}","salt":0,"dependencies":{}}}"#,
                         release_address(name),
-                        "00".repeat(32)
+                        "00".repeat(32),
+                        serde_json::to_string(&dependencies(name)).unwrap()
                     );
 
                     format!(r#""{name}":{entry}"#)
@@ -469,10 +554,56 @@ mod tests {
                     ),
                     hyper_reserve_lamports: "1000000".into(),
                     layerzero_reserve_lamports: "100000000".into(),
-                    finalize_layerzero: false,
                     compute_unit_price: "0".into(),
                 },
             }
+        }
+
+        /// Runs `plan-finalize` or `plan-close` for `programs` against `chain`.
+        fn plan_selection(
+            &self,
+            chain: &RecordingChain,
+            operation: Operation,
+            programs: &str,
+        ) -> Result<PlanHash, Error> {
+            let args = SelectionArgs {
+                version: "0.0.1".into(),
+                cluster: Cluster::Devnet,
+                program_ids: self.path("ids.json"),
+                assets: self.directory.path().into(),
+                out: self.path("plan.json"),
+                summary: Some(self.path("summary.md")),
+                programs: programs.into(),
+                chain: chain_args(),
+            };
+            let mut out = Vec::new();
+            plan_selection(chain, operation, &args, &self.deployer.pubkey(), &mut out)?;
+
+            Ok(hash_line(&out))
+        }
+
+        /// Every program deployed by this deployer, initialized, its LayerZero setup complete,
+        /// and verified unless named in `unverified`.
+        fn tested_chain(&self, unverified: &[&str]) -> RecordingChain {
+            let mut chain = full_setup(&testing::plan(5_000_000)).chain;
+            PROGRAMS.iter().for_each(|name| {
+                self.deploy(&mut chain, name);
+                if unverified.contains(name) {
+                    return;
+                }
+                let record =
+                    selection::verification_record(&self.deployer.pubkey(), &release_address(name));
+                chain.accounts.insert(
+                    record,
+                    Account {
+                        owner: VERIFY_PROGRAM_ID,
+                        data: vec![1],
+                        ..Account::default()
+                    },
+                );
+            });
+
+            chain
         }
 
         fn apply_args(&self) -> ApplyArgs {
@@ -607,12 +738,7 @@ mod tests {
         assert_eq!(file.programs[HYPER_PROVER].status, PlannedStatus::New);
         assert_eq!(
             file.programs[HYPER_PROVER].actions,
-            [
-                Action::Deploy,
-                Action::Init,
-                Action::Verify,
-                Action::Finalize
-            ]
+            [Action::Deploy, Action::Init, Action::Verify]
         );
         assert!(
             summary.contains(&format!("Plan hash: {hash}\n\n### Deployer funding")),
@@ -707,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn actions_lists_programs_for_action_from_the_plan_file_alone() {
+    fn actions_lists_programs_from_the_plan_file_alone_dependencies_first() {
         let env = Env::new();
         env.plan(&env.chain());
         fs::remove_file(env.path("ids.json")).unwrap();
@@ -715,17 +841,16 @@ mod tests {
             .iter()
             .for_each(|name| fs::remove_file(env.path(&format!("{name}.devnet.so"))).unwrap());
 
-        assert_eq!(env.actions(ActionKind::Deploy), PROGRAMS);
-        assert_eq!(env.actions(ActionKind::Verify), PROGRAMS);
-        assert_eq!(
-            env.actions(ActionKind::Finalize),
-            [
-                AGGREGATOR_PROVER,
-                HYPER_PROVER,
-                LOCAL_PROVER,
-                POLYMER_PROVER
-            ]
-        );
+        let members_then_aggregator = [
+            HYPER_PROVER,
+            LAYERZERO_PROVER,
+            LOCAL_PROVER,
+            POLYMER_PROVER,
+            AGGREGATOR_PROVER,
+        ];
+        assert_eq!(env.actions(ActionKind::Deploy), members_then_aggregator);
+        assert_eq!(env.actions(ActionKind::Verify), members_then_aggregator);
+        assert!(env.actions(ActionKind::Finalize).is_empty());
     }
 
     #[test]
@@ -862,6 +987,149 @@ mod tests {
 
         assert!(
             matches!(error, Error::AssetChanged { ref program, .. } if program == HYPER_PROVER),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn plan_finalize_lists_tested_programs_dependencies_first() {
+        let env = Env::new();
+        let chain = env.tested_chain(&[]);
+
+        let hash = env
+            .plan_selection(&chain, Operation::Finalize, "all")
+            .unwrap();
+
+        let file: SelectionFile = read_json(&env.path("plan.json")).unwrap();
+        let summary = fs::read_to_string(env.path("summary.md")).unwrap();
+        assert_eq!(file.hash, hash.to_string());
+        assert_eq!(file.selected, "all");
+        assert_eq!(
+            env.actions(ActionKind::Finalize),
+            [
+                HYPER_PROVER,
+                LAYERZERO_PROVER,
+                LOCAL_PROVER,
+                POLYMER_PROVER,
+                AGGREGATOR_PROVER
+            ]
+        );
+        assert!(env.actions(ActionKind::Close).is_empty());
+        assert!(
+            summary.ends_with(&format!("Plan hash: {hash}\n")),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn plan_finalize_refuses_an_unverified_program_and_writes_nothing() {
+        let env = Env::new();
+        let chain = env.tested_chain(&[POLYMER_PROVER]);
+
+        let error = env
+            .plan_selection(&chain, Operation::Finalize, POLYMER_PROVER)
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, Error::Selection(selection::Error::NotVerified { program }) if program == POLYMER_PROVER),
+            "{error:?}"
+        );
+        assert!(!env.path("plan.json").exists());
+    }
+
+    #[test]
+    fn plan_close_lists_only_the_named_programs_and_their_reserves() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        chain.accounts.insert(
+            testing::pda(hyper_prover::state::PDA_PAYER_SEED, HYPER_PROVER),
+            Account {
+                lamports: 1_234,
+                ..Account::default()
+            },
+        );
+
+        env.plan_selection(&chain, Operation::Close, HYPER_PROVER)
+            .unwrap();
+
+        let summary = fs::read_to_string(env.path("summary.md")).unwrap();
+        assert_eq!(env.actions(ActionKind::Close), [HYPER_PROVER]);
+        assert!(
+            summary.contains("- hyper_prover `pda_payer`: 1234 lamports"),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn a_dependency_outside_the_release_is_refused() {
+        let env = Env::new();
+        let ids = fs::read_to_string(env.path("ids.json")).unwrap().replacen(
+            r#""dependencies":[]"#,
+            r#""dependencies":["portal"]"#,
+            1,
+        );
+        fs::write(env.path("ids.json"), ids).unwrap();
+
+        let error = plan(
+            &env.chain(),
+            &env.plan_args(),
+            &env.deployer.pubkey(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, Error::UnknownDependency { dependency, .. } if dependency == "portal"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_malformed_keypair_error_never_quotes_the_file() {
+        let env = Env::new();
+        let secret = "4wBqpZM9xaSheZzJSMawUKKwhdpChKbZ5eu5ky4Vigw8nFNsYzD2CRQ6g6ap5CwmBgdo";
+        let path = env.path("deployer.json");
+        fs::write(&path, format!("\"{secret}\"")).unwrap();
+        let command = Command::PlanClose(SelectionArgs {
+            version: "0.0.1".into(),
+            cluster: Cluster::Devnet,
+            program_ids: env.path("ids.json"),
+            assets: env.directory.path().into(),
+            out: env.path("plan.json"),
+            summary: None,
+            programs: "all".into(),
+            chain: ChainArgs {
+                rpc_url: "unused".into(),
+                deployer_keypair: path,
+            },
+        });
+
+        let error = run(&command, &mut Vec::new()).unwrap_err();
+
+        let printed = format!("{error} {error:?}");
+        assert!(!printed.contains(secret), "{printed}");
+        assert!(
+            printed.contains("not a JSON array of 64 bytes"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn a_verification_record_owned_by_another_program_does_not_count() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        let record = selection::verification_record(
+            &env.deployer.pubkey(),
+            &release_address(POLYMER_PROVER),
+        );
+        chain.accounts.get_mut(&record).unwrap().owner = Pubkey::new_unique();
+
+        let error = env
+            .plan_selection(&chain, Operation::Finalize, POLYMER_PROVER)
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, Error::Selection(selection::Error::NotVerified { program }) if program == POLYMER_PROVER),
             "{error:?}"
         );
     }

@@ -243,9 +243,10 @@ test("release prints only the manifest that deploy turns into private keypair fi
   });
   assert.equal(released.status, 0, released.stderr);
   const manifest = JSON.parse(released.stdout);
-  const { address, seed, salt } = manifest.proof_helper;
+  const { address, seed, salt, dependencies: releasedDependencies } = manifest.proof_helper;
   assert.deepEqual(Object.keys(manifest), ["proof_helper"]);
   assert.equal(salt, 0);
+  assert.deepEqual(releasedDependencies, []);
   assert.equal(address, derive(secret(), "proof_helper", seed).address);
 
   const manifestPath = join(directory, "program-ids.json");

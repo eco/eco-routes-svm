@@ -51,7 +51,6 @@ pub struct RawInputs {
     pub layerzero: String,
     pub hyper_reserve_lamports: String,
     pub layerzero_reserve_lamports: String,
-    pub finalize_layerzero: bool,
     pub compute_unit_price: String,
 }
 
@@ -62,7 +61,6 @@ pub struct Inputs {
     pub layerzero_peers: Vec<LayerZeroPeer>,
     pub hyper_reserve_lamports: u64,
     pub layerzero_reserve_lamports: u64,
-    pub finalize_layerzero: bool,
     /// Micro-lamports per compute unit on every deploy and `apply` transaction.
     pub compute_unit_price: u64,
 }
@@ -90,7 +88,6 @@ impl Inputs {
             layerzero,
             hyper_reserve_lamports,
             layerzero_reserve_lamports,
-            finalize_layerzero,
             compute_unit_price,
         } = raw;
 
@@ -120,7 +117,6 @@ impl Inputs {
                 LAYERZERO_RESERVE_LAMPORTS,
                 &layerzero_reserve_lamports,
             )?,
-            finalize_layerzero,
             compute_unit_price: compute_unit_price.trim().parse().map_err(|_| {
                 Error::InvalidComputeUnitPrice {
                     value: compute_unit_price.clone(),
@@ -432,7 +428,6 @@ mod tests {
             layerzero: valid_layerzero(),
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "2000000".into(),
-            finalize_layerzero: false,
             compute_unit_price: "0".into(),
         }
     }

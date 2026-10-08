@@ -38,7 +38,7 @@ pub enum Error {
     Mismatch(#[from] config::Mismatch),
     #[error("{LAYERZERO_PROVER} is not in the plan")]
     UnplannedProgram,
-    #[error("{LAYERZERO_PROVER}: eid {eid} has only one of its ULN configs, and init_config cannot run twice; correct it with a program upgrade before finalizing")]
+    #[error("{LAYERZERO_PROVER}: eid {eid} has only one of its ULN configs, and init_config cannot run twice; close it (and the aggregator) with close.yml, raise its salt in scripts/program-salts.json and release again")]
     PartialPathConfig { eid: u32 },
     #[error("{LAYERZERO_PROVER} {transaction} needs {size} bytes, over the {limit}-byte transaction limit; use fewer DVNs")]
     TransactionTooLarge {

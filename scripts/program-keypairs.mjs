@@ -247,13 +247,16 @@ const release = (secret, [placeholderDir, ...programs]) => {
       ),
     ]),
   );
-  const programSeeds = seeds(binaries, dependencies(workspaceMetadata(), released), salts);
+  const programDependencies = dependencies(workspaceMetadata(), released);
+  const programSeeds = seeds(binaries, programDependencies, salts);
+  // `dependencies` lets the deployer finalize a program only after everything it depends on.
   const manifest = released.map((program) => [
     program,
     {
       address: derive(secret, program, programSeeds[program]).address,
       seed: programSeeds[program],
       salt: salt(salts, program),
+      dependencies: programDependencies[program],
     },
   ]);
 

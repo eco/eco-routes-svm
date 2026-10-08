@@ -66,6 +66,14 @@ pub fn address(index: u8) -> Pubkey {
     Pubkey::new_from_array([index; 32])
 }
 
+/// The aggregator depends on its members; the fixture's other programs on nothing.
+pub fn dependencies(program: &str) -> Vec<String> {
+    match program {
+        AGGREGATOR_PROVER => AGGREGATOR_MEMBERS.map(Into::into).to_vec(),
+        _ => vec![],
+    }
+}
+
 pub fn release_address(program: &str) -> Pubkey {
     match program {
         HYPER_PROVER => address(201),
@@ -93,6 +101,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
                 let program = ReleaseProgram {
                     address: release_address(name),
                     so_sha256: [0; 32],
+                    dependencies: dependencies(name),
                 };
 
                 ((*name).into(), program)
@@ -123,7 +132,6 @@ pub fn plan(reserve_lamports: u64) -> Plan {
         ),
         hyper_reserve_lamports: reserve_lamports.to_string(),
         layerzero_reserve_lamports: reserve_lamports.to_string(),
-        finalize_layerzero: false,
         compute_unit_price: "0".into(),
     })
     .unwrap();

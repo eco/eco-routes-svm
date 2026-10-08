@@ -21,7 +21,17 @@ pub enum Command {
     /// Rebuild the plan from the chain, refuse unless its hash is the one in `plan.json`, then
     /// run the init steps and read them back.
     Apply(ApplyArgs),
-    /// Print the programs `plan.json` assigns to an action, one per line.
+    /// Plan making the selected upgradeable programs immutable; writes `plan.json` and prints
+    /// `plan_hash=<hex>`. Refuses a program before its dependencies, or one not initialized or
+    /// verified.
+    #[command(name = "plan-finalize")]
+    PlanFinalize(SelectionArgs),
+    /// Plan closing the selected upgradeable programs, which burns their addresses; writes
+    /// `plan.json` and prints `plan_hash=<hex>`.
+    #[command(name = "plan-close")]
+    PlanClose(SelectionArgs),
+    /// Print the programs `plan.json` assigns to an action, one per line, each after the
+    /// programs it depends on.
     Actions(ActionsArgs),
 }
 
@@ -47,8 +57,6 @@ pub struct InputArgs {
     pub hyper_reserve_lamports: String,
     #[arg(long, env = "LAYERZERO_RESERVE_LAMPORTS")]
     pub layerzero_reserve_lamports: String,
-    #[arg(long, env = "FINALIZE_LAYERZERO", action = clap::ArgAction::Set, default_value = "false")]
-    pub finalize_layerzero: bool,
     /// Micro-lamports per compute unit for the run's deploys and `apply`; part of the plan hash.
     #[arg(long, env = "COMPUTE_UNIT_PRICE", default_value = "0")]
     pub compute_unit_price: String,
@@ -78,6 +86,30 @@ pub struct PlanArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct SelectionArgs {
+    #[arg(long)]
+    pub version: String,
+    #[arg(long)]
+    pub cluster: Cluster,
+    /// `program-ids.json`: `{ "<program>": { "address", "seed", "salt", "dependencies" } }`.
+    #[arg(long)]
+    pub program_ids: PathBuf,
+    /// Directory of the release `<program>.<cluster>.so` files.
+    #[arg(long)]
+    pub assets: PathBuf,
+    #[arg(long)]
+    pub out: PathBuf,
+    /// File the plan summary is appended to (`$GITHUB_STEP_SUMMARY`).
+    #[arg(long)]
+    pub summary: Option<PathBuf>,
+    /// `all`, or a comma-separated list of program names.
+    #[arg(long, env = "PROGRAMS")]
+    pub programs: String,
+    #[command(flatten)]
+    pub chain: ChainArgs,
+}
+
+#[derive(Debug, Args)]
 pub struct ApplyArgs {
     #[arg(long)]
     pub plan: PathBuf,
@@ -101,6 +133,7 @@ pub enum ActionKind {
     Deploy,
     Verify,
     Finalize,
+    Close,
 }
 
 impl From<ActionKind> for plan::Action {
@@ -109,6 +142,7 @@ impl From<ActionKind> for plan::Action {
             ActionKind::Deploy => Self::Deploy,
             ActionKind::Verify => Self::Verify,
             ActionKind::Finalize => Self::Finalize,
+            ActionKind::Close => Self::Close,
         }
     }
 }
@@ -155,7 +189,6 @@ mod tests {
             &["--summary", "summary.md"],
             &CHAIN,
             &INPUTS,
-            &["--finalize-layerzero", "true"],
         ]
         .concat();
 
@@ -168,11 +201,10 @@ mod tests {
         assert_eq!(plan.summary, Some("summary.md".into()));
         assert_eq!(plan.chain.rpc_url, "http://rpc");
         assert_eq!(plan.inputs.layerzero_reserve_lamports, "2");
-        assert!(plan.inputs.finalize_layerzero);
     }
 
     #[test]
-    fn plan_without_summary_does_not_finalize_by_default() {
+    fn plan_without_summary() {
         let arguments = [
             &["plan", "--version", "1", "--cluster", "mainnet"][..],
             &[
@@ -193,7 +225,6 @@ mod tests {
         };
 
         assert_eq!(plan.summary, None);
-        assert!(!plan.inputs.finalize_layerzero);
     }
 
     #[test]
@@ -245,7 +276,7 @@ mod tests {
 
     #[test]
     fn actions_parses_each_action_without_chain_arguments() {
-        let parsed = ["deploy", "verify", "finalize"].map(|name| {
+        let parsed = ["deploy", "verify", "finalize", "close"].map(|name| {
             let arguments = ["actions", "--plan", "plan.json", "--action", name];
             let Command::Actions(actions) = parse(&arguments).unwrap().command else {
                 panic!("expected the actions command");
@@ -256,7 +287,12 @@ mod tests {
 
         assert_eq!(
             parsed,
-            [ActionKind::Deploy, ActionKind::Verify, ActionKind::Finalize]
+            [
+                ActionKind::Deploy,
+                ActionKind::Verify,
+                ActionKind::Finalize,
+                ActionKind::Close
+            ]
         );
     }
 

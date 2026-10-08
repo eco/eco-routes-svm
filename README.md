@@ -351,7 +351,7 @@ Proof rent comes from the `pda_payer` reserve because the EVM sender's options c
 
 #### Administration and finalization
 `pda_payer` is the LayerZero delegate. `init`, `init_path`, `set_path_config` and `set_alt` are gated on the program's upgrade authority, so finalizing the program is the delegate revocation. Every path must be fully pinned (ULN302 send/receive library, explicit DVNs, confirmations, executor; `set_path_config` rejects LayerZero defaults and `NIL_CONFIRMATIONS`, which ULN302 resolves to zero confirmations) and read back before finalizing. An unpinned path after finalization needs a new program ID.
-- `set_path_config` runs ULN302 `init_config`, which creates the per-OApp Send/ReceiveConfig accounts, so on a real chain it is one-shot per eid. A wrong config must be corrected by a program upgrade before finalizing, then read back again.
+- `set_path_config` runs ULN302 `init_config`, which creates the per-OApp Send/ReceiveConfig accounts, so on a real chain it is one-shot per eid. Programs are never upgraded in place (new bytecode gets a new address), so a wrong config means closing `layerzero_prover` and the aggregator, raising the salt and releasing again.
 - The lookup table recorded by `set_alt` must be frozen (authority removed) and complete (`required_alt_addresses`) before `set_alt`, which rejects anything else. After finalizing, `set_alt` can never replace it.
 
 **Finalization gate.** Before finalizing the program, run one real outbound `send_message` and one inbound executor delivery on every configured mainnet path, then read back every path's `Nonce`, send and receive library, and ULN send/receive and executor config. CI verifies the ULN302 `init_config`/`set_config` account tails, `SendParams`/`QuoteParams` and the `send` account head only against the mock endpoint, so these mainnet runs are the only check against the real programs.
@@ -579,7 +579,7 @@ dist/program/mainnet/<program>.mainnet.so    dist/idl/mainnet/<program>.mainnet.
 dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.json
 ```
 
-plus `program-ids.json`, recording each program's `address`, `seed` and `salt` (see [Program IDs](#program-ids)).
+plus `program-ids.json`, recording each program's `address`, `seed`, `salt` and `dependencies` (the released programs whose IDs it compiles in, plus the aggregator's members; see [Program IDs](#program-ids)).
 
 `<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover` and `layerzero_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
@@ -607,15 +607,21 @@ The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl ra
 
 ### Deploying a release
 
-The manual `Deploy` workflow (`.github/workflows/deploy.yml`) takes a published release to devnet or mainnet: each new program is deployed, initialized, read back, verified and made immutable, in that order. It runs twice: a dry run that only plans, then the same run with the reviewed `plan_hash`.
+Three manual workflows take a published release to devnet or mainnet. Each runs twice: a dry run that only plans, then the same run with the reviewed `plan_hash`.
+
+| Workflow | Does |
+|---|---|
+| `Deploy` (`deploy.yml`) | deploys, initializes, reads back and verifies every new program, and leaves them upgradeable for testing |
+| `Finalize` (`finalize.yml`) | makes the tested programs immutable, dependencies first |
+| `Close` (`close.yml`) | closes the upgradeable programs of an abandoned release, returning their rent |
 
 **Prerequisites**
 
 - The release exists (`v<version>` and its `deploy/v<version>` tag) and the EVM provers it will trust are deployed, since their addresses are `init` inputs.
-- The workflow builds the deployer and runs `scripts/deploy-step.sh` from that `deploy/v<version>` tag, not from `main`: a release cut before this pipeline existed cannot use it, and a fix to the pipeline reaches deploys only through a new release.
+- The workflows build the deployer and run `scripts/deploy-step.sh` from that `deploy/v<version>` tag, not from `main`: a release cut before this pipeline existed cannot use it, and a fix to the pipeline reaches deploys only through a new release.
 - GitHub environment `release` (shared with the release workflow and both clusters): required reviewers, self-review prevented, `main` only. Its approval is the second pair of eyes on every run, dry runs included.
 - The deployer, `Cx92mzUNNr7mazZmuB5uTZtaYPNDFs6RwKVYF2hC7kH3`, holds SOL on the target cluster. A fresh deploy of every program takes about 20 SOL: about 16 SOL of program rent, locked for good once the programs are final, plus the largest buffer (refunded), the reserve top-ups and transaction fees, which grow with `compute_unit_price`. The plan step estimates this from the release and the chain and fails if the balance is short.
-- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until the last step), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
+- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until it is finalized or closed), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
 
 **Inputs**
 
@@ -628,7 +634,6 @@ The manual `Deploy` workflow (`.github/workflows/deploy.yml`) takes a published 
 | `polymer_emitters` | Comma-separated EVM addresses of the EVM PolymerProver |
 | `layerzero` | JSON, see below |
 | `hyper_reserve_lamports`, `layerzero_reserve_lamports` | Top-ups for each prover's `pda_payer`, default `0`. Only the shortfall is sent; a balance is never reduced. The plan fails unless the LayerZero reserve covers the endpoint and ULN accounts its paths still need (about 0.036 SOL per peer) and stays rent-exempt; the summary shows both |
-| `finalize_layerzero` | Default `false`; see [Finalizing LayerZero](#finalizing-layerzero) |
 | `compute_unit_price` | Micro-lamports per compute unit for deploys and init transactions, default `0` (none). Part of the plan hash, and the funding estimate includes the priority fees it adds; deploy and `apply` take it from the plan |
 
 Inputs for a program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any input the program's own `init` would: more than 20 hyper senders or Polymer emitters, and a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses.
@@ -679,43 +684,53 @@ The addresses above are placeholders; use the DVN and executor addresses LayerZe
 
 **1. Dry run.** Run the workflow with the inputs and an empty `plan_hash`. It checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary, followed by the deployer's address, balance and estimated cost. Nothing is written on chain. A deployer short of SOL fails this step after printing the plan; fund it and rerun. Its balance is not part of the hash.
 
-**2. Review the summary.** Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify, finalize). Statuses:
+**2. Review the summary.** Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify). Statuses:
 
 | Status | On chain | Plan |
 |---|---|---|
-| New | no account | deploy, initialize, verify, finalize |
-| Partial | bytecode equals the release, authority is the deployer | resume: finish what is missing, then verify and finalize |
+| New | no account | deploy, initialize, verify |
+| Partial | bytecode equals the release, authority is the deployer | resume: finish what is missing, then verify |
 | Live | bytecode equals the release, immutable, config equal to the inputs | skip |
 | Foreign | anything else, including lamports someone sent to the program or programdata address | the run fails: someone else holds the address, and the other programs would trust it |
 
-The hash covers the release, the binaries, the cluster's genesis hash, the inputs and the on-chain facts the plan used. Copy `plan_hash` from the summary.
+The hash covers the release, the binaries, the cluster's genesis hash, the deployer's key, the inputs and the on-chain facts the plan used. Copy `plan_hash` from the summary.
 
 **3. Execute.** Run again with the same inputs and `plan_hash`. After the reviewers approve, the run re-plans and continues only if the hash is unchanged. It then:
 
 1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
 2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init`, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
 3. reads every config back and compares it with the inputs; any difference fails the run with every program still upgradeable;
-4. verifies each program with `solana-verify` (and submits the remote job on mainnet);
-5. makes each program immutable, except `layerzero_prover`;
-6. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
+4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record;
+5. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
 
-#### Finalizing LayerZero
+Every program stays upgradeable after the run, so the provers can be tested end to end first.
 
-`layerzero_prover` stays upgradeable after the run: finalizing it revokes the `pda_payer` delegate, which must wait for the manual gate in [Administration and finalization](#administration-and-finalization). After the gate, run the workflow with the same inputs plus `finalize_layerzero: true`, review its plan and execute it with the new hash. The plan refuses unless the full LayerZero setup is on chain and equal to the inputs.
+#### Finalizing
+
+After testing, run `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then execute it with its `plan_hash`. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
+
+- is not deployed, or not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`);
+- has no verification record uploaded by the deployer (the deploy run's verify step writes it);
+- depends on a program that would stay upgradeable: `aggregator_prover` before its members, and any prover before `portal`. Dependencies come from the release's `program-ids.json`;
+- is `layerzero_prover` without its full setup on chain (every peer's path and the frozen lookup table). Finalizing it also revokes the `pda_payer` delegate, so wait for the manual gate in [Administration and finalization](#administration-and-finalization).
+
+#### Closing
+
+`Close` closes upgradeable programs of an abandoned release (`programs`: `all` for every upgradeable one, or a list) and returns their rent to the deployer. It is irreversible: the loader never redeploys a closed program ID, so a redeploy needs the program's salt raised and a new release. Lamports held by the program's own accounts stay locked for good, because only the program can sign for them: the `hyper_prover` and `layerzero_prover` `pda_payer` reserves (shown in the summary) and the LayerZero endpoint and ULN account rent. The plan refuses a final program, and any program a final one depends on.
 
 #### Recovery
 
 - **Failed or cancelled run.** Programs stay upgradeable. A deploy that died part-way leaves a buffer holding its rent; the run closes every buffer the deployer owns before it deploys and again at the end, whatever the outcome, returning the rent to the deployer. Fix the cause and start from a fresh dry run: the earlier hash covered state that has since changed. Every step is idempotent, so the new plan only contains what is left.
-- **Burned address.** If an immutable program has a missing or wrong config (or a config was set by someone else), or someone sent lamports to a new program's address or its programdata address (the loader then cannot create the account), the address is unusable. Raise the program's salt in `scripts/program-salts.json` and cut a new release; that moves it and everything depending on it.
+- **Burned address.** If a program has a wrong config (or a config was set by someone else), or someone sent lamports to a new program's address or its programdata address (the loader then cannot create the account), the address is unusable. Close it if it is still upgradeable, raise its salt in `scripts/program-salts.json` and cut a new release; that moves it and everything depending on it.
 - **Interrupted `solana program deploy` in the manual fallback.** It leaves a buffer account holding the upload's rent. Reclaim every buffer of the deployer with `solana program close --buffers -u <rpc> -k <deployer-keypair> --authority <deployer-keypair>`; the program itself does not exist yet, so the next plan lists it as new.
-- **Abandoned deployment.** Prefer leaving its programs upgradeable. `solana program close <address> ... --bypass-warning` reclaims a program's rent but burns its address for good: the loader never redeploys a closed program ID, so a redeploy needs its salt raised and a new release. Lamports held by the program's PDAs are lost with it, because only the program can sign for them: the `hyper_prover` and `layerzero_prover` `pda_payer` reserves and the LayerZero `Store` and ULN config rent. Close a program only if that is acceptable.
+- **Abandoned deployment.** Run `Close` for its upgradeable programs; see [Closing](#closing).
 
 #### Limits
 
 | Limit | Value |
 |---|---|
 | LayerZero peers | at most 16 (`MAX_PEERS`); `init` fits all of them |
-| Required DVNs per ULN config | at most 7 with no optional DVNs; optional DVNs lower it. The limit is the 1232-byte transaction: the plan rejects any `init` or `set_path_config` that would not fit with its compute-unit limit (1.4M, since their endpoint and ULN CPIs are unmeasured on the real programs) and price instructions |
+| Required DVNs per ULN config | at most 7 with no optional DVNs; optional DVNs lower it. The limit is the 1232-byte transaction: the plan rejects any `init` or `set_path_config` that would not fit with its compute-unit limit and price instructions. The limit is 1.4M: `set_path_config` used about 238k compute units against devnet's ULN302, over the 200k default |
 | DVN lists | strictly ascending by public key |
 
 #### Manual fallback
@@ -784,7 +799,7 @@ solana-verify remote submit-job -u <rpc> --program-id "$address" --uploader <dep
 
 `-y` uploads the verify PDA without prompting; `<deployer-address>` is `solana-keygen pubkey <deployer-keypair>`. If verification fails, stop here: do not make the program immutable.
 
-**6. Make each new program immutable**, last, because `init` and verification both need the upgrade authority. Leave `layerzero_prover` until its [finalization gate](#finalizing-layerzero):
+**6. After testing, make each new program immutable**, last, because `init` and verification both need the upgrade authority. Finalize each program only after the programs it depends on (`dependencies` in `program-ids.json`), and leave `layerzero_prover` until its [finalization gate](#administration-and-finalization):
 
 ```bash
 solana program set-upgrade-authority -u <rpc> -k <deployer-keypair> "$address" --final

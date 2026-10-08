@@ -1,0 +1,69 @@
+name: 'Setup deployer'
+description: 'Toolchains, the deployer built from the checked-out deploy tag, the release assets and the deployer keypair'
+# Shared by deploy.yml, finalize.yml and close.yml. Expects the deploy/v<version> tag checked
+# out and VERSION, CLUSTER and ASSETS in the job's environment; exports KEYPAIR.
+inputs:
+  rust-version:
+    description: 'Rust version to install'
+    required: true
+  anchor-version:
+    description: 'Anchor version to install'
+    required: true
+  solana-version:
+    description: 'Solana CLI version to install'
+    required: true
+  deployer-keypair:
+    description: 'The DEPLOYER_KEYPAIR secret (JSON keypair)'
+    required: true
+  github-token:
+    description: 'Token for downloading the release'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust
+      uses: ./.github/actions/setup-rust
+      with:
+        rust-version: ${{ inputs.rust-version }}
+        cache-key-suffix: deploy
+
+    - name: Setup Anchor
+      uses: ./.github/actions/setup-anchor
+      with:
+        anchor-version: ${{ inputs.anchor-version }}
+        solana-version: ${{ inputs.solana-version }}
+
+    - name: Setup Node
+      uses: actions/setup-node@v7
+      with:
+        node-version: 22
+
+    - name: Build deployer
+      shell: bash
+      run: |
+        cargo build --release --locked --manifest-path packages/deployer/Cargo.toml
+        echo "$PWD/packages/deployer/target/release" >> "$GITHUB_PATH"
+
+    - name: Download release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        gh release download "v${VERSION}" --dir "$ASSETS" \
+          --pattern program-ids.json --pattern "*.${CLUSTER}.so" --pattern "*.${CLUSTER}.json"
+
+    - name: Check release
+      shell: bash
+      run: scripts/deploy-step.sh check
+
+    - name: Write deployer keypair
+      shell: bash
+      env:
+        DEPLOYER_KEYPAIR: ${{ inputs.deployer-keypair }}
+      run: |
+        set +x
+        umask 077
+        printf '%s' "$DEPLOYER_KEYPAIR" > "$RUNNER_TEMP/deployer.json"
+        echo "KEYPAIR=$RUNNER_TEMP/deployer.json" >> "$GITHUB_ENV"

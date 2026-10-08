@@ -67,11 +67,6 @@ impl Configs {
         self.compare(expected, false, |_| true)
     }
 
-    /// [`Self::deviation`] for the LayerZero `Store` alone.
-    pub fn layerzero_deviation(&self, expected: &Self) -> Result<(), Mismatch> {
-        self.compare(expected, false, |program| program == LAYERZERO_PROVER)
-    }
-
     /// Fails when an existing LayerZero path config differs from the one `expected` calls for.
     pub fn paths_conflict(&self, expected: &Self) -> Result<(), Mismatch> {
         self.layerzero_paths.iter().try_for_each(|live| {

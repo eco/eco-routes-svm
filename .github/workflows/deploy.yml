@@ -1,8 +1,9 @@
 name: Deploy
 
-# Run twice: once with an empty plan_hash (plans, writes the summary, changes nothing), then
-# again with the reviewed hash. The hash covers chain state, so any drift between the two runs
-# makes the second a dry run again.
+# Deploys, initializes, reads back and verifies a release; never finalizes (finalize.yml does,
+# after testing). Run twice: once with an empty plan_hash (plans, writes the summary, changes
+# nothing), then again with the reviewed hash. The hash covers chain state, so any drift between
+# the two runs makes the second a dry run again.
 on:
   workflow_dispatch:
     inputs:
@@ -36,13 +37,9 @@ on:
         type: string
         default: "0"
       layerzero_reserve_lamports:
-        description: "Top-up for the layerzero_prover pda_payer; must cover endpoint/ULN rent before init_path"
+        description: "Top-up for the layerzero_prover pda_payer; the plan refuses one that cannot pay its paths' endpoint/ULN rent"
         type: string
         default: "0"
-      finalize_layerzero:
-        description: "Finalize an already initialized layerzero_prover after the manual gate"
-        type: boolean
-        default: false
       compute_unit_price:
         description: "Micro-lamports per compute unit for deploys and init transactions; 0 adds nothing. Part of the plan hash"
         type: string
@@ -93,50 +90,17 @@ jobs:
         with:
           ref: refs/tags/deploy/v${{ inputs.version }}
 
-      - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+      - name: Setup deployer
+        uses: ./.github/actions/setup-deployer
         with:
           rust-version: ${{ env.RUST_VERSION }}
-          cache-key-suffix: deploy
-
-      - name: Setup Anchor
-        uses: ./.github/actions/setup-anchor
-        with:
           anchor-version: ${{ env.ANCHOR_VERSION }}
           solana-version: ${{ env.SOLANA_VERSION }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
+          deployer-keypair: ${{ secrets.DEPLOYER_KEYPAIR }}
+          github-token: ${{ github.token }}
 
       - name: Install solana-verify
         run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
-
-      - name: Build deployer
-        run: |
-          cargo build --release --locked --manifest-path packages/deployer/Cargo.toml
-          echo "$PWD/packages/deployer/target/release" >> "$GITHUB_PATH"
-
-      - name: Download release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          gh release download "v${VERSION}" --dir "$ASSETS" \
-            --pattern program-ids.json --pattern "*.${CLUSTER}.so" --pattern "*.${CLUSTER}.json"
-
-      - name: Check release
-        run: scripts/deploy-step.sh check
-
-      - name: Write deployer keypair
-        env:
-          DEPLOYER_KEYPAIR: ${{ secrets.DEPLOYER_KEYPAIR }}
-        run: |
-          set +x
-          umask 077
-          printf '%s' "$DEPLOYER_KEYPAIR" > "$RUNNER_TEMP/deployer.json"
-          echo "KEYPAIR=$RUNNER_TEMP/deployer.json" >> "$GITHUB_ENV"
 
       - name: Plan
         id: plan
@@ -148,7 +112,6 @@ jobs:
           LAYERZERO: ${{ inputs.layerzero }}
           HYPER_RESERVE_LAMPORTS: ${{ inputs.hyper_reserve_lamports }}
           LAYERZERO_RESERVE_LAMPORTS: ${{ inputs.layerzero_reserve_lamports }}
-          FINALIZE_LAYERZERO: ${{ inputs.finalize_layerzero }}
           COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
         run: |
           mkdir -p out
@@ -156,20 +119,7 @@ jobs:
             --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" \
             --summary "$GITHUB_STEP_SUMMARY" --deployer-keypair "$KEYPAIR" 2>&1 \
             | scripts/deploy-step.sh redact | tee out/plan.log
-          computed=$(sed -n 's/^plan_hash=//p' out/plan.log | tail -n 1)
-          [ -n "$computed" ]
-          echo "computed=$computed" >> "$GITHUB_OUTPUT"
-          if [ -n "$PLAN_HASH" ] && [ "$PLAN_HASH" = "$computed" ]; then
-            echo "execute=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "execute=false" >> "$GITHUB_OUTPUT"
-          if [ -z "$PLAN_HASH" ]; then
-            reason="no plan_hash given"
-          else
-            reason="plan_hash differs: chain or inputs changed since review"
-          fi
-          echo "Dry run ($reason): nothing written. To execute, re-run with plan_hash=\`$computed\`." >> "$GITHUB_STEP_SUMMARY"
+          scripts/deploy-step.sh gate out/plan.log
 
       - name: Derive program keypairs
         if: steps.plan.outputs.execute == 'true'
@@ -196,12 +146,6 @@ jobs:
         env:
           RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
         run: scripts/deploy-step.sh verify 2>&1 | scripts/deploy-step.sh redact | tee out/verify.log
-
-      - name: Finalize
-        if: steps.plan.outputs.execute == 'true'
-        env:
-          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
-        run: scripts/deploy-step.sh finalize 2>&1 | scripts/deploy-step.sh redact | tee out/finalize.log
 
       # A failed or cancelled deploy leaves its buffer holding rent; return it to the deployer.
       - name: Close leftover buffers

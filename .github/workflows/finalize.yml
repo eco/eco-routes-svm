@@ -1,0 +1,111 @@
+name: Finalize
+
+# Makes tested programs of a deployed release immutable. Refuses a program that is not deployed,
+# initialized and verified, or one whose dependencies would stay upgradeable.
+# Run twice: once with an empty plan_hash (plans, writes the summary, changes nothing), then again
+# with the reviewed hash. The hash covers chain state, so any drift between the two runs makes the
+# second a dry run again.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, without the v"
+        type: string
+        required: true
+      cluster:
+        description: "Target cluster; selects the Alchemy endpoint"
+        type: choice
+        options: [devnet, mainnet]
+        required: true
+      programs:
+        description: "all, or comma-separated program names; each is finalized after its dependencies"
+        type: string
+        required: true
+      plan_hash:
+        description: "plan_hash from a reviewed dry run; empty or mismatched plans only"
+        type: string
+        default: ""
+
+# Shared with deploy.yml and close.yml: runs on one cluster never overlap.
+concurrency:
+  group: deploy-${{ inputs.cluster }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# bash -eo pipefail: a failing command piped into tee must fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUST_VERSION: "1.97.1"
+  ANCHOR_VERSION: "1.1.2"
+  SOLANA_VERSION: "4.1.1"
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    # The release environment's required reviewers gate this job; it holds DEPLOYER_KEYPAIR and
+    # ALCHEMY_API_KEY, shared by both clusters. No program keypair is needed.
+    environment: release
+    env:
+      VERSION: ${{ inputs.version }}
+      CLUSTER: ${{ inputs.cluster }}
+      ASSETS: release
+      PLAN: out/plan.json
+    steps:
+      - name: Validate inputs
+        env:
+          PROGRAMS: ${{ inputs.programs }}
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "invalid version" >&2; exit 1; }
+          [[ "$PROGRAMS" =~ ^[a-z0-9_]+(,[a-z0-9_]+)*$ ]] || { echo "programs must be all or a comma-separated list of program names" >&2; exit 1; }
+          [[ "$PROGRAMS" == all || ",$PROGRAMS," != *,all,* ]] || { echo "all cannot be combined with program names" >&2; exit 1; }
+
+      - name: Checkout deploy tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/deploy/v${{ inputs.version }}
+
+      - name: Setup deployer
+        uses: ./.github/actions/setup-deployer
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+          deployer-keypair: ${{ secrets.DEPLOYER_KEYPAIR }}
+          github-token: ${{ github.token }}
+
+      - name: Plan
+        id: plan
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+          PROGRAMS: ${{ inputs.programs }}
+        run: |
+          mkdir -p out
+          deployer plan-finalize --version "$VERSION" --cluster "$CLUSTER" \
+            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" \
+            --summary "$GITHUB_STEP_SUMMARY" --deployer-keypair "$KEYPAIR" 2>&1 \
+            | scripts/deploy-step.sh redact | tee out/plan.log
+          scripts/deploy-step.sh gate out/plan.log
+
+      - name: Finalize
+        if: steps.plan.outputs.execute == 'true'
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: scripts/deploy-step.sh finalize 2>&1 | scripts/deploy-step.sh redact | tee out/finalize.log
+
+      - name: Delete keys
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deployer.json"
+
+      - name: Upload finalize record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: finalize-v${{ inputs.version }}-${{ inputs.cluster }}
+          path: out/
+          if-no-files-found: ignore

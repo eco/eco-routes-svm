@@ -23,7 +23,7 @@ pub const AGGREGATOR_PROVER: &str = "aggregator_prover";
 pub const LAYERZERO_PROVER: &str = "layerzero_prover";
 /// Mirrors `AGGREGATOR_MEMBERS` in `scripts/program-keypairs.mjs`; the order is the on-chain config order.
 pub const AGGREGATOR_MEMBERS: [&str; 3] = [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER];
-const PROGRAMS_WITH_INIT: [&str; 4] = [
+pub const PROGRAMS_WITH_INIT: [&str; 4] = [
     HYPER_PROVER,
     POLYMER_PROVER,
     AGGREGATOR_PROVER,
@@ -40,10 +40,6 @@ pub enum Error {
     },
     #[error("{program} is not ours to deploy: {reason}")]
     Foreign { program: String, reason: String },
-    #[error("finalize_layerzero requires layerzero_prover to be partially deployed (deployed, still upgradeable)")]
-    FinalizeLayerZeroNotPartial,
-    #[error("finalize_layerzero requires the LayerZero setup on chain and equal to the inputs: {reason}")]
-    FinalizeLayerZeroIncomplete { reason: String },
     #[error("no on-chain state for {program}")]
     MissingState { program: String },
     #[error("{program}: release address {release} differs from classified address {state}")]
@@ -113,6 +109,9 @@ pub struct ReleaseProgram {
     pub address: Pubkey,
     #[serde(with = "hex_array")]
     pub so_sha256: [u8; 32],
+    /// Released programs whose addresses this one's bytecode or config holds, from
+    /// `program-ids.json`; a program is finalized only after all of them.
+    pub dependencies: Vec<String>,
 }
 
 /// A program's status as `plan.json` and the summary name it.
@@ -132,6 +131,7 @@ pub enum Action {
     Init,
     Verify,
     Finalize,
+    Close,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +167,7 @@ impl Plan {
         live_configs: Configs,
         inputs: Inputs,
     ) -> Result<Self, Error> {
-        require_cluster(release.cluster, genesis_hash)?;
+        release.cluster.require_genesis(genesis_hash)?;
         require_compiled_layerzero(&release)?;
         let expected_configs = expected_configs(&release, &inputs)?;
         layerzero::check_transaction_sizes(
@@ -186,12 +186,10 @@ impl Plan {
                 Ok((name.clone(), state))
             })
             .collect::<Result<BTreeMap<_, _>, Error>>()?;
-        require_layerzero_partial(&programs, &inputs)?;
-
         let programs = programs
             .into_iter()
             .map(|(name, state)| {
-                let actions = actions(&name, &state.status, inputs.finalize_layerzero);
+                let actions = actions(&name, &state.status);
 
                 (name, PlannedProgram { state, actions })
             })
@@ -207,7 +205,6 @@ impl Plan {
             expected_configs,
         };
         plan.verify_configs(&plan.live_configs)?;
-        plan.require_layerzero_setup_to_finalize()?;
 
         Ok(plan)
     }
@@ -231,53 +228,15 @@ impl Plan {
             })
     }
 
-    /// Finalizing revokes the delegate for good, so the manual gate between setup and
-    /// finalization must hold: the whole setup is on chain and equal to the inputs before the run.
-    fn require_layerzero_setup_to_finalize(&self) -> Result<(), Error> {
-        let Self {
-            inputs,
-            live_configs,
-            expected_configs,
-            ..
-        } = self;
-        if !inputs.finalize_layerzero {
-            return Ok(());
-        }
-        let incomplete = |reason: String| Error::FinalizeLayerZeroIncomplete { reason };
-
-        live_configs
-            .layerzero_deviation(expected_configs)
-            .map_err(|mismatch| incomplete(mismatch.to_string()))?;
-        setup::check(live_configs).map_err(|error| incomplete(error.to_string()))?;
-        live_configs
-            .paths_conflict(expected_configs)
-            .map_err(|mismatch| incomplete(mismatch.to_string()))
-    }
-
     pub fn hash(&self) -> PlanHash {
-        PlanHash(solana_sha256_hasher::hash(self.canonical_json().as_bytes()).to_bytes())
+        PlanHash::of(&self.canonical_json())
     }
 
     pub fn file(&self, raw: RawInputs) -> PlanFile {
         let programs = self
             .programs
             .iter()
-            .map(|(name, program)| {
-                let ProgramState {
-                    status,
-                    authority,
-                    data_hash,
-                    ..
-                } = &program.state;
-                let planned = PlannedProgramFile {
-                    status: status.into(),
-                    authority: authority.map(|authority| authority.to_string()),
-                    data_hash: data_hash.map(hex::encode),
-                    actions: program.actions.clone(),
-                };
-
-                (name.clone(), planned)
-            })
+            .map(|(name, program)| (name.clone(), program.into()))
             .collect();
 
         PlanFile {
@@ -368,6 +327,50 @@ impl Plan {
     }
 }
 
+impl From<&PlannedProgram> for PlannedProgramFile {
+    fn from(program: &PlannedProgram) -> Self {
+        let ProgramState {
+            status,
+            authority,
+            data_hash,
+            ..
+        } = &program.state;
+
+        Self {
+            status: status.into(),
+            authority: authority.map(|authority| authority.to_string()),
+            data_hash: data_hash.map(hex::encode),
+            actions: program.actions.clone(),
+        }
+    }
+}
+
+impl Release {
+    /// Every program after all of its dependencies, ties in name order. `program-ids.json` comes
+    /// from Cargo's dependency graph plus the aggregator's members, so it has no cycles.
+    pub fn dependency_order(&self) -> Vec<&str> {
+        std::iter::successors(Some(Vec::<&str>::new()), |placed| {
+            let next: Vec<&str> = self
+                .programs
+                .iter()
+                .filter(|(name, program)| {
+                    !placed.contains(&name.as_str())
+                        && program
+                            .dependencies
+                            .iter()
+                            .all(|dependency| placed.contains(&dependency.as_str()))
+                })
+                .map(|(name, _)| name.as_str())
+                .collect();
+
+            (!next.is_empty()).then(|| [placed.clone(), next].concat())
+        })
+        .last()
+        .filter(|placed| placed.len() == self.programs.len())
+        .expect("release dependencies must be acyclic and name released programs")
+    }
+}
+
 impl From<&Status> for PlannedStatus {
     fn from(status: &Status) -> Self {
         match status {
@@ -397,6 +400,20 @@ impl Cluster {
         cluster
             .get_genesis_hash()
             .expect("devnet and mainnet have a known genesis hash")
+    }
+
+    /// Devnet and mainnet share program IDs, so only the genesis hash tells them apart.
+    pub fn require_genesis(self, actual: Hash) -> Result<(), Error> {
+        let expected = self.genesis_hash();
+
+        match actual == expected {
+            true => Ok(()),
+            false => Err(Error::ClusterMismatch {
+                cluster: self,
+                expected,
+                actual,
+            }),
+        }
     }
 }
 
@@ -429,6 +446,13 @@ impl FromStr for Cluster {
                 value: value.into(),
             }),
         }
+    }
+}
+
+impl PlanHash {
+    /// The hash of a plan's canonical JSON document.
+    pub fn of(canonical_json: &str) -> Self {
+        Self(solana_sha256_hasher::hash(canonical_json.as_bytes()).to_bytes())
     }
 }
 
@@ -486,21 +510,6 @@ fn expected_configs(release: &Release, inputs: &Inputs) -> Result<Configs, Error
     })
 }
 
-/// Devnet and mainnet share program IDs, so an RPC of the other cluster would deploy this
-/// cluster's binaries at the same addresses there.
-fn require_cluster(cluster: Cluster, actual: Hash) -> Result<(), Error> {
-    let expected = cluster.genesis_hash();
-
-    match actual == expected {
-        true => Ok(()),
-        false => Err(Error::ClusterMismatch {
-            cluster,
-            expected,
-            actual,
-        }),
-    }
-}
-
 /// The lookup table and its on-chain check derive from the compiled-in ID, so the deployer
 /// must be built from the tree that compiled the release's LayerZero prover.
 fn require_compiled_layerzero(release: &Release) -> Result<(), Error> {
@@ -532,28 +541,14 @@ fn reject_foreign(name: &str, program: &ReleaseProgram, state: &ProgramState) ->
     }
 }
 
-fn require_layerzero_partial(
-    programs: &BTreeMap<String, ProgramState>,
-    inputs: &Inputs,
-) -> Result<(), Error> {
-    let partial = programs
-        .get(LAYERZERO_PROVER)
-        .is_some_and(|state| state.status == Status::Partial);
-
-    match inputs.finalize_layerzero && !partial {
-        true => Err(Error::FinalizeLayerZeroNotPartial),
-        false => Ok(()),
-    }
-}
-
-fn actions(name: &str, status: &Status, finalize_layerzero: bool) -> Vec<Action> {
+/// A deploy run never finalizes: programs stay upgradeable until a finalize run, after testing.
+fn actions(name: &str, status: &Status) -> Vec<Action> {
     let deploy = matches!(status, Status::New).then_some(Action::Deploy);
     let init = PROGRAMS_WITH_INIT.contains(&name).then_some(Action::Init);
-    let finalize = (name != LAYERZERO_PROVER || finalize_layerzero).then_some(Action::Finalize);
 
     match status {
         Status::Live | Status::Foreign { .. } => vec![],
-        Status::New | Status::Partial => [deploy, init, Some(Action::Verify), finalize]
+        Status::New | Status::Partial => [deploy, init, Some(Action::Verify)]
             .into_iter()
             .flatten()
             .collect(),
@@ -566,6 +561,7 @@ fn action_label(action: &Action) -> &'static str {
         Action::Init => "init",
         Action::Verify => "verify",
         Action::Finalize => "finalize",
+        Action::Close => "close",
     }
 }
 
@@ -584,7 +580,6 @@ fn init_values(inputs: &Inputs) -> String {
         layerzero_peers,
         hyper_reserve_lamports,
         layerzero_reserve_lamports,
-        finalize_layerzero,
         compute_unit_price,
     } = inputs;
     let header = format!(
@@ -594,8 +589,7 @@ fn init_values(inputs: &Inputs) -> String {
          - {HYPER_PROVER} reserve lamports: {hyper_reserve_lamports}\n\
          - {POLYMER_PROVER} emitters: {}\n\
          - {AGGREGATOR_PROVER} members: {}\n\
-         - {LAYERZERO_PROVER} reserve lamports: {layerzero_reserve_lamports}\n\
-         - {LAYERZERO_PROVER} finalize: {finalize_layerzero}\n",
+         - {LAYERZERO_PROVER} reserve lamports: {layerzero_reserve_lamports}\n",
         join_displayed(hyper_senders),
         join_displayed(polymer_emitters),
         AGGREGATOR_MEMBERS.join(", "),
@@ -650,6 +644,7 @@ struct CanonicalPlan<'a> {
 struct CanonicalProgram {
     address: String,
     so_sha256: String,
+    dependencies: Vec<String>,
     status: PlannedStatus,
     authority: Option<String>,
     data_hash: Option<String>,
@@ -663,7 +658,6 @@ struct CanonicalInputs {
     layerzero_peers: Vec<CanonicalPeer>,
     hyper_reserve_lamports: u64,
     layerzero_reserve_lamports: u64,
-    finalize_layerzero: bool,
     compute_unit_price: u64,
 }
 
@@ -704,6 +698,7 @@ fn canonical_program(release: &ReleaseProgram, program: &PlannedProgram) -> Cano
     CanonicalProgram {
         address: address.to_string(),
         so_sha256: hex::encode(release.so_sha256),
+        dependencies: release.dependencies.clone(),
         status: status.into(),
         authority: authority.map(|authority| authority.to_string()),
         data_hash: data_hash.map(hex::encode),
@@ -727,7 +722,6 @@ impl From<&Inputs> for CanonicalInputs {
             layerzero_peers: inputs.layerzero_peers.iter().map(Into::into).collect(),
             hyper_reserve_lamports: inputs.hyper_reserve_lamports,
             layerzero_reserve_lamports: inputs.layerzero_reserve_lamports,
-            finalize_layerzero: inputs.finalize_layerzero,
             compute_unit_price: inputs.compute_unit_price,
         }
     }
@@ -807,7 +801,6 @@ mod hex_array {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layerzero_state::AltFault;
 
     const VALID_ADDRESS: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
     const OTHER_ADDRESS: &str = "0x1111111111111111111111111111111111111111";
@@ -885,6 +878,18 @@ mod tests {
         Pubkey::new_from_array([99; 32])
     }
 
+    /// The release's real dependency graph.
+    fn fixture_dependencies(program: &str) -> Vec<String> {
+        let dependencies: &[&str] = match program {
+            AGGREGATOR_PROVER => &[HYPER_PROVER, LAYERZERO_PROVER, POLYMER_PROVER, "portal"],
+            LOCAL_PROVER => &["flash_fulfiller", "portal"],
+            "portal" | "proof_helper" => &[],
+            _ => &["portal"],
+        };
+
+        dependencies.iter().map(|name| (*name).into()).collect()
+    }
+
     fn fixture_address(index: usize, program: &str) -> Pubkey {
         match program {
             LAYERZERO_PROVER => layerzero_prover::ID,
@@ -917,7 +922,6 @@ mod tests {
             ),
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "2000000".into(),
-            finalize_layerzero: false,
             compute_unit_price: "0".into(),
         }
     }
@@ -939,6 +943,7 @@ mod tests {
                         ReleaseProgram {
                             address: fixture_address(index, program),
                             so_sha256: solana_sha256_hasher::hash(&so_bytes(program)).to_bytes(),
+                            dependencies: fixture_dependencies(program),
                         },
                     )
                 })
@@ -1376,112 +1381,26 @@ mod tests {
         assert_eq!(actions_of(&plan, "portal"), vec![],);
         assert_eq!(
             actions_of(&plan, "proof_helper"),
-            vec![Action::Deploy, Action::Verify, Action::Finalize]
+            vec![Action::Deploy, Action::Verify]
         );
         assert_eq!(
             actions_of(&plan, "polymer_prover"),
-            vec![
-                Action::Deploy,
-                Action::Init,
-                Action::Verify,
-                Action::Finalize
-            ]
+            vec![Action::Deploy, Action::Init, Action::Verify]
         );
         assert_eq!(
             actions_of(&plan, "hyper_prover"),
-            vec![Action::Init, Action::Verify, Action::Finalize]
-        );
-    }
-
-    #[test]
-    fn layerzero_not_finalized_by_default() {
-        let plan = fixture().plan().unwrap();
-
-        assert_eq!(
-            actions_of(&plan, "layerzero_prover"),
             vec![Action::Init, Action::Verify]
         );
     }
 
     #[test]
-    fn plan_hash_changes_with_the_finalize_flag() {
-        let complete = fixture().with_expected_configs();
-        let mut finalizing = complete.clone();
-        finalizing.raw.finalize_layerzero = true;
+    fn deploy_never_finalizes() {
+        let plan = fixture().plan().unwrap();
 
-        assert_ne!(finalizing.hash(), complete.hash());
-    }
-
-    #[test]
-    fn finalize_layerzero_requires_the_whole_setup_on_chain() {
-        let finalizing = |change: fn(&mut Configs)| {
-            let mut fixture = fixture().with_expected_configs();
-            fixture.raw.finalize_layerzero = true;
-            change(&mut fixture.configs);
-
-            fixture.plan()
-        };
-        let incomplete: [(&str, ConfigChange); 7] = [
-            ("store absent", |configs| {
-                *configs = Configs::default();
-            }),
-            ("alt not set", |configs| configs.layerzero_alt = None),
-            ("alt unfrozen", |configs| {
-                configs.layerzero_alt.as_mut().unwrap().fault = Some(AltFault::Unfrozen)
-            }),
-            ("nonce missing", |configs| {
-                configs.layerzero_paths[0].nonce = false
-            }),
-            ("send config missing", |configs| {
-                configs.layerzero_paths[0].send = None
-            }),
-            ("receive config missing", |configs| {
-                configs.layerzero_paths[1].receive = None
-            }),
-            ("send config differs", |configs| {
-                configs.layerzero_paths[0]
-                    .send
-                    .as_mut()
-                    .unwrap()
-                    .executor
-                    .max_message_size += 1
-            }),
-        ];
-
-        incomplete.into_iter().for_each(|(name, change)| {
-            assert!(
-                matches!(
-                    finalizing(change),
-                    Err(Error::FinalizeLayerZeroIncomplete { .. }) | Err(Error::ConfigMismatch(_))
-                ),
-                "{name}"
-            );
-        });
-        assert!(finalizing(|_| {}).is_ok());
-    }
-
-    #[test]
-    fn finalize_layerzero_requires_partial() {
-        let finalizing = |status: Status| {
-            let mut fixture = fixture().with_expected_configs();
-            fixture.raw.finalize_layerzero = true;
-            fixture.state("layerzero_prover").status = status;
-
-            fixture.plan()
-        };
-
-        assert!(matches!(
-            finalizing(Status::New),
-            Err(Error::FinalizeLayerZeroNotPartial)
-        ));
-        assert!(matches!(
-            finalizing(Status::Live),
-            Err(Error::FinalizeLayerZeroNotPartial)
-        ));
-        assert_eq!(
-            actions_of(&finalizing(Status::Partial).unwrap(), "layerzero_prover"),
-            vec![Action::Init, Action::Verify, Action::Finalize]
-        );
+        assert!(plan
+            .programs
+            .values()
+            .all(|program| !program.actions.contains(&Action::Finalize)));
     }
 
     #[test]

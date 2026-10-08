@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One step of .github/workflows/deploy.yml:
-# deploy-step.sh <check|deploy|verify|finalize|close-buffers|redact>.
+# One step of .github/workflows/{deploy,finalize,close}.yml:
+# deploy-step.sh <check|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>.
 # Reads CLUSTER, RPC_URL, ASSETS (release download dir, holds program-ids.json), PLAN (plan.json)
 # and KEYPAIR (deployer keypair file) from the environment; KEYS_DIR (default target/keys) holds
 # the derived program keypairs. Never prints key material.
@@ -87,6 +87,25 @@ verify() {
   done
 }
 
+# The plan step's verdict: execute only when the reviewed PLAN_HASH equals the one just computed.
+gate() {
+  local log=$1 computed reason
+  computed=$(sed -n 's/^plan_hash=//p' "$log" | tail -n 1)
+  [ -n "$computed" ] || { echo "no plan_hash in ${log}" >&2; return 1; }
+  echo "computed=${computed}" >> "$GITHUB_OUTPUT"
+  if [ -n "${PLAN_HASH:-}" ] && [ "$PLAN_HASH" = "$computed" ]; then
+    echo "execute=true" >> "$GITHUB_OUTPUT"
+    return 0
+  fi
+  echo "execute=false" >> "$GITHUB_OUTPUT"
+  if [ -z "${PLAN_HASH:-}" ]; then
+    reason="no plan_hash given"
+  else
+    reason="plan_hash differs: chain or inputs changed since review"
+  fi
+  echo "Dry run (${reason}): nothing written. To execute, re-run with plan_hash=\`${computed}\`." >> "$GITHUB_STEP_SUMMARY"
+}
+
 finalize() {
   deployer actions --plan "$PLAN" --action finalize | while read -r program; do
     local address
@@ -96,8 +115,22 @@ finalize() {
   done
 }
 
+# Burns each address for good; its rent returns to the deployer.
+close() {
+  local recipient
+  recipient=$(solana-keygen pubkey "$KEYPAIR")
+  deployer actions --plan "$PLAN" --action close | while read -r program; do
+    local address
+    address=$(program_address "$program")
+    echo "closing ${program} ${address}"
+    solana program close -u "$RPC_URL" -k "$KEYPAIR" --authority "$KEYPAIR" \
+      --recipient "$recipient" --bypass-warning "$address"
+  done
+}
+
 case "${1:-}" in
-  check | deploy | verify | finalize | redact) "$1" ;;
+  check | deploy | verify | finalize | close | redact) "$1" ;;
+  gate) gate "${2:?usage: $0 gate <plan-log>}" ;;
   close-buffers) close_buffers ;;
-  *) echo "usage: $0 <check|deploy|verify|finalize|close-buffers|redact>" >&2; exit 2 ;;
+  *) echo "usage: $0 <check|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>" >&2; exit 2 ;;
 esac

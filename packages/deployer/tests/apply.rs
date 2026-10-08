@@ -9,8 +9,8 @@ use deployer::apply::{self, apply, Step};
 use deployer::classify::{ProgramState, Status};
 use deployer::config::{self, Configs};
 use deployer::plan::{
-    self, Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_PROVER, HYPER_PROVER,
-    LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
+    self, Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER,
+    HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 use deployer::readback::{self, readback};
 use deployer::{setup, Chain, Inputs, RawInputs};
@@ -141,6 +141,10 @@ fn release<const N: usize>(programs: [(&str, Pubkey); N]) -> Release {
                     ReleaseProgram {
                         address,
                         so_sha256: [0; 32],
+                        dependencies: match name {
+                            AGGREGATOR_PROVER => AGGREGATOR_MEMBERS.map(Into::into).to_vec(),
+                            _ => vec![],
+                        },
                     },
                 )
             })
@@ -186,7 +190,6 @@ fn inputs_with_peer_chain_id(hyper_senders: &str, chain_id: u64) -> RawInputs {
         ),
         hyper_reserve_lamports: HYPER_RESERVE.to_string(),
         layerzero_reserve_lamports: LAYERZERO_RESERVE.to_string(),
-        finalize_layerzero: false,
         compute_unit_price: "0".into(),
     }
 }

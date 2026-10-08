@@ -1,0 +1,16 @@
+## Close plan v0.0.1 on devnet
+
+| Program | Address | Status | Action |
+|---|---|---|---|
+| aggregator_prover | `EnTJCS15dqbDTU2XywYSMaScoPv4Py4GzExrtY9DQxoD` | partial | none |
+| hyper_prover | `EahQmXc3rwhY3CH1g3ZgUx8L4vHTNmzpK1xtiQ1RAxq6` | partial | close |
+| layerzero_prover | `EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm` | partial | close |
+| local_prover | `Eechuq54TEzmBHXX7Ltbmpu6K5Vf3qgdsRdYmn41vJ9o` | partial | none |
+| polymer_prover | `EiY148Y53YHzKNn2YeDX4hfrZEhriuNTRqJCqA6cfdUW` | partial | none |
+
+Closing returns each program's rent to the deployer and burns its address: it can never be deployed again. Lamports held by the program's own accounts stay locked for good, including LayerZero's endpoint and ULN account rent and these reserves:
+
+- hyper_prover `pda_payer`: 7 lamports
+- layerzero_prover `pda_payer`: 9 lamports
+
+Plan hash: f2bd497ffd89953a55f32e6f48b5623d9659f6086e509498038cb48fcd4fd334
