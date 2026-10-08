@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One step of .github/workflows/{deploy,finalize,close}.yml:
-# deploy-step.sh <check|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>.
+# deploy-step.sh <check|hash <plan-log>|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>.
 # Reads CLUSTER, RPC_URL, ASSETS (release download dir, holds program-ids.json), PLAN (plan.json)
 # and KEYPAIR (deployer keypair file) from the environment; KEYS_DIR (default target/keys) holds
 # the derived program keypairs. Never prints key material.
@@ -87,23 +87,26 @@ verify() {
   done
 }
 
-# The plan step's verdict: execute only when the reviewed PLAN_HASH equals the one just computed.
-gate() {
-  local log=$1 computed reason
+# The plan job's hash, for the approved job to compare against.
+hash() {
+  local log=$1 computed
   computed=$(sed -n 's/^plan_hash=//p' "$log" | tail -n 1)
   [ -n "$computed" ] || { echo "no plan_hash in ${log}" >&2; return 1; }
-  echo "computed=${computed}" >> "$GITHUB_OUTPUT"
-  if [ -n "${PLAN_HASH:-}" ] && [ "$PLAN_HASH" = "$computed" ]; then
-    echo "execute=true" >> "$GITHUB_OUTPUT"
-    return 0
+  echo "hash=${computed}" >> "$GITHUB_OUTPUT"
+  echo "Approve the next job to execute exactly this plan (\`${computed}\`), or reject it to stop with nothing written." >> "$GITHUB_STEP_SUMMARY"
+}
+
+# The approved job re-plans; it may write only if that plan is the one the reviewer approved.
+gate() {
+  local log=$1 computed
+  computed=$(sed -n 's/^plan_hash=//p' "$log" | tail -n 1)
+  [ -n "$computed" ] || { echo "no plan_hash in ${log}" >&2; return 1; }
+  [ -n "${PLAN_HASH:-}" ] || { echo "no approved plan hash" >&2; return 1; }
+  if [ "$PLAN_HASH" != "$computed" ]; then
+    echo "the chain or inputs changed since the plan was approved (approved ${PLAN_HASH}, now ${computed}); dispatch again" >&2
+    return 1
   fi
-  echo "execute=false" >> "$GITHUB_OUTPUT"
-  if [ -z "${PLAN_HASH:-}" ]; then
-    reason="no plan_hash given"
-  else
-    reason="plan_hash differs: chain or inputs changed since review"
-  fi
-  echo "Dry run (${reason}): nothing written. To execute, re-run with plan_hash=\`${computed}\`." >> "$GITHUB_STEP_SUMMARY"
+  echo "plan ${computed} is the approved one"
 }
 
 finalize() {
@@ -130,7 +133,7 @@ close() {
 
 case "${1:-}" in
   check | deploy | verify | finalize | close | redact) "$1" ;;
-  gate) gate "${2:?usage: $0 gate <plan-log>}" ;;
+  hash | gate) "$1" "${2:?usage: $0 $1 <plan-log>}" ;;
   close-buffers) close_buffers ;;
-  *) echo "usage: $0 <check|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>" >&2; exit 2 ;;
+  *) echo "usage: $0 <check|hash <plan-log>|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>" >&2; exit 2 ;;
 esac

@@ -1,7 +1,8 @@
 name: 'Setup deployer'
 description: 'Toolchains, the deployer built from the checked-out deploy tag, the release assets and the deployer keypair'
-# Shared by deploy.yml, finalize.yml and close.yml. Expects the deploy/v<version> tag checked
-# out and VERSION, CLUSTER and ASSETS in the job's environment; exports KEYPAIR.
+# Shared by both jobs of deploy.yml, finalize.yml and close.yml. Expects the deploy/v<version> tag
+# checked out and VERSION, CLUSTER and ASSETS in the job's environment. Given the deployer
+# keypair (the approved job only), writes it and exports KEYPAIR and DEPLOYER (its address).
 inputs:
   rust-version:
     description: 'Rust version to install'
@@ -13,8 +14,9 @@ inputs:
     description: 'Solana CLI version to install'
     required: true
   deployer-keypair:
-    description: 'The DEPLOYER_KEYPAIR secret (JSON keypair)'
-    required: true
+    description: 'The DEPLOYER_KEYPAIR secret (JSON keypair); empty in the unapproved plan job'
+    required: false
+    default: ''
   github-token:
     description: 'Token for downloading the release'
     required: true
@@ -59,6 +61,7 @@ runs:
       run: scripts/deploy-step.sh check
 
     - name: Write deployer keypair
+      if: inputs.deployer-keypair != ''
       shell: bash
       env:
         DEPLOYER_KEYPAIR: ${{ inputs.deployer-keypair }}
@@ -67,3 +70,4 @@ runs:
         umask 077
         printf '%s' "$DEPLOYER_KEYPAIR" > "$RUNNER_TEMP/deployer.json"
         echo "KEYPAIR=$RUNNER_TEMP/deployer.json" >> "$GITHUB_ENV"
+        echo "DEPLOYER=$(solana-keygen pubkey "$RUNNER_TEMP/deployer.json")" >> "$GITHUB_ENV"

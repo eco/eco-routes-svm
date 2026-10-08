@@ -5,7 +5,7 @@ use std::path::Path;
 
 use common::litesvm_chain::LitesvmChain;
 use common::{Context, RELEASE_PROGRAMS};
-use deployer::cli::{ActionKind, ActionsArgs, ApplyArgs, ChainArgs, InputArgs, PlanArgs};
+use deployer::cli::{ActionKind, ActionsArgs, ApplyArgs, ChainArgs, InputArgs, PlanArgs, ReadArgs};
 use deployer::commands::{self, Error};
 use deployer::plan::{
     Cluster, PlanHash, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
@@ -55,7 +55,7 @@ fn chain_args() -> ChainArgs {
     }
 }
 
-fn plan_args(directory: &Path) -> PlanArgs {
+fn plan_args(directory: &Path, deployer: Pubkey) -> PlanArgs {
     let uln = format!(
         r#"{{"confirmations":15,"required_dvn_count":1,"optional_dvn_count":255,"optional_dvn_threshold":0,"required_dvns":["{DVN}"],"optional_dvns":[]}}"#
     );
@@ -67,7 +67,10 @@ fn plan_args(directory: &Path) -> PlanArgs {
         assets: directory.into(),
         out: directory.join("plan.json"),
         summary: Some(directory.join("summary.md")),
-        chain: chain_args(),
+        chain: ReadArgs {
+            rpc_url: "unused".into(),
+            deployer,
+        },
         inputs: InputArgs {
             hyper_senders: SENDER.into(),
             polymer_emitters: SENDER.into(),
@@ -161,7 +164,7 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
     let mut planned = Vec::new();
     commands::plan(
         &LitesvmChain(&mut context),
-        &plan_args(directory.path()),
+        &plan_args(directory.path(), deployer.pubkey()),
         &deployer.pubkey(),
         &mut planned,
     )

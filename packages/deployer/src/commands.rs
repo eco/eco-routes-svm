@@ -98,10 +98,9 @@ type Binaries = BTreeMap<String, Vec<u8>>;
 pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
     match command {
         Command::Plan(args) => {
-            let deployer = read_keypair(&args.chain.deployer_keypair)?;
             let chain = RpcChain::new(args.chain.rpc_url.clone());
 
-            plan(&chain, args, &deployer.pubkey(), out)
+            plan(&chain, args, &args.chain.deployer, out)
         }
         Command::Apply(args) => {
             let deployer = read_keypair(&args.chain.deployer_keypair)?;
@@ -113,16 +112,14 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
             apply(&mut chain, args, &deployer, out)
         }
         Command::PlanFinalize(args) => {
-            let deployer = read_keypair(&args.chain.deployer_keypair)?;
             let chain = RpcChain::new(args.chain.rpc_url.clone());
 
-            plan_selection(&chain, Operation::Finalize, args, &deployer.pubkey(), out)
+            plan_selection(&chain, Operation::Finalize, args, &args.chain.deployer, out)
         }
         Command::PlanClose(args) => {
-            let deployer = read_keypair(&args.chain.deployer_keypair)?;
             let chain = RpcChain::new(args.chain.rpc_url.clone());
 
-            plan_selection(&chain, Operation::Close, args, &deployer.pubkey(), out)
+            plan_selection(&chain, Operation::Close, args, &args.chain.deployer, out)
         }
         Command::Actions(args) => actions(args, out),
     }
@@ -457,7 +454,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::cli::{ActionKind, ChainArgs, InputArgs};
+    use crate::cli::{ActionKind, ChainArgs, InputArgs, ReadArgs};
     use crate::plan::{
         Action, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
     };
@@ -545,7 +542,7 @@ mod tests {
                 assets: self.directory.path().into(),
                 out: self.path("plan.json"),
                 summary: Some(self.path("summary.md")),
-                chain: chain_args(),
+                chain: self.read_args(),
                 inputs: InputArgs {
                     hyper_senders: SENDER.into(),
                     polymer_emitters: SENDER.into(),
@@ -574,7 +571,7 @@ mod tests {
                 out: self.path("plan.json"),
                 summary: Some(self.path("summary.md")),
                 programs: programs.into(),
-                chain: chain_args(),
+                chain: self.read_args(),
             };
             let mut out = Vec::new();
             plan_selection(chain, operation, &args, &self.deployer.pubkey(), &mut out)?;
@@ -604,6 +601,13 @@ mod tests {
             });
 
             chain
+        }
+
+        fn read_args(&self) -> ReadArgs {
+            ReadArgs {
+                rpc_url: "unused".into(),
+                deployer: self.deployer.pubkey(),
+            }
         }
 
         fn apply_args(&self) -> ApplyArgs {
@@ -1090,14 +1094,9 @@ mod tests {
         let secret = "4wBqpZM9xaSheZzJSMawUKKwhdpChKbZ5eu5ky4Vigw8nFNsYzD2CRQ6g6ap5CwmBgdo";
         let path = env.path("deployer.json");
         fs::write(&path, format!("\"{secret}\"")).unwrap();
-        let command = Command::PlanClose(SelectionArgs {
-            version: "0.0.1".into(),
-            cluster: Cluster::Devnet,
-            program_ids: env.path("ids.json"),
+        let command = Command::Apply(ApplyArgs {
+            plan: env.path("plan.json"),
             assets: env.directory.path().into(),
-            out: env.path("plan.json"),
-            summary: None,
-            programs: "all".into(),
             chain: ChainArgs {
                 rpc_url: "unused".into(),
                 deployer_keypair: path,

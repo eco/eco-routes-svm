@@ -36,11 +36,20 @@ for (const [name, minimumTees] of Object.entries(DEPLOY_WORKFLOWS)) {
     tees.forEach((line) => assert.match(line, /deploy-step\.sh redact \| tee/));
   });
 
-  test(`${name} needs release approval and never overlaps another run on its cluster`, () => {
+  test(`${name} plans without approval or keys, then writes only the approved plan`, () => {
     const text = workflow(name);
-    assert.match(text, /^ {4}environment: release$/m);
+    const execute = text.indexOf("\n    needs: plan\n");
+    const planJob = text.slice(text.indexOf("\n  plan:\n"), execute).replace(/^\s*#.*$/gm, "");
+    const executeJob = text.slice(execute);
+    assert.ok(execute > 0);
+    assert.doesNotMatch(planJob, /environment:|DEPLOYER_KEYPAIR|PROGRAM_KEYPAIR_SECRET/);
+    assert.match(planJob, /scripts\/deploy-step\.sh hash out\/plan\.log/);
+    assert.equal(text.match(/^ {4}environment: release$/gm)?.length, 1);
+    assert.match(executeJob, /^ {4}environment: release$/m);
+    assert.match(executeJob, /PLAN_HASH: \$\{\{ needs\.plan\.outputs\.hash \}\}/);
+    assert.match(executeJob, /scripts\/deploy-step\.sh gate out\/plan\.log/);
+    assert.doesNotMatch(text, /plan_hash:|inputs\.plan_hash/);
     assert.match(text, /^concurrency:\n {2}group: deploy-\$\{\{ inputs\.cluster \}\}\n {2}cancel-in-progress: false$/m);
-    assert.match(text, /scripts\/deploy-step\.sh gate out\/plan\.log/);
   });
 }
 
@@ -79,24 +88,28 @@ test("deploy workflow rejects a malformed compute_unit_price before anything run
   const validates = (computeUnitPrice) =>
     spawnSync("bash", ["-c", script], {
       encoding: "utf8",
-      env: { ...process.env, VERSION: "1.2.3", COMPUTE_UNIT_PRICE: computeUnitPrice },
+      env: { ...process.env, DEPLOYER: "Deployer", VERSION: "1.2.3", COMPUTE_UNIT_PRICE: computeUnitPrice },
     }).status === 0;
 
   ["0", "5", "9999999999999999999"].forEach((value) => assert.ok(validates(value), value));
   ["", "-1", "1.5", "abc", " 5", "5 ", "1e6", "99999999999999999999"].forEach((value) =>
     assert.ok(!validates(value), value),
   );
+  const unset = spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    env: { ...process.env, DEPLOYER: "", VERSION: "1.2.3", COMPUTE_UNIT_PRICE: "0" },
+  });
+  assert.notEqual(unset.status, 0);
+  assert.match(unset.stderr, /DEPLOYER_ADDRESS/);
 });
 
 test("deploy workflow closes leftover buffers after any outcome, while the deployer key exists", () => {
   const text = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
   const close = text.indexOf("      - name: Close leftover buffers\n");
-  assert.ok(close > text.indexOf("      - name: Finalize\n"));
+  const verify = text.indexOf("      - name: Verify\n");
+  assert.ok(verify > 0 && close > verify);
   assert.ok(close < text.indexOf("      - name: Delete keys\n"));
-  assert.match(
-    text.slice(close),
-    /^ {8}if: always\(\) && steps\.plan\.outputs\.execute == 'true'$/m,
-  );
+  assert.match(text.slice(close), /^ {8}if: always\(\) && steps\.gate\.outcome == 'success'$/m);
 });
 
 // Runs `deploy-step.sh deploy` against stub `solana` and `deployer` commands and returns the
@@ -167,7 +180,7 @@ for (const name of ["finalize.yml", "close.yml"]) {
     const validates = (programs) =>
       spawnSync("bash", ["-c", script], {
         encoding: "utf8",
-        env: { ...process.env, VERSION: "1.2.3", PROGRAMS: programs },
+        env: { ...process.env, DEPLOYER: "Deployer", VERSION: "1.2.3", PROGRAMS: programs },
       }).status === 0;
 
     ["all", "hyper_prover", "aggregator_prover,hyper_prover"].forEach((value) => assert.ok(validates(value), value));
@@ -177,34 +190,41 @@ for (const name of ["finalize.yml", "close.yml"]) {
   });
 }
 
-// Runs `deploy-step.sh gate` on a plan log and returns its outputs and summary.
-const gate = (planHash, log) => {
-  const directory = mkdtempSync(join(tmpdir(), "gate-"));
-  const files = ["plan.log", "output", "summary"].map((name) => join(directory, name));
-  const [planLog, output, summary] = files;
+// Runs `deploy-step.sh <command>` on a plan log and returns its status, outputs and summary.
+const planLogStep = (command, planHash, log) => {
+  const directory = mkdtempSync(join(tmpdir(), "plan-log-"));
+  const [planLog, output, summary] = ["plan.log", "output", "summary"].map((name) => join(directory, name));
   [output, summary].forEach((path) => writeFileSync(path, ""));
   writeFileSync(planLog, log);
   const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
-  const { status } = spawnSync("bash", [script, "gate", planLog], {
+  const { status, stderr } = spawnSync("bash", [script, command, planLog], {
     encoding: "utf8",
     env: { ...process.env, PLAN_HASH: planHash, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
   });
-  const result = { status, output: readFileSync(output, "utf8"), summary: readFileSync(summary, "utf8") };
+  const result = { status, stderr, output: readFileSync(output, "utf8"), summary: readFileSync(summary, "utf8") };
   rmSync(directory, { recursive: true });
 
   return result;
 };
 
-test("gate executes only when the reviewed hash equals the computed one", () => {
+test("hash hands the plan job's hash to the approved job", () => {
+  const planned = planLogStep("hash", "", "planning\nplan_hash=abc\n");
+
+  assert.equal(planned.status, 0);
+  assert.equal(planned.output, "hash=abc\n");
+  assert.match(planned.summary, /Approve the next job to execute exactly this plan \(`abc`\)/);
+  assert.notEqual(planLogStep("hash", "", "no hash printed\n").status, 0);
+});
+
+test("gate lets the approved job write only the approved plan", () => {
   const log = "planning\nplan_hash=abc\n";
 
-  assert.equal(gate("abc", log).output, "computed=abc\nexecute=true\n");
-  assert.equal(gate("", log).output, "computed=abc\nexecute=false\n");
-  assert.match(gate("", log).summary, /Dry run \(no plan_hash given\).*plan_hash=`abc`/);
-  assert.match(gate("abd", log).summary, /Dry run \(plan_hash differs/);
-  const missing = gate("abc", "no hash printed\n");
-  assert.notEqual(missing.status, 0);
-  assert.equal(missing.output, "");
+  assert.equal(planLogStep("gate", "abc", log).status, 0);
+  const changed = planLogStep("gate", "abd", log);
+  assert.notEqual(changed.status, 0);
+  assert.match(changed.stderr, /changed since the plan was approved \(approved abd, now abc\)/);
+  assert.notEqual(planLogStep("gate", "", log).status, 0);
+  assert.notEqual(planLogStep("gate", "abc", "no hash printed\n").status, 0);
 });
 
 test("close closes each planned program and returns its rent to the deployer", () => {

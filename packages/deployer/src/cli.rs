@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use solana_sdk::pubkey::Pubkey;
 
 use crate::plan::{self, Cluster};
 
@@ -33,6 +34,18 @@ pub enum Command {
     /// Print the programs `plan.json` assigns to an action, one per line, each after the
     /// programs it depends on.
     Actions(ActionsArgs),
+}
+
+/// The RPC and the deployer's address, for the plan commands: they only read the chain, so they
+/// never need the deployer's key.
+#[derive(Debug, Args)]
+pub struct ReadArgs {
+    /// RPC endpoint; it carries the API key, so it is never printed.
+    #[arg(long, env = "RPC_URL", hide_env_values = true)]
+    pub rpc_url: String,
+    /// The deployer's address: the upgrade authority the plan expects on partial programs.
+    #[arg(long, env = "DEPLOYER")]
+    pub deployer: Pubkey,
 }
 
 #[derive(Debug, Args)]
@@ -80,7 +93,7 @@ pub struct PlanArgs {
     #[arg(long)]
     pub summary: Option<PathBuf>,
     #[command(flatten)]
-    pub chain: ChainArgs,
+    pub chain: ReadArgs,
     #[command(flatten)]
     pub inputs: InputArgs,
 }
@@ -106,7 +119,7 @@ pub struct SelectionArgs {
     #[arg(long, env = "PROGRAMS")]
     pub programs: String,
     #[command(flatten)]
-    pub chain: ChainArgs,
+    pub chain: ReadArgs,
 }
 
 #[derive(Debug, Args)]
@@ -157,6 +170,12 @@ mod tests {
         "--deployer-keypair",
         "deployer.json",
     ];
+    const READ: [&str; 4] = [
+        "--rpc-url",
+        "http://rpc",
+        "--deployer",
+        "11111111111111111111111111111112",
+    ];
     const INPUTS: [&str; 10] = [
         "--hyper-senders",
         "0xaa",
@@ -187,7 +206,7 @@ mod tests {
                 "plan.json",
             ],
             &["--summary", "summary.md"],
-            &CHAIN,
+            &READ,
             &INPUTS,
         ]
         .concat();
@@ -200,6 +219,10 @@ mod tests {
         assert_eq!(plan.cluster, Cluster::Devnet);
         assert_eq!(plan.summary, Some("summary.md".into()));
         assert_eq!(plan.chain.rpc_url, "http://rpc");
+        assert_eq!(
+            plan.chain.deployer.to_string(),
+            "11111111111111111111111111111112"
+        );
         assert_eq!(plan.inputs.layerzero_reserve_lamports, "2");
     }
 
@@ -215,7 +238,7 @@ mod tests {
                 "--out",
                 "plan.json",
             ],
-            &CHAIN,
+            &READ,
             &INPUTS,
         ]
         .concat();
@@ -256,7 +279,7 @@ mod tests {
                 "--out",
                 "plan.json",
             ],
-            &CHAIN,
+            &READ,
             &INPUTS,
             &["--compute-unit-price", "5"],
         ]
@@ -315,23 +338,38 @@ mod tests {
             [arguments, &CHAIN].concat()
         }
 
+        let plan = |cluster: &'static str, deployer: &'static str| -> Vec<&'static str> {
+            [
+                &[
+                    "plan",
+                    "--version",
+                    "1",
+                    "--cluster",
+                    cluster,
+                    "--program-ids",
+                    "i",
+                    "--assets",
+                    "a",
+                    "--out",
+                    "o",
+                    "--rpc-url",
+                    "http://rpc",
+                    "--deployer",
+                    deployer,
+                ][..],
+                &INPUTS,
+            ]
+            .concat()
+        };
+        let valid_deployer = READ[3];
+        assert!(parse(&plan("devnet", valid_deployer)).is_ok());
+
         let rejected = [
             vec!["actions"],
             vec!["actions", "--plan", "p", "--action", "init"],
             with_chain(&["apply", "--plan", "p"]),
-            with_chain(&[
-                "plan",
-                "--version",
-                "1",
-                "--cluster",
-                "testnet",
-                "--program-ids",
-                "i",
-                "--assets",
-                "a",
-                "--out",
-                "o",
-            ]),
+            plan("testnet", valid_deployer),
+            plan("devnet", "not-an-address"),
         ];
 
         rejected

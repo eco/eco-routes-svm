@@ -607,7 +607,7 @@ The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl ra
 
 ### Deploying a release
 
-Three manual workflows take a published release to devnet or mainnet. Each runs twice: a dry run that only plans, then the same run with the reviewed `plan_hash`.
+Three manual workflows take a published release to devnet or mainnet. Each is one dispatch with two jobs: `plan` reads the chain and writes the plan to its job summary without approval or keys; the second job waits for the `release` environment's approval, plans again, and writes only if that plan's hash equals the one the reviewer approved. Rejecting the job is the dry run: nothing is written.
 
 | Workflow | Does |
 |---|---|
@@ -619,9 +619,10 @@ Three manual workflows take a published release to devnet or mainnet. Each runs 
 
 - The release exists (`v<version>` and its `deploy/v<version>` tag) and the EVM provers it will trust are deployed, since their addresses are `init` inputs.
 - The workflows build the deployer and run `scripts/deploy-step.sh` from that `deploy/v<version>` tag, not from `main`: a release cut before this pipeline existed cannot use it, and a fix to the pipeline reaches deploys only through a new release.
-- GitHub environment `release` (shared with the release workflow and both clusters): required reviewers, self-review prevented, `main` only. Its approval is the second pair of eyes on every run, dry runs included.
+- GitHub environment `release` (shared with the release workflow and both clusters): required reviewers, self-review prevented, `main` only. Its approval of the second job, after the plan is visible, is the second pair of eyes on every write.
 - The deployer, `Cx92mzUNNr7mazZmuB5uTZtaYPNDFs6RwKVYF2hC7kH3`, holds SOL on the target cluster. A fresh deploy of every program takes about 20 SOL: about 16 SOL of program rent, locked for good once the programs are final, plus the largest buffer (refunded), the reserve top-ups and transaction fees, which grow with `compute_unit_price`. The plan step estimates this from the release and the chain and fails if the balance is short.
-- Environment secrets: `PROGRAM_KEYPAIR_SECRET` (the release secret), `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until it is finalized or closed), `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; the run uses `https://solana-<cluster>.g.alchemy.com/v2/<key>`). The RPC URL is redacted from logs and the uploaded artifact.
+- Environment secrets (approved job only): `PROGRAM_KEYPAIR_SECRET` (the release secret; deploy only) and `DEPLOYER_KEYPAIR` (JSON keypair; pays and is every new program's upgrade authority until it is finalized or closed).
+- Repository secret `ALCHEMY_API_KEY` (an Alchemy app with Solana mainnet and devnet enabled; both jobs use `https://solana-<cluster>.g.alchemy.com/v2/<key>`) and repository variable `DEPLOYER_ADDRESS` (the deployer's public key, which the plan job plans for; the approved job plans for the key it holds, so a mismatch stops it). The RPC URL is redacted from logs and the uploaded artifact.
 
 **Inputs**
 
@@ -629,7 +630,6 @@ Three manual workflows take a published release to devnet or mainnet. Each runs 
 |---|---|
 | `version` | Release version, no `v` |
 | `cluster` | `devnet` or `mainnet`; selects the Alchemy endpoint |
-| `plan_hash` | Empty or not equal to the computed hash: dry run, nothing is written |
 | `hyper_senders` | Comma-separated EVM addresses (`0x` + 20 bytes) of the EVM HyperProver |
 | `polymer_emitters` | Comma-separated EVM addresses of the EVM PolymerProver |
 | `layerzero` | JSON, see below |
@@ -682,9 +682,9 @@ Inputs for a program that is already live are not written, but are still hashed 
 
 The addresses above are placeholders; use the DVN and executor addresses LayerZero publishes for the Solana pathway to that peer.
 
-**1. Dry run.** Run the workflow with the inputs and an empty `plan_hash`. It checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary, followed by the deployer's address, balance and estimated cost. Nothing is written on chain. A deployer short of SOL fails this step after printing the plan; fund it and rerun. Its balance is not part of the hash.
+**1. Plan.** Dispatch the workflow with the inputs. The `plan` job checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary, followed by the deployer's address, balance and estimated cost. Nothing is written on chain. A deployer short of SOL fails the job after printing the plan, and the approval never appears; fund it and dispatch again. Its balance is not part of the hash.
 
-**2. Review the summary.** Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify). Statuses:
+**2. Review the summary** of the `plan` job. Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify). Statuses:
 
 | Status | On chain | Plan |
 |---|---|---|
@@ -693,9 +693,9 @@ The addresses above are placeholders; use the DVN and executor addresses LayerZe
 | Live | bytecode equals the release, immutable, config equal to the inputs | skip |
 | Foreign | anything else, including lamports someone sent to the program or programdata address | the run fails: someone else holds the address, and the other programs would trust it |
 
-The hash covers the release, the binaries, the cluster's genesis hash, the deployer's key, the inputs and the on-chain facts the plan used. Copy `plan_hash` from the summary.
+The hash covers the release, the binaries, the cluster's genesis hash, the deployer's key, the inputs and the on-chain facts the plan used.
 
-**3. Execute.** Run again with the same inputs and `plan_hash`. After the reviewers approve, the run re-plans and continues only if the hash is unchanged. It then:
+**3. Approve** the `deploy` job, or reject it to stop. Once approved it plans again and fails without writing if the hash differs from the approved plan's (the chain changed while it waited); otherwise it:
 
 1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
 2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init`, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
@@ -707,7 +707,7 @@ Every program stays upgradeable after the run, so the provers can be tested end 
 
 #### Finalizing
 
-After testing, run `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then execute it with its `plan_hash`. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
+After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then approve the `finalize` job. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
 
 - is not deployed, or not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`);
 - has no verification record uploaded by the deployer (the deploy run's verify step writes it);
@@ -720,7 +720,7 @@ After testing, run `Finalize` with `programs` set to `all` or a comma-separated 
 
 #### Recovery
 
-- **Failed or cancelled run.** Programs stay upgradeable. A deploy that died part-way leaves a buffer holding its rent; the run closes every buffer the deployer owns before it deploys and again at the end, whatever the outcome, returning the rent to the deployer. Fix the cause and start from a fresh dry run: the earlier hash covered state that has since changed. Every step is idempotent, so the new plan only contains what is left.
+- **Failed or cancelled run.** Programs stay upgradeable. A deploy that died part-way leaves a buffer holding its rent; the run closes every buffer the deployer owns before it deploys and again at the end, whatever the outcome, returning the rent to the deployer. Fix the cause and dispatch again for a fresh plan: the earlier one covered state that has since changed. Every step is idempotent, so the new plan only contains what is left.
 - **Burned address.** If a program has a wrong config (or a config was set by someone else), or someone sent lamports to a new program's address or its programdata address (the loader then cannot create the account), the address is unusable. Close it if it is still upgradeable, raise its salt in `scripts/program-salts.json` and cut a new release; that moves it and everything depending on it.
 - **Interrupted `solana program deploy` in the manual fallback.** It leaves a buffer account holding the upload's rent. Reclaim every buffer of the deployer with `solana program close --buffers -u <rpc> -k <deployer-keypair> --authority <deployer-keypair>`; the program itself does not exist yet, so the next plan lists it as new.
 - **Abandoned deployment.** Run `Close` for its upgradeable programs; see [Closing](#closing).
