@@ -11,13 +11,17 @@
 /// persists between them).
 pub const MAX_INTENTS_PER_PROVE: usize = 21;
 
-/// Largest inbound batch the executor's delivery transaction can carry: every
-/// pair needs its brand-new `Proof` PDA as a static key (a lookup table cannot
-/// hold an address nobody pre-registered) plus 64 message bytes. The EVM
-/// `LayerZeroProver` cannot enforce it, so the solver must batch EVM
-/// `Inbox.prove` calls toward Solana at or below this. Pinned by
+/// Largest inbound batch LayerZero's executor delivers: every pair needs its
+/// brand-new `Proof` PDA as a static key (a lookup table cannot hold an address
+/// nobody pre-registered) plus 64 message bytes, and the executor refuses
+/// delivery transactions over 1220 bytes. Measured on devnet: 6 pairs deliver
+/// at 1142 bytes, 7 measure 1227 and are refused. The EVM `LayerZeroProver`
+/// must pin the Solana pathway's `maxMessageSize` to `8 + 64 * 6` = 392 bytes
+/// so larger batches revert at send; a message over the cap can still be
+/// executed by hand with a lean `[compute-limit, lz_receive]` transaction (7
+/// pairs: 1079 bytes). Pinned by
 /// `layerzero_prover_batch_limits::inbound_ceiling_matches_max_pairs_per_message`.
-pub const MAX_PAIRS_PER_MESSAGE: usize = 7;
+pub const MAX_PAIRS_PER_MESSAGE: usize = 6;
 
 /// Same floor the EVM `LayerZeroProver` computes, so a permissionless
 /// `send_message` caller cannot under-gas the EVM `lzReceive`.
