@@ -8,7 +8,7 @@ use solana_sdk::signer::{Signer, SignerError};
 use solana_sdk::transaction::VersionedTransaction;
 
 /// v1 budgets no compute units unless this is set, and `set_path_config`, which nests endpoint
-/// and ULN302 CPIs, measured ~249k against devnet's ULN302.
+/// and ULN302 CPIs, measured up to ~261k against devnet's ULN302.
 pub const COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 /// The protocol maximum; a v1 transaction that leaves it unset may load nothing.
 const LOADED_ACCOUNTS_DATA_SIZE_LIMIT: u32 = 64 * 1024 * 1024;

@@ -733,7 +733,7 @@ After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separ
 | Limit | Value |
 |---|---|
 | LayerZero peers | at most 32 (`MAX_PEERS`); `init` carries them all in one v1 transaction |
-| DVNs per ULN config | at most 16 required and 16 optional (ULN302's `DVN_MAX_LEN`, checked at plan). Every `init` and `set_path_config` also fits the 4096-byte v1 transaction limit (the largest, `set_path_config` with 16 + 16 DVNs on both ULN configs, is 2788 bytes); the plan rejects any over it. Every `apply` transaction sets a 1.4M compute-unit limit and its priority fee in its config: v1 budgets no compute units unless the limit is set, and `set_path_config` used about 249k against devnet's ULN302 |
+| DVNs per ULN config | at most 16 required and 16 optional (ULN302's `DVN_MAX_LEN`, checked at plan). Every `init` and `set_path_config` also fits the 4096-byte v1 transaction limit (the largest, `set_path_config` with 16 + 16 DVNs on both ULN configs, is 2788 bytes); the plan rejects any over it. Every `apply` transaction sets a 1.4M compute-unit limit and its priority fee in its config: v1 budgets no compute units unless the limit is set, and `set_path_config` used up to about 261k against devnet's ULN302 |
 | DVN lists | strictly ascending by public key |
 
 #### Manual fallback
