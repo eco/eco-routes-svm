@@ -71,61 +71,27 @@ fn init_rejects_invalid_peer_set() {
     assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidPeerSet)));
 }
 
-/// `init` fits ~18 peers in one transaction; `add_peers` fills the rest of
-/// `MAX_PEERS`, after which the lookup table must be recorded again.
+/// A full peer set lands in one `init` (a v1 transaction on a real cluster;
+/// see `layerzero_prover_batch_limits::max_peers_init_needs_v1`), and the
+/// recorded lookup table covers every peer's Nonce.
 #[test]
-fn add_peers_fills_store_to_max_peers() {
-    let (mut context, authority) = initialized();
-    let alt = context.layerzero_prover().create_alt();
-    context.layerzero_prover().set_alt(&authority, alt).unwrap();
-    let extra: Vec<_> = (peers().len()..MAX_PEERS)
+fn init_accepts_max_peers() {
+    let (mut context, authority) = installed();
+    let all: Vec<_> = (0..MAX_PEERS)
         .map(|i| evm_peer(50_000 + i as u32, 900_000 + i as u64, i as u8 + 1))
         .collect();
 
-    extra.chunks(15).for_each(|chunk| {
-        context
-            .layerzero_prover()
-            .add_peers(&authority, chunk.to_vec())
-            .unwrap();
-    });
-
-    let store = context.account::<Store>(&Store::pda().0).unwrap();
-    assert_eq!(store.peers, [peers(), extra.clone()].concat());
-    assert_eq!(store.alt, Pubkey::default());
-    let last = *extra.last().unwrap();
     context
         .layerzero_prover()
-        .init_path(&authority, &last)
+        .init(&authority, all.clone())
         .unwrap();
-    let alt = context.layerzero_prover().create_alt();
-    context.layerzero_prover().set_alt(&authority, alt).unwrap();
 
-    let result = context
-        .layerzero_prover()
-        .add_peers(&authority, vec![evm_peer(60_000, 960_000, 0xee)]);
-    assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidPeerSet)));
-}
-
-#[test]
-fn add_peers_rejects_non_authority_and_duplicates() {
-    let (mut context, authority) = initialized();
-    let impostor = Keypair::new();
-    let new_peer = evm_peer(50_000, 900_000, 0xee);
-
-    let result = context
-        .layerzero_prover()
-        .add_peers(&impostor, vec![new_peer]);
-    assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidAuthority)));
-
-    let duplicate = evm_peer(BASE_EID, 900_000, 0xee);
-    let result = context
-        .layerzero_prover()
-        .add_peers(&authority, vec![duplicate]);
-    assert!(result.is_err_and(common::is_error(LayerZeroProverError::InvalidPeerSet)));
     assert_eq!(
         context.account::<Store>(&Store::pda().0).unwrap().peers,
-        peers()
+        all
     );
+    let alt = context.layerzero_prover().create_alt();
+    context.layerzero_prover().set_alt(&authority, alt).unwrap();
 }
 
 #[test]
@@ -401,9 +367,6 @@ fn finalized_program_rejects_every_setup_instruction() {
             .layerzero_prover()
             .set_path_config(&authority, peer.eid, path_config()),
         context.layerzero_prover().set_alt(&authority, alt),
-        context
-            .layerzero_prover()
-            .add_peers(&authority, vec![evm_peer(50_000, 900_000, 0xee)]),
     ];
 
     results.into_iter().for_each(|result| {

@@ -11,7 +11,9 @@ pub const STORE_SEED: &[u8] = b"Store";
 pub const PDA_PAYER_SEED: &[u8] = b"pda_payer";
 pub const PENDING_SEND_SEED: &[u8] = b"pending_send";
 /// Fixed at `init` and never extended, so it leaves headroom over today's
-/// LayerZero EVM chains: a chain beyond it needs a new program ID.
+/// LayerZero EVM chains: a chain beyond it needs a new program ID. A full set
+/// needs a v1 transaction: `init` with 32 peers overflows v0's 1232 bytes
+/// (pinned by `layerzero_prover_batch_limits::max_peers_init_needs_v1`).
 pub const MAX_PEERS: usize = 32;
 pub const MAX_PAYLOAD_LEN: usize = 8 + 64 * MAX_INTENTS_PER_PROVE;
 
@@ -39,24 +41,29 @@ pub struct Store {
 
 impl Store {
     pub fn new(peers: Vec<Peer>) -> Result<Self> {
-        validate_peers(&peers)?;
+        require!(
+            !peers.is_empty() && peers.len() <= MAX_PEERS,
+            LayerZeroProverError::InvalidPeerSet
+        );
+        peers.iter().enumerate().try_for_each(|(i, peer)| {
+            require!(
+                peer.eid != 0 && peer.chain_id != 0 && *peer.address != [0u8; 32],
+                LayerZeroProverError::InvalidPeerSet
+            );
+            require!(
+                peers[..i]
+                    .iter()
+                    .all(|other| other.eid != peer.eid && other.chain_id != peer.chain_id),
+                LayerZeroProverError::InvalidPeerSet
+            );
+
+            Ok(())
+        })?;
 
         Ok(Self {
             peers,
             alt: Pubkey::default(),
         })
-    }
-
-    /// Appends `peers`; the merged set must satisfy `new`'s rules. Clears
-    /// `alt`, because the recorded table lacks the new peers' Nonce accounts:
-    /// `set_alt` must run again with a table that has them.
-    pub fn add_peers(&mut self, peers: Vec<Peer>) -> Result<()> {
-        require!(!peers.is_empty(), LayerZeroProverError::InvalidPeerSet);
-        self.peers.extend(peers);
-        validate_peers(&self.peers)?;
-        self.alt = Pubkey::default();
-
-        Ok(())
     }
 
     pub fn pda() -> (Pubkey, u8) {
@@ -69,29 +76,6 @@ impl Store {
 }
 
 impl AccountExt for Store {}
-
-/// Non-empty, at most `MAX_PEERS`, no zero field, and no two peers sharing an
-/// eid or a chain ID.
-fn validate_peers(peers: &[Peer]) -> Result<()> {
-    require!(
-        !peers.is_empty() && peers.len() <= MAX_PEERS,
-        LayerZeroProverError::InvalidPeerSet
-    );
-    peers.iter().enumerate().try_for_each(|(i, peer)| {
-        require!(
-            peer.eid != 0 && peer.chain_id != 0 && *peer.address != [0u8; 32],
-            LayerZeroProverError::InvalidPeerSet
-        );
-        require!(
-            peers[..i]
-                .iter()
-                .all(|other| other.eid != peer.eid && other.chain_id != peer.chain_id),
-            LayerZeroProverError::InvalidPeerSet
-        );
-
-        Ok(())
-    })
-}
 
 /// Required by the executor at fixed seeds `[LzReceiveTypes, store]`.
 #[account]
@@ -214,42 +198,6 @@ mod tests {
         ];
         cases.into_iter().for_each(|peers| {
             assert!(Store::new(peers).is_err());
-        });
-    }
-
-    #[test]
-    fn store_add_peers_appends_up_to_max_and_clears_alt() {
-        let mut store = Store::new(vec![peer(1, 1, 1)]).unwrap();
-        store.alt = Pubkey::new_unique();
-
-        store
-            .add_peers(
-                (2..=MAX_PEERS as u32)
-                    .map(|i| peer(i, i as u64, 1))
-                    .collect(),
-            )
-            .unwrap();
-
-        assert_eq!(store.peers.len(), MAX_PEERS);
-        assert_eq!(store.peers[0], peer(1, 1, 1));
-        assert_eq!(store.alt, Pubkey::default());
-    }
-
-    #[test]
-    fn store_add_peers_rejects_invalid_merged_sets() {
-        let store = Store::new(vec![peer(30184, 8453, 1)]).unwrap();
-        let cases = [
-            vec![],
-            vec![peer(30184, 10, 2)],
-            vec![peer(30111, 8453, 2)],
-            vec![peer(30111, 10, 0)],
-            (1..=MAX_PEERS as u32)
-                .map(|i| peer(i, i as u64, 1))
-                .collect(),
-        ];
-        cases.into_iter().for_each(|peers| {
-            let mut store = Store::new(store.peers.clone()).unwrap();
-            assert!(store.add_peers(peers).is_err());
         });
     }
 

@@ -18,6 +18,9 @@
 //! reproduces the delivered 657 / 1142 bytes for 1 / 6 pairs; for 7 the
 //! executor dropped the price instruction and still measured 1227 > 1220, so
 //! the ceiling is taken on that leanest shape.
+//!
+//! Setup: `init` with the full `MAX_PEERS` set, signed by the deployer as
+//! both payer and authority, needs a v1 transaction (SIMD-0296/0385).
 
 use eco_svm_std::prover::{IntentHashClaimant, ProofData};
 use eco_svm_std::{Bytes32, CHAIN_ID};
@@ -26,18 +29,19 @@ use layerzero_prover::instructions::{
     compact_accounts_with_alt, lz_receive_accounts, required_alt_addresses,
 };
 use layerzero_prover::layerzero;
-use layerzero_prover::state::{PendingSend, Store};
+use layerzero_prover::state::{PendingSend, Store, MAX_PEERS};
 use portal::state::FulfillMarker;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_packet::PACKET_DATA_SIZE;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
-use solana_sdk::message::{v0, AddressLookupTableAccount, VersionedMessage};
+use solana_sdk::message::{v0, v1, AddressLookupTableAccount, VersionedMessage};
 use solana_sdk::pubkey::Pubkey;
 
 use crate::common::layerzero_prover_context::{
-    build_lz_receive_instruction, build_prove_instruction, build_send_message_instruction, peers,
-    receive_params, resolve_locators, send_accounts, BASE_CHAIN_ID, BASE_EID, COMPUTE_UNIT_LIMIT,
+    build_init_instruction, build_lz_receive_instruction, build_prove_instruction,
+    build_send_message_instruction, evm_peer, peers, receive_params, resolve_locators,
+    send_accounts, BASE_CHAIN_ID, BASE_EID, COMPUTE_UNIT_LIMIT,
 };
 
 pub mod common;
@@ -203,6 +207,36 @@ fn inbound_len(n: usize, with_price: bool) -> usize {
         .collect();
 
     transaction_len(compile(&payer, &instructions, vec![executor_table, table]))
+}
+
+/// A full peer set overflows a v0 `init` but fits a v1 one, which carries
+/// its signatures as a fixed array after the message, with no count prefix.
+#[test]
+fn max_peers_init_needs_v1() {
+    let deployer = Pubkey::new_unique();
+    let instruction = build_init_instruction(
+        &deployer,
+        &deployer,
+        (0..MAX_PEERS)
+            .map(|i| evm_peer(50_000 + i as u32, 900_000 + i as u64, i as u8 + 1))
+            .collect(),
+    );
+
+    let v0_len = transaction_len(compile(
+        &deployer,
+        std::slice::from_ref(&instruction),
+        vec![],
+    ));
+    let v1_len = VersionedMessage::V1(
+        v1::Message::try_compile(&deployer, &[instruction], Hash::default()).unwrap(),
+    )
+    .serialize()
+    .len()
+        + 64;
+
+    println!("init with {MAX_PEERS} peers: v0 {v0_len} bytes, v1 {v1_len} bytes");
+    assert!(v0_len > PACKET_DATA_SIZE);
+    assert!(v1_len <= v1::MAX_TRANSACTION_SIZE);
 }
 
 #[test]
