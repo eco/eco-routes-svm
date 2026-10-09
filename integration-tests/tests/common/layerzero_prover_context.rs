@@ -191,43 +191,7 @@ pub fn path_config() -> PathConfig {
 
 impl LayerZeroProver<'_> {
     pub fn init(&mut self, authority: &Keypair, peers: Vec<Peer>) -> TransactionResult {
-        let store = Store::pda().0;
-        let instruction = Instruction {
-            program_id: layerzero_prover::ID,
-            accounts: layerzero_prover::accounts::Init {
-                payer: self.payer.pubkey(),
-                authority: authority.pubkey(),
-                program: layerzero_prover::ID,
-                program_data: self.program_data(),
-                store,
-                lz_receive_types: LzReceiveTypesAccount::pda().0,
-                system_program: system_program::ID,
-                endpoint_program: ENDPOINT_ID,
-                oapp_registry: layerzero::oapp_registry_pda(&store).0,
-                endpoint_event_authority: layerzero::endpoint_event_authority().0,
-            }
-            .to_account_metas(None),
-            data: layerzero_prover::instruction::Init {
-                args: InitArgs { peers },
-            }
-            .data(),
-        };
-
-        self.send(vec![instruction], &[authority])
-    }
-
-    pub fn add_peers(&mut self, authority: &Keypair, peers: Vec<Peer>) -> TransactionResult {
-        let instruction = Instruction {
-            program_id: layerzero_prover::ID,
-            accounts: layerzero_prover::accounts::AddPeers {
-                authority: authority.pubkey(),
-                program: layerzero_prover::ID,
-                program_data: self.program_data(),
-                store: Store::pda().0,
-            }
-            .to_account_metas(None),
-            data: layerzero_prover::instruction::AddPeers { peers }.data(),
-        };
+        let instruction = build_init_instruction(&self.payer.pubkey(), &authority.pubkey(), peers);
 
         self.send(vec![instruction], &[authority])
     }
@@ -415,6 +379,30 @@ impl LayerZeroProver<'_> {
 
 /// `portal::prove` targeting this prover, with the `PendingSend` it commits to.
 /// Free function so the batch-size tests can build it without a context.
+pub fn build_init_instruction(payer: &Pubkey, authority: &Pubkey, peers: Vec<Peer>) -> Instruction {
+    let store = Store::pda().0;
+    Instruction {
+        program_id: layerzero_prover::ID,
+        accounts: layerzero_prover::accounts::Init {
+            payer: *payer,
+            authority: *authority,
+            program: layerzero_prover::ID,
+            program_data: program_data_address(&layerzero_prover::ID),
+            store,
+            lz_receive_types: LzReceiveTypesAccount::pda().0,
+            system_program: system_program::ID,
+            endpoint_program: ENDPOINT_ID,
+            oapp_registry: layerzero::oapp_registry_pda(&store).0,
+            endpoint_event_authority: layerzero::endpoint_event_authority().0,
+        }
+        .to_account_metas(None),
+        data: layerzero_prover::instruction::Init {
+            args: InitArgs { peers },
+        }
+        .data(),
+    }
+}
+
 pub fn build_prove_instruction(
     payer: Pubkey,
     intent_hashes: Vec<Bytes32>,
