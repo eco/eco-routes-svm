@@ -25,7 +25,7 @@ const SEED = "ab".repeat(32);
 const PORTAL_ADDRESS = "Ecoi8woUrmkLq8PjpPFVF2k7xALmeKnAvWz2qVCkW1d7";
 // Pins the seed framing: changing it re-keys every program at the next release.
 const PORTAL_SEED = "5d57eacc653da7bcfd39a637cb2235dd88de5628abd089d697330c942bb16355";
-const AGGREGATOR_SEED = "6f4aac64f36d952143e1969134b48b96309e7d35b375b1e6534bf48aada13ec4";
+const AGGREGATOR_SEED = "3efa8ccb8b05542266c1a7c557f11c83a80412050e683455df9ff90ef916fc92";
 const PROGRAMS = [
   "aggregator_prover",
   "portal",
@@ -48,7 +48,7 @@ const CARGO_DEPENDENCIES = {
   eco_svm_std: [],
 };
 const DEPENDENCIES = {
-  aggregator_prover: ["hyper_prover", "layerzero_prover", "local_prover", "polymer_prover", "portal"],
+  aggregator_prover: ["hyper_prover", "layerzero_prover", "polymer_prover", "portal"],
   portal: [],
   hyper_prover: ["portal"],
   local_prover: ["flash_fulfiller", "portal"],
@@ -135,7 +135,7 @@ test("dependencies reject unknown programs and an aggregator without its members
   assert.throws(() => dependencies(metadata(), [...PROGRAMS, "unknown"]), /not a workspace package/);
   assert.throws(
     () => dependencies(metadata(), ["aggregator_prover", "portal"]),
-    /aggregator_prover is released without its members: hyper_prover, layerzero_prover, local_prover, polymer_prover/,
+    /aggregator_prover is released without its members: hyper_prover, polymer_prover, layerzero_prover/,
   );
 });
 
@@ -180,9 +180,12 @@ test("a seed moves with its own or a dependency's bytecode on either cluster", (
     "polymer_prover",
   ]);
   assert.deepEqual(moved(programSeeds({ overrides: { flash_fulfiller: { mainnet: Buffer.from("changed") } } })), [
-    "aggregator_prover",
     "flash_fulfiller",
     "local_prover",
+  ]);
+  assert.deepEqual(moved(programSeeds({ overrides: { layerzero_prover: { devnet: Buffer.from("changed") } } })), [
+    "aggregator_prover",
+    "layerzero_prover",
   ]);
   const swapped = { portal: { mainnet: Buffer.from("portal/devnet"), devnet: Buffer.from("portal/mainnet") } };
   assert.ok(moved(programSeeds({ overrides: swapped })).includes("portal"));
@@ -240,9 +243,10 @@ test("release prints only the manifest that deploy turns into private keypair fi
   });
   assert.equal(released.status, 0, released.stderr);
   const manifest = JSON.parse(released.stdout);
-  const { address, seed, salt } = manifest.proof_helper;
+  const { address, seed, salt, dependencies: releasedDependencies } = manifest.proof_helper;
   assert.deepEqual(Object.keys(manifest), ["proof_helper"]);
   assert.equal(salt, 0);
+  assert.deepEqual(releasedDependencies, []);
   assert.equal(address, derive(secret(), "proof_helper", seed).address);
 
   const manifestPath = join(directory, "program-ids.json");

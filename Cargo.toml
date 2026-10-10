@@ -5,6 +5,8 @@ members = [
     "packages/*",
     "programs/*",
 ]
+# Its own workspace and lockfile; see its Cargo.toml.
+exclude = ["packages/deployer"]
 resolver = "2"
 
 [workspace.dependencies]

@@ -22,7 +22,7 @@ pub struct PathConfig {
 }
 
 impl PathConfig {
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         [&self.send_uln, &self.receive_uln]
             .iter()
             .try_for_each(|uln| {
