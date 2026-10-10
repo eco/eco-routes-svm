@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
+use anchor_lang::{AccountSerialize, AnchorSerialize, Discriminator, Event, Space};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -16,8 +16,9 @@ use litesvm::LiteSVM;
 use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
+use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::clock::Clock;
-use solana_sdk::instruction::{Instruction, InstructionError};
+use solana_sdk::instruction::{AccountMeta, Instruction, InstructionError};
 use solana_sdk::message::Message;
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
@@ -30,6 +31,7 @@ mod aggregator_prover_context;
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
+pub mod layerzero_prover_context;
 mod local_prover_context;
 pub mod polymer_prover_context;
 mod portal_context;
@@ -49,8 +51,12 @@ const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malic
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
 const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
 const MOCK_POLYMER_PROVER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/mock_polymer_prover.so");
+
+const MOCK_LAYERZERO_ENDPOINT_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/mock_layerzero_endpoint.so");
 
 pub type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
@@ -91,6 +97,10 @@ impl Default for Context {
             .unwrap();
         svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
             .unwrap();
+        // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
+        // can stage the admin that `LayerZeroProver::install` configures.
+        svm.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
+            .unwrap();
         // The mock declares Polymer's devnet ID, which is what non-mainnet
         // polymer-prover builds CPI into. Under `--features mainnet` this
         // address is the mainnet one and the mock's declared ID no longer
@@ -100,6 +110,13 @@ impl Default for Context {
         svm.add_program(
             polymer_prover::polymer::POLYMER_PROVER_ID,
             MOCK_POLYMER_PROVER_BIN,
+        )
+        .unwrap();
+        // The mock declares LayerZero's EndpointV2 ID (identical on mainnet and
+        // devnet). `layerzero_prover_real` replaces it with the dumped binary.
+        svm.add_program(
+            layerzero_prover::layerzero::ENDPOINT_ID,
+            MOCK_LAYERZERO_ENDPOINT_BIN,
         )
         .unwrap();
 
@@ -373,6 +390,40 @@ impl Context {
         self.set_account(address, account).unwrap();
     }
 
+    /// Sets the upgrade authority recorded in `program_id`'s ProgramData
+    /// (`None` simulates `solana program set-upgrade-authority --final`).
+    pub fn set_upgrade_authority(&mut self, program_id: &Pubkey, authority: Option<Pubkey>) {
+        let address = program_data_address(program_id);
+        let mut program_data = self.get_account(&address).unwrap();
+        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: authority,
+        })
+        .unwrap();
+        program_data.data[..metadata.len()].copy_from_slice(&metadata);
+        self.set_account(address, program_data).unwrap();
+    }
+
+    /// Stages an Anchor `account` at `address`, owned by `owner`.
+    pub fn set_anchor_account<T: AccountSerialize>(
+        &mut self,
+        address: Pubkey,
+        owner: Pubkey,
+        account: &T,
+    ) {
+        self.set_account(
+            address,
+            solana_sdk::account::Account {
+                lamports: 1_000_000_000,
+                data: anchor_account_data(account),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }
@@ -483,8 +534,42 @@ impl Context {
     }
 }
 
+/// The programs a portal `reward.prover` can name, each loaded by
+/// [`Context::default`].
+pub const CONCRETE_PROVERS: [Pubkey; 4] = [
+    local_prover::ID,
+    hyper_prover::ID,
+    polymer_prover::ID,
+    layerzero_prover::ID,
+];
+
+/// The upgradeable-loader ProgramData account of `program_id`.
+pub fn program_data_address(program_id: &Pubkey) -> Pubkey {
+    solana_loader_v3_interface::get_program_data_address(program_id)
+}
+
+/// Serializes an Anchor account (mock or ours) for `set_account`.
+pub fn anchor_account_data<T: AccountSerialize>(account: &T) -> Vec<u8> {
+    let mut data = Vec::new();
+    account.try_serialize(&mut data).unwrap();
+    data
+}
+
 pub fn sol_amount(amount: f64) -> u64 {
     (amount * 1_000_000_000.0) as u64
+}
+
+/// The rent recipient a concrete prover's cleanup tail ends with: Hyperlane
+/// and LayerZero pin it to their (non-signing) PDA payer, the others pay a
+/// signing recipient.
+pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey) -> AccountMeta {
+    if *prover == hyper_prover::ID {
+        AccountMeta::new(hyper_prover::state::pda_payer_pda().0, false)
+    } else if *prover == layerzero_prover::ID {
+        AccountMeta::new(layerzero_prover::state::pda_payer_pda().0, false)
+    } else {
+        AccountMeta::new(signer, true)
+    }
 }
 
 pub fn contains_event<E>(expected: E) -> impl Fn(TransactionMetadata) -> bool

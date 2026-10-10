@@ -9,7 +9,7 @@ This release changes Portal, prover and Flash-Fulfiller instruction ABIs. Every 
 | `get_proof` | `GetProofArgs { intent_hash, destination, data: Vec<u8> }` | `Option<Proof>` |
 | `close_proof` | `CloseProofArgs { intent_hash, data: Vec<u8> }` | Unit |
 
-`data` belongs to the invoked prover. Local, Hyper and Polymer need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, another destination or zero claimants. Substituted/omitted accounts, a prover-owned proof that does not decode exactly, and execution errors remain errors.
+`data` belongs to the invoked prover. Local, Hyper, Polymer and LayerZero need no query data. They require their canonical proof PDA for the hash and return `None` for missing/pre-funded accounts, another destination or zero claimants. Substituted/omitted accounts, a prover-owned proof that does not decode exactly, and execution errors remain errors.
 
 `Proof::is_cancelled()` identifies cancellation; `Proof::is_payable_to(&claimant)` checks a nonzero, non-cancellation payout recipient. Portal applies settlement policy to the returned proof.
 
@@ -35,7 +35,7 @@ Account framing does not impose a single-account restriction on members. Solana 
 
 Portal forwards `prover_data` unchanged. Concrete query tails are `[proof]`; concrete cleanup tails are `[proof, rent_recipient]`. For cancellation cleanup the same tail must support both `get_proof` and `close_proof`; concrete getters ignore the cleanup recipient. Cancellation cleanup queries the tail and closes every supplied member only if the first returned proof is a cancellation; a payable first proof blocks it.
 
-Token triples remain `[from, to, mint]`. Cleanup marks the proof and recipient writable; Local/Polymer require a signing recipient, Hyperlane requires its PDA payer. Every prover's close instruction takes the Portal closer signer before its tail. Flash-Fulfiller retains prove/withdraw/fulfill/sweep order and the 256-KiB heap requirement, and leaves its proof for later cleanup.
+Token triples remain `[from, to, mint]`. Cleanup marks the proof and recipient writable; Local/Polymer require a signing recipient, Hyperlane and LayerZero require their PDA payer (non-signer). Every prover's close instruction takes the Portal closer signer before its tail. Flash-Fulfiller retains prove/withdraw/fulfill/sweep order and the 256-KiB heap requirement, and leaves its proof for later cleanup.
 
 ## Refund and cleanup policy
 
@@ -45,4 +45,4 @@ Withdrawal creates the permanent `WithdrawnMarker`; refunds create no state. Nei
 
 Portal recomputes the intent hash and signs `[b"proof_closer", intent_hash, bump]`. Every leaf requires both that Portal signer and its own canonical proof PDA for the same hash. The hash already commits to `reward.prover`.
 
-Members can be closed together or in separate cleanups. `close_proof` is permissionless and Local/Polymer pay rent to the supplied signer, so a solver that wants its proof rent back should bundle `close_proof` with `withdraw`. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.
+Members can be closed together or in separate cleanups. `close_proof` is permissionless and Local/Polymer pay rent to the supplied signer, so a solver that wants its proof rent back should bundle `close_proof` with `withdraw`. Hyperlane and LayerZero refund their PDA payer, which nobody else profits from refilling, so their operator must bundle cleanup or run it from a job. Late delivery or redelivery remains cleanable under the same rules. Closing a missing proof errors without changing settlement state. A cleanup failure in a later transaction cannot roll back settlement; when bundled in one transaction, any failure rolls back the bundle.

@@ -1638,11 +1638,13 @@ dependencies = [
  "eco-svm-std",
  "flash-fulfiller",
  "hyper-prover",
+ "layerzero-prover",
  "litesvm",
  "local-prover",
  "malicious-proof-closer",
  "malicious-prover",
  "mock-igp",
+ "mock-layerzero-endpoint",
  "mock-polymer-prover",
  "polymer-prover",
  "portal",
@@ -1749,6 +1751,18 @@ name = "keccak-const"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57d8d8ce877200136358e0bbff3a77965875db3af755a11e1fa6b1b3e2df13ea"
+
+[[package]]
+name = "layerzero-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "eco-svm-std",
+ "getrandom 0.2.17",
+ "goldie",
+ "portal",
+ "solana-keccak-hasher",
+]
 
 [[package]]
 name = "lazy_static"
@@ -1974,6 +1988,14 @@ name = "mock-igp"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+]
+
+[[package]]
+name = "mock-layerzero-endpoint"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "tiny-keccak",
 ]
 
 [[package]]

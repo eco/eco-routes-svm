@@ -32,7 +32,7 @@ fn query(
 
 #[test]
 fn concrete_provers_return_only_valid_canonical_proofs() {
-    for prover in [local_prover::ID, hyper_prover::ID, polymer_prover::ID] {
+    for prover in common::CONCRETE_PROVERS {
         let mut context = common::Context::default();
         let hash: Bytes32 = [12; 32].into();
         let proof = Proof::pda(&hash, &prover).0;
@@ -200,6 +200,7 @@ fn shared_instruction_discriminators_and_generated_idls_match() {
         local_prover::instruction::GetProof { args: args.clone() }.data(),
         hyper_prover::instruction::GetProof { args: args.clone() }.data(),
         polymer_prover::instruction::GetProof { args: args.clone() }.data(),
+        layerzero_prover::instruction::GetProof { args: args.clone() }.data(),
         aggregator_prover::instruction::GetProof { args }.data(),
     ] {
         assert_eq!(data[..8], GET_PROOF_DISCRIMINATOR);
@@ -208,6 +209,7 @@ fn shared_instruction_discriminators_and_generated_idls_match() {
         "local_prover",
         "hyper_prover",
         "polymer_prover",
+        "layerzero_prover",
         "aggregator_prover",
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
