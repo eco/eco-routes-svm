@@ -106,8 +106,10 @@ jobs:
       - name: Assert on-chain compiler
         run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
 
-      - name: Build mock-igp (non-Anchor test program)
-        run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+      - name: Build non-Anchor test programs
+        run: |
+          cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+          cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -136,8 +138,10 @@ jobs:
       - name: Assert on-chain compiler
         run: scripts/assert-sbf-rustc.sh ${{ env.SBF_RUSTC_VERSION }} ${{ env.SBF_TOOLS_VERSION }}
 
-      - name: Build mock-igp (non-Anchor test program)
-        run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+      - name: Build non-Anchor test programs
+        run: |
+          cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+          cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Run tests
         run: cargo test --no-fail-fast

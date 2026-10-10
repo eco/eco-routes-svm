@@ -202,7 +202,9 @@ impl HyperProver<'_> {
         portal_proof_closer: &Keypair,
         proof: Pubkey,
     ) -> TransactionResult {
-        let instruction = hyper_prover::instruction::CloseProof {};
+        let instruction = hyper_prover::instruction::CloseProof {
+            args: eco_svm_std::prover::CloseProofArgs::new([1; 32].into(), vec![]),
+        };
         let accounts = hyper_prover::accounts::CloseProof {
             portal_proof_closer: portal_proof_closer.pubkey(),
             proof,
