@@ -132,6 +132,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
         layerzero: format!(
             r#"{{"peers":[{{"eid":1,"address":"{SENDER}","chain_id":1,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
         ),
+        cctp: format!(r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{SENDER}"}}]}}"#),
         hyper_reserve_lamports: reserve_lamports.to_string(),
         layerzero_reserve_lamports: reserve_lamports.to_string(),
         compute_unit_price: "0".into(),
@@ -259,6 +260,13 @@ pub fn full_setup(plan: &Plan) -> FullSetup {
             LAYERZERO_PROVER,
             layerzero_prover::state::STORE_SEED,
             serialize(&store),
+        ),
+        (
+            CCTP_PROVER,
+            cctp_prover::state::CONFIG_SEED,
+            serialize(&cctp_prover::state::Config {
+                peers: expected.cctp_peers.clone().unwrap(),
+            }),
         ),
     ];
     configs.into_iter().for_each(|(name, seed, data)| {

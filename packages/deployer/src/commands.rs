@@ -148,6 +148,7 @@ pub fn plan(
         hyper_senders: inputs.hyper_senders.clone(),
         polymer_emitters: inputs.polymer_emitters.clone(),
         layerzero: inputs.layerzero.clone(),
+        cctp: inputs.cctp.clone(),
         hyper_reserve_lamports: inputs.hyper_reserve_lamports.clone(),
         layerzero_reserve_lamports: inputs.layerzero_reserve_lamports.clone(),
         compute_unit_price: inputs.compute_unit_price.clone(),
@@ -553,6 +554,9 @@ mod tests {
                     polymer_emitters: SENDER.into(),
                     layerzero: format!(
                         r#"{{"peers":[{{"eid":1,"address":"{SENDER}","chain_id":1,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
+                    ),
+                    cctp: format!(
+                        r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{SENDER}"}}]}}"#
                     ),
                     hyper_reserve_lamports: "1000000".into(),
                     layerzero_reserve_lamports: "100000000".into(),

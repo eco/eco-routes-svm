@@ -28,6 +28,10 @@ on:
         description: 'JSON {"peers":[{"eid","address","chain_id","path":{"send_uln","receive_uln","executor"}}]}'
         type: string
         default: ""
+      cctp:
+        description: 'JSON {"peers":[{"domain","chain_id","sender"}]}; sender is the EVM CCTPProver (20- or 32-byte hex)'
+        type: string
+        default: ""
       hyper_reserve_lamports:
         description: "Top-up for the hyper_prover pda_payer"
         type: string
@@ -67,6 +71,7 @@ env:
   HYPER_SENDERS: ${{ inputs.hyper_senders }}
   POLYMER_EMITTERS: ${{ inputs.polymer_emitters }}
   LAYERZERO: ${{ inputs.layerzero }}
+  CCTP: ${{ inputs.cctp }}
   HYPER_RESERVE_LAMPORTS: ${{ inputs.hyper_reserve_lamports }}
   LAYERZERO_RESERVE_LAMPORTS: ${{ inputs.layerzero_reserve_lamports }}
   COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}

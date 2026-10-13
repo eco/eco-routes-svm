@@ -8,10 +8,10 @@ use solana_sdk::signer::Signer;
 use crate::chain::{self, Chain};
 use crate::config::{self, Configs};
 use crate::plan::{
-    self, Plan, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
+    self, Plan, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
     POLYMER_PROVER,
 };
-use crate::{funding, layerzero};
+use crate::{cctp, funding, layerzero};
 
 const FUND_RESERVE: &str = "fund_reserve";
 const INIT: &str = "init";
@@ -58,11 +58,12 @@ pub fn apply<C: Chain>(
     observe: &mut impl FnMut(&Step),
 ) -> Result<(), Error> {
     plan.verify_configs(&config::read(chain, &plan.release)?)?;
-    let prover_steps: [StepFn<C>; 5] = [
+    let prover_steps: [StepFn<C>; 6] = [
         fund_hyper_reserve,
         fund_layerzero_reserve,
         init_hyper,
         init_polymer,
+        init_cctp,
         init_aggregator,
     ];
 
@@ -166,6 +167,20 @@ fn init_polymer(chain: &mut impl Chain, plan: &Plan, deployer: &Keypair) -> Resu
     let instruction = polymer_init_instruction(&address, &deployer.pubkey(), whitelisted_emitters);
 
     init(chain, plan, deployer, POLYMER_PROVER, &live, |_| {
+        Ok(instruction)
+    })
+}
+
+fn init_cctp(chain: &mut impl Chain, plan: &Plan, deployer: &Keypair) -> Result<Step, Error> {
+    let address = plan_address(plan, CCTP_PROVER)?;
+    let live = Configs {
+        cctp_peers: config::cctp_peers(chain, &address)?,
+        ..Configs::default()
+    };
+    let instruction =
+        cctp::init_instruction(&address, &deployer.pubkey(), plan.inputs.cctp_peers.clone());
+
+    init(chain, plan, deployer, CCTP_PROVER, &live, |_| {
         Ok(instruction)
     })
 }
@@ -417,10 +432,11 @@ mod tests {
 
         let hyper = release_address(HYPER_PROVER);
         let polymer = release_address(POLYMER_PROVER);
+        let cctp = release_address(CCTP_PROVER);
         let aggregator = release_address(AGGREGATOR_PROVER);
         let hyper_reserve = pda(hyper_prover::state::PDA_PAYER_SEED, HYPER_PROVER);
         let layerzero_reserve = pda(layerzero_prover::state::PDA_PAYER_SEED, LAYERZERO_PROVER);
-        assert_eq!(chain.sent.len(), 11);
+        assert_eq!(chain.sent.len(), 12);
         assert_eq!(keys(&chain.sent[0]), vec![payer, hyper_reserve]);
         assert_eq!(keys(&chain.sent[1]), vec![payer, layerzero_reserve]);
         assert_eq!(chain.sent[2].program_id, hyper);
@@ -447,9 +463,21 @@ mod tests {
                 system
             ]
         );
-        assert_eq!(chain.sent[4].program_id, aggregator);
+        assert_eq!(chain.sent[4].program_id, cctp);
         assert_eq!(
             keys(&chain.sent[4]),
+            vec![
+                payer,
+                payer,
+                cctp,
+                program_data(CCTP_PROVER),
+                pda(cctp_prover::state::CONFIG_SEED, CCTP_PROVER),
+                system
+            ]
+        );
+        assert_eq!(chain.sent[5].program_id, aggregator);
+        assert_eq!(
+            keys(&chain.sent[5]),
             vec![
                 payer,
                 payer,
@@ -479,7 +507,7 @@ mod tests {
 
         applied(&mut chain, &plan, &deployer).unwrap();
 
-        let [init_path, set_path_config, create, extend, freeze, set_alt] = &chain.sent[5..] else {
+        let [init_path, set_path_config, create, extend, freeze, set_alt] = &chain.sent[6..] else {
             panic!("expected six LayerZero instructions after the prover inits");
         };
         assert!(chain
@@ -560,7 +588,7 @@ mod tests {
             result,
             Err(Error::LayerZero(layerzero::Error::StoreMissing { address })) if address == store
         ));
-        let init = &chain.sent[5];
+        let init = &chain.sent[6];
         assert_eq!(init.program_id, program);
         assert_eq!(
             keys(init),
@@ -586,6 +614,7 @@ mod tests {
                 (LAYERZERO_PROVER, FUND_RESERVE, true),
                 (HYPER_PROVER, INIT, true),
                 (POLYMER_PROVER, INIT, true),
+                (CCTP_PROVER, INIT, true),
                 (AGGREGATOR_PROVER, INIT, true),
                 (LAYERZERO_PROVER, INIT, true),
                 (LAYERZERO_PROVER, "init_path", true),
@@ -619,7 +648,7 @@ mod tests {
         let report = applied(&mut chain, &plan, &Keypair::new()).unwrap();
 
         assert!(report[..2].iter().all(|step| step.signature.is_none()));
-        assert_eq!(chain.sent.len(), 9);
+        assert_eq!(chain.sent.len(), 10);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 | Program | Address | Status | Actions |
 |---|---|---|---|
 | aggregator_prover | `4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi` | new | deploy, init, verify |
-| cctp_prover | `8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR` | new | deploy, verify |
+| cctp_prover | `8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR` | new | deploy, init, verify |
 | flash_fulfiller | `CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8` | new | deploy, verify |
 | hyper_prover | `GgBaCs3NCBuZN12kCJgAW63ydqohFkHEdfdEXBPzLHq` | partial | init, verify |
 | layerzero_prover | `EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm` | partial | init, verify |
@@ -28,5 +28,7 @@
   - send: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
   - receive: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
   - executor: 11111111111111111111111111111113 (max message size 10000)
+- cctp_prover peer domain 0: chain id 1, sender 0x000000000000000000000000abcdef0123456789abcdef0123456789abcdef01
+- cctp_prover peer domain 6: chain id 8453, sender 0x0000000000000000000000001111111111111111111111111111111111111111
 
-Plan hash: 795411f4026005e3e18d14ba2cdcc688b10731d596582380019173b7581b9be6
+Plan hash: 93af9a7c90d1c8164f6b4db66e8d8aa3260b573030ffdaa5478690b78812761a

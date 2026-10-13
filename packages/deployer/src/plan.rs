@@ -14,7 +14,7 @@ use crate::classify::{ProgramState, Status};
 use crate::config::{self, Configs};
 use crate::inputs::{EvmAddress, Inputs, LayerZeroPeer, RawInputs};
 use crate::layerzero_state::{Alt, Path};
-use crate::{layerzero, setup};
+use crate::{cctp, layerzero, setup};
 
 pub const HYPER_PROVER: &str = "hyper_prover";
 pub const LOCAL_PROVER: &str = "local_prover";
@@ -25,11 +25,12 @@ pub const CCTP_PROVER: &str = "cctp_prover";
 /// Mirrors `AGGREGATOR_MEMBERS` in `scripts/program-keypairs.mjs`; the order is the on-chain config order.
 pub const AGGREGATOR_MEMBERS: [&str; 4] =
     [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER, CCTP_PROVER];
-pub const PROGRAMS_WITH_INIT: [&str; 4] = [
+pub const PROGRAMS_WITH_INIT: [&str; 5] = [
     HYPER_PROVER,
     POLYMER_PROVER,
     AGGREGATOR_PROVER,
     LAYERZERO_PROVER,
+    CCTP_PROVER,
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -56,6 +57,8 @@ pub enum Error {
     ConfigMismatch(#[from] config::Mismatch),
     #[error(transparent)]
     LayerZero(#[from] layerzero::Error),
+    #[error(transparent)]
+    Cctp(#[from] cctp::Error),
     #[error("{program} is live (immutable) but has no config, so it can never be initialized; raise its salt in scripts/program-salts.json to redeploy it at a new address")]
     LiveWithoutConfig { program: &'static str },
     #[error("unknown cluster {value:?}, expected devnet or mainnet")]
@@ -179,6 +182,7 @@ impl Plan {
             &release.programs[LAYERZERO_PROVER].address,
             &inputs.layerzero_peers,
         )?;
+        cctp::check_transaction_size(&release.programs[CCTP_PROVER].address, &inputs.cctp_peers)?;
         let programs = release
             .programs
             .iter()
@@ -508,6 +512,7 @@ fn expected_configs(release: &Release, inputs: &Inputs) -> Result<Configs, Error
                 .collect::<Result<_, _>>()?,
         ),
         layerzero_peers: Some(inputs.layerzero_peers.iter().map(Into::into).collect()),
+        cctp_peers: Some(inputs.cctp_peers.clone()),
         layerzero_alt: None,
         layerzero_paths: inputs
             .layerzero_peers
@@ -592,6 +597,7 @@ fn init_values(inputs: &Inputs) -> String {
         hyper_senders,
         polymer_emitters,
         layerzero_peers,
+        cctp_peers,
         hyper_reserve_lamports,
         layerzero_reserve_lamports,
         compute_unit_price,
@@ -609,9 +615,19 @@ fn init_values(inputs: &Inputs) -> String {
         AGGREGATOR_MEMBERS.join(", "),
     );
 
-    layerzero_peers
+    let values = layerzero_peers
         .iter()
-        .fold(header, |values, peer| values + &peer_summary(peer))
+        .fold(header, |values, peer| values + &peer_summary(peer));
+
+    cctp_peers.iter().fold(values, |values, peer| {
+        values
+            + &format!(
+                "- {CCTP_PROVER} peer domain {}: chain id {}, sender 0x{}\n",
+                peer.domain,
+                peer.chain_id,
+                hex::encode(*peer.sender)
+            )
+    })
 }
 
 fn peer_summary(peer: &LayerZeroPeer) -> String {
@@ -670,6 +686,7 @@ struct CanonicalInputs {
     hyper_senders: Vec<String>,
     polymer_emitters: Vec<String>,
     layerzero_peers: Vec<CanonicalPeer>,
+    cctp_peers: Vec<String>,
     hyper_reserve_lamports: u64,
     layerzero_reserve_lamports: u64,
     compute_unit_price: u64,
@@ -734,6 +751,7 @@ impl From<&Inputs> for CanonicalInputs {
                 .map(ToString::to_string)
                 .collect(),
             layerzero_peers: inputs.layerzero_peers.iter().map(Into::into).collect(),
+            cctp_peers: config::cctp_peer_strings(&inputs.cctp_peers),
             hyper_reserve_lamports: inputs.hyper_reserve_lamports,
             layerzero_reserve_lamports: inputs.layerzero_reserve_lamports,
             compute_unit_price: inputs.compute_unit_price,
@@ -943,6 +961,9 @@ mod tests {
                 r#"{{"peers":[{},{}]}}"#,
                 peer_json(30184, VALID_ADDRESS),
                 peer_json(30101, OTHER_ADDRESS)
+            ),
+            cctp: format!(
+                r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{VALID_ADDRESS}"}},{{"domain":6,"chain_id":8453,"sender":"{OTHER_ADDRESS}"}}]}}"#
             ),
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "2000000".into(),
@@ -1168,6 +1189,12 @@ mod tests {
             ("executor", |fixture| {
                 fixture.raw.layerzero = fixture.raw.layerzero.replacen(EXECUTOR, OTHER_DVN, 1)
             }),
+            ("cctp peer chain id", |fixture| {
+                fixture.raw.cctp = fixture.raw.cctp.replacen("8453", "10", 1)
+            }),
+            ("cctp sender", |fixture| {
+                fixture.raw.cctp = fixture.raw.cctp.replacen(OTHER_ADDRESS, VALID_ADDRESS, 1)
+            }),
             ("hyper reserve", |fixture| {
                 fixture.raw.hyper_reserve_lamports = "1000001".into()
             }),
@@ -1247,14 +1274,7 @@ mod tests {
 
     #[test]
     fn live_program_without_config_fails_plan() {
-        [
-            HYPER_PROVER,
-            POLYMER_PROVER,
-            AGGREGATOR_PROVER,
-            LAYERZERO_PROVER,
-        ]
-        .into_iter()
-        .for_each(|program| {
+        PROGRAMS_WITH_INIT.into_iter().for_each(|program| {
             let mut live_without_config = fixture();
             live_without_config.state(program).status = Status::Live;
 
@@ -1346,6 +1366,16 @@ mod tests {
                 Configs {
                     layerzero_peers: matching.layerzero_peers.clone().map(|mut peers| {
                         peers[0].chain_id += 1;
+                        peers
+                    }),
+                    ..matching.clone()
+                },
+            ),
+            (
+                CCTP_PROVER,
+                Configs {
+                    cctp_peers: matching.cctp_peers.clone().map(|mut peers| {
+                        peers[0].sender = [9; 32].into();
                         peers
                     }),
                     ..matching

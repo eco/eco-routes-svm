@@ -697,6 +697,26 @@ mod tests {
     }
 
     #[test]
+    fn finalize_refuses_cctp_prover_before_its_init_alone_or_with_all() {
+        let uninitialized = |selected| {
+            build(Operation::Finalize, selected, |observed| {
+                observed.live_configs.cctp_peers = None;
+            })
+        };
+
+        ["cctp_prover", "all"].into_iter().for_each(|selected| {
+            assert!(
+                matches!(
+                    uninitialized(selected),
+                    Err(Error::NotInitialized { program }) if program == CCTP_PROVER
+                ),
+                "{selected}"
+            );
+        });
+        assert!(build(Operation::Finalize, "cctp_prover", |_| {}).is_ok());
+    }
+
+    #[test]
     fn finalize_refuses_layerzero_without_its_whole_setup() {
         let incomplete: [fn(&mut Configs); 4] = [
             |configs| configs.layerzero_alt = None,

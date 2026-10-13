@@ -78,6 +78,7 @@ fn plan_args(directory: &Path, deployer: Pubkey) -> PlanArgs {
             layerzero: format!(
                 r#"{{"peers":[{{"eid":30184,"address":"{SENDER}","chain_id":30184,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
             ),
+            cctp: format!(r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{SENDER}"}}]}}"#),
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "1000000000".into(),
             compute_unit_price: "0".into(),
