@@ -1,4 +1,4 @@
-use anchor_lang::{InstructionData, ToAccountMetas};
+use anchor_lang::{InstructionData, Space, ToAccountMetas};
 use cctp_prover::cctp::{self, HandleReceiveMessageParams};
 use cctp_prover::instructions::CctpProverError;
 use cctp_prover::state::{pda_payer_pda, Config, ProofAccount};
@@ -6,6 +6,7 @@ use eco_svm_std::prover::{IntentHashClaimant, IntentProven, Proof, ProofData};
 use eco_svm_std::Bytes32;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
@@ -215,25 +216,47 @@ fn empty_pda_payer_fails_retryably() {
         .inbound(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
 
     assert!(context.cctp_prover().receive(&inbound, &proofs).is_err());
+    assert!(recorded(&context, 22).is_none());
+    let nonce = cctp::nonce(&inbound.message).unwrap();
+    assert!(context
+        .get_account(&cctp::used_nonce_pda(&nonce).0)
+        .is_none());
 
     context.airdrop(&reserve, common::sol_amount(1.0)).unwrap();
     context.cctp_prover().receive(&inbound, &proofs).unwrap();
     assert!(recorded(&context, 22).is_some());
 }
 
-/// Review Focus 1: a griefer's lamport transfer to the Proof PDA cannot block delivery.
+/// Review Focus 1: a griefer's lamport transfer to the Proof PDA cannot block
+/// delivery, below the rent minimum (top-up branch) or at/above it (no top-up).
 #[test]
 fn receive_creates_proof_at_prefunded_pda() {
-    let mut context = initialized();
-    let data = ProofData::new(BASE_CHAIN_ID, vec![pair(23, 33)]);
-    context.airdrop(&proof_pdas(&data)[0], 1_000_000).unwrap();
+    let rent_minimum = common::Context::default()
+        .get_sysvar::<Rent>()
+        .minimum_balance(8 + ProofAccount::INIT_SPACE);
 
-    context
-        .cctp_prover()
-        .deliver(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data)
-        .unwrap();
+    for (hash, claimant, prefund) in [
+        (23, 33, 1_000_000),
+        (26, 36, rent_minimum),
+        (27, 37, rent_minimum + 1_000_000),
+    ] {
+        let mut context = initialized();
+        let data = ProofData::new(BASE_CHAIN_ID, vec![pair(hash, claimant)]);
+        context.airdrop(&proof_pdas(&data)[0], prefund).unwrap();
 
-    assert!(recorded(&context, 23).is_some());
+        context
+            .cctp_prover()
+            .deliver(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data)
+            .unwrap();
+
+        assert_eq!(
+            recorded(&context, hash),
+            Some(Proof::new(
+                BASE_CHAIN_ID,
+                Pubkey::new_from_array([claimant; 32])
+            ))
+        );
+    }
 }
 
 #[test]
@@ -246,17 +269,33 @@ fn replayed_message_is_rejected_by_transmitter() {
         .inbound(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
     context.cctp_prover().receive(&inbound, &proofs).unwrap();
 
-    assert!(context.cctp_prover().receive(&inbound, &proofs).is_err());
+    let replay = context
+        .cctp_prover()
+        .receive(&inbound, &proofs)
+        .unwrap_err();
+
+    assert!(
+        replay
+            .meta
+            .logs
+            .iter()
+            .any(|log| log.contains("already in use")),
+        "{:?}",
+        replay.meta.logs
+    );
 }
 
-/// Without the transmitter's authority signature nothing is recorded.
-#[test]
-fn direct_handler_call_is_rejected() {
-    let mut context = initialized();
-    let impostor = Keypair::new();
-    let data = ProofData::new(BASE_CHAIN_ID, vec![pair(25, 35)]);
+/// A direct `handle_receive_finalized_message` call: `authority` is the
+/// account in the authority slot, `signer` signs it when it is a keypair.
+fn direct_call(
+    context: &mut common::Context,
+    authority: Pubkey,
+    signer: Option<&Keypair>,
+    authority_bump: u8,
+    data: &ProofData,
+) -> common::TransactionResult {
     let mut accounts = cctp_prover::accounts::HandleReceiveMessage {
-        authority_pda: impostor.pubkey(),
+        authority_pda: authority,
         config: Config::pda().0,
         pda_payer: pda_payer_pda().0,
         system_program: anchor_lang::system_program::ID,
@@ -264,9 +303,9 @@ fn direct_handler_call_is_rejected() {
         program: cctp_prover::ID,
     }
     .to_account_metas(None);
-    accounts[0].is_signer = true;
+    accounts[0].is_signer = signer.is_some();
     accounts.extend(
-        proof_pdas(&data)
+        proof_pdas(data)
             .into_iter()
             .map(|proof| AccountMeta::new(proof, false)),
     );
@@ -278,16 +317,58 @@ fn direct_handler_call_is_rejected() {
                 remote_domain: BASE_DOMAIN,
                 sender: Pubkey::new_from_array(evm_sender(BASE_SENDER)),
                 finality_threshold_executed: 2000,
-                message_body: data.to_bytes(),
-                authority_bump: cctp::authority_pda(&cctp_prover::ID).1,
+                message_body: data.clone().to_bytes(),
+                authority_bump,
             },
         }
         .data(),
     };
 
-    let result = context.cctp_prover().send(vec![ix], &[&impostor]);
+    context
+        .cctp_prover()
+        .send(vec![ix], &signer.into_iter().collect::<Vec<_>>())
+}
 
-    assert!(result.is_err_and(common::is_error(
+/// Without the transmitter's authority signature nothing is recorded.
+#[test]
+fn direct_handler_call_is_rejected() {
+    let mut context = initialized();
+    let impostor = Keypair::new();
+    let data = ProofData::new(BASE_CHAIN_ID, vec![pair(25, 35)]);
+    let (real, bump) = cctp::authority_pda(&cctp_prover::ID);
+
+    let signed_impostor = direct_call(
+        &mut context,
+        impostor.pubkey(),
+        Some(&impostor),
+        bump,
+        &data,
+    );
+    assert!(signed_impostor.is_err_and(common::is_error(
+        CctpProverError::InvalidTransmitterAuthority
+    )));
+
+    // The real PDA cannot sign outside the transmitter's CPI.
+    let unsigned_real = direct_call(&mut context, real, None, bump, &data);
+    assert!(unsigned_real.is_err_and(common::is_error(
+        anchor_lang::error::ErrorCode::AccountNotSigner
+    )));
+
+    // A signer under a non-canonical bump no more matches the derived address.
+    let non_canonical = (0..=u8::MAX)
+        .find(|candidate| {
+            *candidate != bump
+                && cctp::authority_pda_with_bump(&cctp_prover::ID, *candidate).is_some()
+        })
+        .unwrap();
+    let wrong_bump = direct_call(
+        &mut context,
+        impostor.pubkey(),
+        Some(&impostor),
+        non_canonical,
+        &data,
+    );
+    assert!(wrong_bump.is_err_and(common::is_error(
         CctpProverError::InvalidTransmitterAuthority
     )));
     assert!(recorded(&context, 25).is_none());
