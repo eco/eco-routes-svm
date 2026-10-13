@@ -7,7 +7,7 @@ use eco_svm_std::{Bytes32, CANCELLED};
 use hyper_prover::state::pda_payer_pda;
 use portal::events::IntentWithdrawn;
 use portal::instructions::PortalError;
-use portal::state::{self, proof_closer_pda};
+use portal::state::{self};
 use portal::types::{intent_hash, Reward, Route, TokenAmount};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
@@ -110,7 +110,6 @@ fn withdraw_intent_native_and_token_success() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -126,7 +125,7 @@ fn withdraw_intent_native_and_token_success() {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &claimant), token.amount);
     });
-    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&proof).is_some());
 }
 
 #[test]
@@ -174,7 +173,6 @@ fn withdraw_intent_native_and_token_2022_success() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -190,7 +188,7 @@ fn withdraw_intent_native_and_token_2022_success() {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &claimant), token.amount);
     });
-    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&proof).is_some());
 }
 
 #[test]
@@ -242,7 +240,6 @@ fn withdraw_intent_over_funded_native_sub_rent_dust_success() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -276,7 +273,6 @@ fn withdraw_intent_invalid_vault_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         vec![],
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -327,7 +323,6 @@ fn withdraw_intent_duplicate_mint_accounts_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -354,12 +349,24 @@ fn withdraw_intent_invalid_proof_fail() {
         claimant,
         wrong_proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
-        vec![],
+        reward.tokens.iter().flat_map(|token| {
+            [
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &vault,
+                        &token.token,
+                        &anchor_spl::token::ID,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        }),
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidProof
+        eco_svm_std::prover::ProverError::InvalidProof
     )));
 }
 
@@ -402,7 +409,6 @@ fn withdraw_intent_not_fulfilled_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -432,8 +438,20 @@ fn withdraw_intent_wrong_claimant_fail() {
         wrong_claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
-        vec![],
+        reward.tokens.iter().flat_map(|token| {
+            [
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &vault,
+                        &token.token,
+                        &anchor_spl::token::ID,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        }),
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
     assert!(result.is_err_and(common::is_error(
@@ -466,8 +484,20 @@ fn withdraw_intent_wrong_destination_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
-        vec![],
+        reward.tokens.iter().flat_map(|token| {
+            [
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &vault,
+                        &token.token,
+                        &anchor_spl::token::ID,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        }),
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
     assert!(result.is_err_and(common::is_error(
@@ -498,7 +528,6 @@ fn withdraw_intent_invalid_token_transfer_accounts() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         vec![],
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -555,7 +584,6 @@ fn withdraw_intent_invalid_vault_ata_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -611,7 +639,6 @@ fn withdraw_intent_invalid_claimant_token_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -673,7 +700,6 @@ fn withdraw_intent_claimant_signed_non_ata_destination_success() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
         vec![&claimant_keypair],
@@ -741,7 +767,6 @@ fn withdraw_intent_non_ata_claimant_token_2022_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -789,7 +814,6 @@ fn withdraw_intent_non_ata_claimant_token_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -844,7 +868,6 @@ fn withdraw_intent_already_withdrawn_fail() {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer_pda(&reward.prover).0,
             token_accounts.clone(),
             iter::once(AccountMeta::new(pda_payer_pda().0, false)),
         )
@@ -859,79 +882,14 @@ fn withdraw_intent_already_withdrawn_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::IntentNotFulfilled
+        portal::instructions::PortalError::IntentAlreadyWithdrawn
     )));
 }
 
-/// The binding this fix introduces: a **well-formed** closer scoped to a
-/// different prover must be rejected. The random-key case above was rejected by
-/// the pre-fix code just as readily, so it does not exercise the scoping.
-#[test]
-fn withdraw_intent_other_provers_proof_closer_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let (destination, _route, reward) = &intent;
-    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
-    let claimant = Pubkey::new_unique();
-    let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &reward.prover).0;
-    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
-
-    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
-
-    // `reward.prover` is hyper-prover, so local-prover's closer is the wrong scope
-    assert_eq!(reward.prover, hyper_prover::ID);
-    let result = ctx.portal().withdraw_intent(
-        *destination,
-        reward.clone(),
-        vault,
-        route_hash,
-        claimant,
-        proof,
-        withdrawn_marker,
-        proof_closer_pda(&local_prover::ID).0,
-        vec![],
-        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
-    );
-    assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidProofCloser
-    )));
-}
-
-#[test]
-fn withdraw_intent_invalid_proof_closer_fail() {
-    let (mut ctx, intent, route_hash) = setup(false);
-    let (destination, _route, reward) = &intent;
-    let intent_hash = intent_hash(*destination, &route_hash, &reward.hash());
-    let claimant = Pubkey::new_unique();
-    let vault = state::vault_pda(&intent_hash).0;
-    let proof = Proof::pda(&intent_hash, &reward.prover).0;
-    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
-
-    ctx.set_proof(proof, Proof::new(*destination, claimant), hyper_prover::ID);
-
-    let result = ctx.portal().withdraw_intent(
-        *destination,
-        reward.clone(),
-        vault,
-        route_hash,
-        claimant,
-        proof,
-        withdrawn_marker,
-        Pubkey::new_unique(),
-        vec![],
-        iter::once(AccountMeta::new(pda_payer_pda().0, false)),
-    );
-    assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidProofCloser
-    )));
-}
-
-// `Reward.tokens` may carry several entries for the same mint: the account layout
 /// Duplicate reward mints aggregate: the account layout is one triple per unique
 /// mint, and each mint pays out its aggregated total.
 ///
@@ -1036,7 +994,6 @@ fn duplicate_reward_mints_case(is_token_2022: bool, vault_surplus: u64, funded: 
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
@@ -1048,12 +1005,10 @@ fn duplicate_reward_mints_case(is_token_2022: bool, vault_surplus: u64, funded: 
     );
     assert_eq!(ctx.token_balance_ata(&other_mint, &claimant), 500_000);
 
-    // the split index decides the tail handed to `close_proof`, so an off-by-a-triple
-    // split would corrupt it — assert the native leg and the closure too
     assert!(vault_native > 0);
     assert_eq!(ctx.balance(&claimant), reward.native_amount);
     assert_eq!(ctx.balance(&vault), 0);
-    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&proof).is_some());
 
     (
         ctx.token_balance_ata(&duplicate_mint, &claimant),
@@ -1061,9 +1016,6 @@ fn duplicate_reward_mints_case(is_token_2022: bool, vault_surplus: u64, funded: 
     )
 }
 
-/// A legacy client sending one triple per **raw** reward entry must fail closed
-/// rather than mis-slice: the surplus triple falls into the tail that portal
-/// forwards to `close_proof`, where it is rejected positionally.
 #[test]
 fn withdraw_intent_duplicate_reward_mints_raw_layout_fail() {
     let mut ctx = common::Context::default();
@@ -1156,14 +1108,11 @@ fn withdraw_intent_duplicate_reward_mints_raw_layout_fail() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         token_accounts,
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
-    // the surplus triple lands in the tail portal forwards to `close_proof`,
-    // where hyper-prover's address-pinned `pda_payer` rejects it
     assert!(result.is_err_and(common::is_error(
-        hyper_prover::instructions::HyperProverError::InvalidPdaPayer
+        eco_svm_std::prover::ProverError::InvalidProof
     )));
 }
 
@@ -1222,12 +1171,24 @@ fn withdraw_intent_cancelled_fail() {
         cancelled,
         proof,
         state::WithdrawnMarker::pda(&intent_hash).0,
-        proof_closer_pda(&reward.prover).0,
-        vec![],
+        reward.tokens.iter().flat_map(|token| {
+            [
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &vault,
+                        &token.token,
+                        &anchor_spl::token::ID,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        }),
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
 
-    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert!(result.is_err_and(common::is_error(PortalError::IntentNotFulfilled)));
     assert_eq!(ctx.balance(&cancelled), 0);
     assert_eq!(ctx.balance(&vault), vault_balance);
     assert!(ctx.get_account(&proof).is_some());
@@ -1258,12 +1219,24 @@ fn withdraw_intent_cancelled_on_wrong_destination_fail() {
         cancelled,
         proof,
         state::WithdrawnMarker::pda(&intent_hash).0,
-        proof_closer_pda(&reward.prover).0,
-        vec![],
+        reward.tokens.iter().flat_map(|token| {
+            [
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        &vault,
+                        &token.token,
+                        &anchor_spl::token::ID,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(Pubkey::new_unique(), false),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        }),
         iter::once(AccountMeta::new(pda_payer_pda().0, false)),
     );
 
-    assert!(result.is_err_and(common::is_error(PortalError::IntentCancelled)));
+    assert!(result.is_err_and(common::is_error(PortalError::IntentNotFulfilled)));
     assert_eq!(ctx.balance(&cancelled), 0);
     assert_eq!(ctx.balance(&vault), vault_balance);
     assert!(ctx.get_account(&proof).is_some());

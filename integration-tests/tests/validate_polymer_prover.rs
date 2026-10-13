@@ -12,7 +12,7 @@ use polymer_prover::instructions::{
 use polymer_prover::polymer;
 use polymer_prover::state::{Config, ProofAccount};
 use portal::events::IntentWithdrawn;
-use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
+use portal::state::{vault_pda, WithdrawnMarker};
 use portal::types::{intent_hash, Reward};
 use rand::random;
 use solana_packet::PACKET_DATA_SIZE;
@@ -551,12 +551,11 @@ fn validate_withdraw_success() {
         claimant,
         proof,
         WithdrawnMarker::pda(&hash).0,
-        proof_closer_pda(&polymer_prover::ID).0,
         vec![],
         iter::once(AccountMeta::new(payer, true)),
     );
     assert!(result.is_ok_and(common::contains_event(IntentWithdrawn::new(hash, claimant))));
-    assert!(fixture.ctx.get_account(&proof).is_none());
+    assert!(fixture.ctx.get_account(&proof).is_some());
 }
 
 #[test]

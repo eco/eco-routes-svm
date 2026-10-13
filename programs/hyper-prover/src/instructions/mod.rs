@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 mod close_proof;
+mod get_proof;
 mod handle;
 mod handle_account_metas;
 mod init;
@@ -9,6 +10,7 @@ mod ism_account_metas;
 mod prove;
 
 pub use close_proof::*;
+pub use get_proof::*;
 pub use handle::*;
 pub use handle_account_metas::*;
 pub use init::*;

@@ -1,20 +1,21 @@
 use anchor_lang::prelude::*;
+use eco_svm_std::prover::{CloseProofArgs, Proof};
 
 use crate::instructions::PolymerProverError;
 use crate::state::ProofAccount;
 
 #[derive(Accounts)]
+#[instruction(args: CloseProofArgs)]
 pub struct CloseProof<'info> {
-    #[account(address = portal::state::proof_closer_pda(&crate::ID).0 @ PolymerProverError::InvalidPortalProofCloser)]
+    #[account(address = portal::state::proof_closer_pda(&args.intent_hash).0 @ PolymerProverError::InvalidPortalProofCloser)]
     pub portal_proof_closer: Signer<'info>,
-    #[account(mut)]
+    #[account(mut, address = Proof::pda(&args.intent_hash, &crate::ID).0 @ PolymerProverError::InvalidProof)]
     pub proof: Account<'info, ProofAccount>,
     #[account(mut)]
     pub payer: Signer<'info>,
 }
 
-/// Closes the proof to `payer`, the account paying for Portal's `withdraw`.
-pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
+pub fn close_proof(ctx: Context<CloseProof>, _args: CloseProofArgs) -> Result<()> {
     ctx.accounts
         .proof
         .close(ctx.accounts.payer.to_account_info())

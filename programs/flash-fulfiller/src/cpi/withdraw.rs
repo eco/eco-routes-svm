@@ -6,9 +6,6 @@ use portal::instructions::WithdrawArgs;
 use portal::types::TokenTransferAccounts;
 
 /// CPIs `portal.withdraw` to transfer the reward to `claimant`.
-///
-/// Trailing remaining accounts after the reward triples include `payer` as a
-/// signer, which portal forwards into its `close_proof` CPI on the prover.
 #[allow(clippy::too_many_arguments)]
 pub fn withdraw_intent<'info>(
     portal_program: &AccountInfo<'info>,
@@ -16,7 +13,6 @@ pub fn withdraw_intent<'info>(
     claimant: &AccountInfo<'info>,
     vault: &AccountInfo<'info>,
     proof: &AccountInfo<'info>,
-    proof_closer: &AccountInfo<'info>,
     prover: &AccountInfo<'info>,
     withdrawn_marker: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
@@ -30,7 +26,6 @@ pub fn withdraw_intent<'info>(
         claimant,
         vault,
         proof,
-        proof_closer,
         prover,
         withdrawn_marker,
         token_program,
@@ -44,7 +39,6 @@ pub fn withdraw_intent<'info>(
         claimant,
         vault,
         proof,
-        proof_closer,
         prover,
         withdrawn_marker,
         token_program,
@@ -68,7 +62,6 @@ fn build_withdraw_metas<'info>(
     claimant: &AccountInfo<'info>,
     vault: &AccountInfo<'info>,
     proof: &AccountInfo<'info>,
-    proof_closer: &AccountInfo<'info>,
     prover: &AccountInfo<'info>,
     withdrawn_marker: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
@@ -76,13 +69,11 @@ fn build_withdraw_metas<'info>(
     system_program: &AccountInfo<'info>,
     reward_transfers: &[TokenTransferAccounts<'info>],
 ) -> Vec<AccountMeta> {
-    let mut accounts = Vec::with_capacity(11 + 3 * reward_transfers.len());
+    let mut accounts = Vec::with_capacity(9 + 3 * reward_transfers.len());
 
     accounts.push(AccountMeta::new(payer.key(), true));
     accounts.push(AccountMeta::new(claimant.key(), false));
     accounts.push(AccountMeta::new(vault.key(), false));
-    accounts.push(AccountMeta::new(proof.key(), false));
-    accounts.push(AccountMeta::new_readonly(proof_closer.key(), false));
     accounts.push(AccountMeta::new_readonly(prover.key(), false));
     accounts.push(AccountMeta::new(withdrawn_marker.key(), false));
     accounts.push(AccountMeta::new_readonly(token_program.key(), false));
@@ -93,10 +84,7 @@ fn build_withdraw_metas<'info>(
         accounts.push(AccountMeta::new(transfer.to.key(), false));
         accounts.push(AccountMeta::new_readonly(transfer.mint.key(), false));
     });
-    // Portal forwards withdraw's trailing remaining_accounts to
-    // local-prover's close_proof CPI. close_proof expects `payer: Signer` at
-    // the tail; pass our payer (same as the main `payer` above).
-    accounts.push(AccountMeta::new(payer.key(), true));
+    accounts.push(AccountMeta::new_readonly(proof.key(), false));
 
     accounts
 }
@@ -108,7 +96,6 @@ fn build_withdraw_infos<'info>(
     claimant: &AccountInfo<'info>,
     vault: &AccountInfo<'info>,
     proof: &AccountInfo<'info>,
-    proof_closer: &AccountInfo<'info>,
     prover: &AccountInfo<'info>,
     withdrawn_marker: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
@@ -116,13 +103,11 @@ fn build_withdraw_infos<'info>(
     system_program: &AccountInfo<'info>,
     reward_transfers: &[TokenTransferAccounts<'info>],
 ) -> Vec<AccountInfo<'info>> {
-    let mut infos = Vec::with_capacity(12 + 3 * reward_transfers.len());
+    let mut infos = Vec::with_capacity(10 + 3 * reward_transfers.len());
 
     infos.push(payer.to_account_info());
     infos.push(claimant.to_account_info());
     infos.push(vault.to_account_info());
-    infos.push(proof.to_account_info());
-    infos.push(proof_closer.to_account_info());
     infos.push(prover.to_account_info());
     infos.push(withdrawn_marker.to_account_info());
     infos.push(token_program.to_account_info());
@@ -135,7 +120,7 @@ fn build_withdraw_infos<'info>(
         infos.push(transfer.mint.to_account_info());
     });
 
-    infos.push(payer.to_account_info());
+    infos.push(proof.to_account_info());
     infos.push(portal_program.to_account_info());
 
     infos

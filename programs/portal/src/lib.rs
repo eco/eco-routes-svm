@@ -22,6 +22,13 @@ pub mod portal {
         fund_intent(ctx, args)
     }
 
+    pub fn close_proof<'info>(
+        ctx: Context<'info, CloseProof<'info>>,
+        args: CloseProofArgs,
+    ) -> Result<()> {
+        instructions::close_proof(ctx, args)
+    }
+
     pub fn refund<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs) -> Result<()> {
         refund_intent(ctx, args)
     }

@@ -7,7 +7,7 @@ use eco_svm_std::{Bytes32, CANCELLED, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
 use hyper_prover::state::{pda_payer_pda, Config, ProofAccount};
 use portal::events::{IntentRefunded, IntentWithdrawn};
-use portal::state::{proof_closer_pda, vault_pda, WithdrawnMarker};
+use portal::state::{vault_pda, WithdrawnMarker};
 use portal::types::{intent_hash, Reward};
 use rand::random;
 use solana_sdk::pubkey::Pubkey;
@@ -204,7 +204,6 @@ fn handle_withdraw_success() {
         claimant,
         proof,
         withdrawn_marker,
-        proof_closer_pda(&reward.prover).0,
         vec![],
         iter::once(AccountMeta::new(pda_payer_pda, false)),
     );
@@ -214,6 +213,18 @@ fn handle_withdraw_success() {
             claimant,
         )))
     );
+    assert!(ctx.get_account(&proof).is_some());
+    ctx.portal()
+        .close_proof(
+            destination,
+            route.hash(),
+            reward,
+            vec![
+                AccountMeta::new(proof, false),
+                AccountMeta::new(pda_payer_pda, false),
+            ],
+        )
+        .unwrap();
     assert!(ctx.get_account(&proof).is_none());
     assert_eq!(pda_payer_balance, ctx.balance(&pda_payer_pda));
 }
@@ -841,7 +852,7 @@ fn handle_cancellation_enables_refund_success() {
     );
     assert!(ctx.now() < reward.deadline);
 
-    let result = ctx.portal().refund_intent_with_close_proof(
+    let result = ctx.portal().refund_cancelled_intent(
         destination.into(),
         reward.clone(),
         vault,
@@ -858,6 +869,9 @@ fn handle_cancellation_enables_refund_success() {
         reward.creator,
     ))));
     assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
-    assert!(ctx.get_account(&proof).is_none());
-    assert_eq!(ctx.balance(&pda_payer), pda_payer_balance);
+    assert!(ctx.get_account(&proof).is_some());
+    assert_eq!(
+        ctx.balance(&pda_payer) + ctx.balance(&proof),
+        pda_payer_balance
+    );
 }

@@ -56,7 +56,7 @@ fn malicious_prover_cannot_mint_proof_via_portal_dispatcher() {
 
     // Accounts the malicious intermediary needs to re-CPI the real local-prover,
     // supplied as the `prove_accounts` tail (everything after the fulfill marker).
-    // Order matches `eco_svm_std::prover::prove`'s fixed layout, which
+    // Order matches `eco_svm_std::prover::cpi::prove`'s fixed layout, which
     // `malicious-prover` mirrors: after the inherited dispatcher signer come
     // payer, system_program, event_authority and the callee, then a tail of the
     // real local-prover and the proofs to mint.

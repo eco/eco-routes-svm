@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 pub mod account;
+pub mod claimant;
 pub mod prover;
 
 #[cfg(feature = "mainnet")]

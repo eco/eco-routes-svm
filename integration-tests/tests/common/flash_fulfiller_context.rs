@@ -9,7 +9,7 @@ use flash_fulfiller::instructions::{
     FlashFulfillIntent, SetFlashFulfillIntentArgs,
 };
 use flash_fulfiller::state::{flash_vault_pda, prove_authority_pda, FlashFulfillIntentAccount};
-use portal::state::{executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker};
+use portal::state::{executor_pda, vault_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{intent_hash, Reward, Route};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
@@ -309,7 +309,6 @@ impl FlashFulfiller<'_> {
             proof: Proof::pda(&intent_hash_value, &local_prover::ID).0,
             intent_vault: vault_pda(&intent_hash_value).0,
             withdrawn_marker: WithdrawnMarker::pda(&intent_hash_value).0,
-            proof_closer: proof_closer_pda(&local_prover::ID).0,
             executor: executor_pda().0,
             fulfill_marker: FulfillMarker::pda(&intent_hash_value).0,
             portal_program,
@@ -382,7 +381,6 @@ impl FlashFulfiller<'_> {
             proof: Proof::pda(&intent_hash_value, &local_prover::ID).0,
             intent_vault: vault_pda(&intent_hash_value).0,
             withdrawn_marker: WithdrawnMarker::pda(&intent_hash_value).0,
-            proof_closer: proof_closer_pda(&local_prover::ID).0,
             executor: executor_pda().0,
             fulfill_marker: FulfillMarker::pda(&intent_hash_value).0,
             portal_program: portal::ID,

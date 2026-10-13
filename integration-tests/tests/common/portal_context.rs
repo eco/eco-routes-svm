@@ -14,7 +14,9 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{hyperlane_context, Context, TransactionResult, COMPUTE_UNIT_LIMIT};
+use crate::common::{
+    hyperlane_context, Context, ProverQuery, TransactionResult, COMPUTE_UNIT_LIMIT,
+};
 
 #[derive(Deref, DerefMut)]
 pub struct Portal<'a>(&'a mut Context);
@@ -147,8 +149,6 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
-    /// Refunds without the optional `proof_closer` and `prover` accounts,
-    /// which only a proven cancellation needs.
     #[allow(clippy::too_many_arguments)]
     pub fn refund_intent(
         &mut self,
@@ -163,24 +163,20 @@ impl Portal<'_> {
     ) -> TransactionResult {
         self.refund_intent_with_accounts(
             destination,
-            reward,
+            reward.clone(),
             vault,
             route_hash,
             proof,
             withdrawn_marker,
             creator,
-            None,
-            None,
+            Some(reward.prover),
             token_transfer_accounts,
             vec![],
         )
     }
 
-    /// Passes the intent's `proof_closer` and `prover`; `close_proof_accounts`
-    /// is the tail forwarded to the prover's `close_proof` on the cancellation
-    /// path.
     #[allow(clippy::too_many_arguments)]
-    pub fn refund_intent_with_close_proof(
+    pub fn refund_cancelled_intent(
         &mut self,
         destination: u64,
         reward: Reward,
@@ -190,7 +186,7 @@ impl Portal<'_> {
         withdrawn_marker: Pubkey,
         creator: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        close_proof_accounts: Vec<AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         let prover = reward.prover;
 
@@ -202,10 +198,9 @@ impl Portal<'_> {
             proof,
             withdrawn_marker,
             creator,
-            Some(proof_closer_pda(&prover).0),
             Some(prover),
             token_transfer_accounts,
-            close_proof_accounts,
+            prover_accounts,
         )
     }
 
@@ -219,10 +214,9 @@ impl Portal<'_> {
         proof: Pubkey,
         withdrawn_marker: Pubkey,
         creator: Pubkey,
-        proof_closer: Option<Pubkey>,
         prover: Option<Pubkey>,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        close_proof_accounts: Vec<AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         let instruction = self.refund_intent_instruction(
             destination,
@@ -232,10 +226,9 @@ impl Portal<'_> {
             proof,
             withdrawn_marker,
             creator,
-            proof_closer,
             prover,
             token_transfer_accounts,
-            close_proof_accounts,
+            prover_accounts,
         );
 
         let transaction = Transaction::new(
@@ -265,23 +258,38 @@ impl Portal<'_> {
         proof: Pubkey,
         withdrawn_marker: Pubkey,
         creator: Pubkey,
-        proof_closer: Option<Pubkey>,
         prover: Option<Pubkey>,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        close_proof_accounts: Vec<AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
     ) -> Instruction {
+        let ProverQuery {
+            accounts: prover_accounts,
+            data: prover_data,
+        } = prover_accounts.into();
+        let prover_accounts = if self
+            .get_account(&withdrawn_marker)
+            .is_some_and(|account| !account.data.is_empty())
+            || !self
+                .get_account(&reward.prover)
+                .is_some_and(|account| account.executable)
+        {
+            vec![]
+        } else {
+            std::iter::once(AccountMeta::new_readonly(proof, false))
+                .chain(prover_accounts)
+                .collect()
+        };
         let args = portal::instructions::RefundArgs {
             destination,
             route_hash,
             reward,
-            close_proof_account_count: close_proof_accounts.len().try_into().unwrap(),
+            prover_data,
+            prover_account_count: prover_accounts.len().try_into().unwrap(),
         };
         let accounts: Vec<_> = portal::accounts::Refund {
             payer: self.payer.pubkey(),
             creator,
             vault,
-            proof,
-            proof_closer,
             prover,
             withdrawn_marker,
             token_program: anchor_spl::token::ID,
@@ -291,7 +299,7 @@ impl Portal<'_> {
         .to_account_metas(None)
         .into_iter()
         .chain(token_transfer_accounts)
-        .chain(close_proof_accounts)
+        .chain(prover_accounts)
         .collect();
 
         Instruction {
@@ -311,9 +319,8 @@ impl Portal<'_> {
         claimant: Pubkey,
         proof: Pubkey,
         withdrawn_marker: Pubkey,
-        proof_closer: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         self.withdraw_intent_with_signers(
             destination,
@@ -323,7 +330,6 @@ impl Portal<'_> {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer,
             token_transfer_accounts,
             remaining_accounts,
             vec![],
@@ -343,13 +349,17 @@ impl Portal<'_> {
         claimant: Pubkey,
         proof: Pubkey,
         withdrawn_marker: Pubkey,
-        proof_closer: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl Into<ProverQuery>,
         signers: Vec<&Keypair>,
     ) -> TransactionResult {
         let prover = reward.prover;
+        let ProverQuery {
+            accounts: remaining_accounts,
+            data: prover_data,
+        } = remaining_accounts.into();
         let args = portal::instructions::WithdrawArgs {
+            prover_data,
             destination,
             route_hash,
             reward,
@@ -359,8 +369,6 @@ impl Portal<'_> {
             payer: self.payer.pubkey(),
             claimant,
             vault,
-            proof,
-            proof_closer,
             prover,
             withdrawn_marker,
             token_program: anchor_spl::token::ID,
@@ -370,6 +378,7 @@ impl Portal<'_> {
         .to_account_metas(None)
         .into_iter()
         .chain(token_transfer_accounts)
+        .chain(std::iter::once(AccountMeta::new_readonly(proof, false)))
         .chain(remaining_accounts)
         .map(
             |meta| match signers.iter().any(|s| s.pubkey() == meta.pubkey) {
@@ -832,6 +841,56 @@ impl Portal<'_> {
             self.svm.latest_blockhash(),
         );
 
+        self.send_transaction(transaction)
+    }
+    pub fn close_proof_instruction(
+        &self,
+        destination: u64,
+        route_hash: Bytes32,
+        reward: Reward,
+        accounts: impl Into<ProverQuery>,
+    ) -> Instruction {
+        let intent_hash = portal::types::intent_hash(destination, &route_hash, &reward.hash());
+        let ProverQuery {
+            accounts,
+            data: prover_data,
+        } = accounts.into();
+        Instruction {
+            program_id: portal::ID,
+            accounts: portal::accounts::CloseProof {
+                withdrawn_marker: portal::state::WithdrawnMarker::pda(&intent_hash).0,
+                prover: reward.prover,
+                proof_closer: proof_closer_pda(&intent_hash).0,
+            }
+            .to_account_metas(None)
+            .into_iter()
+            .chain(accounts)
+            .collect(),
+            data: portal::instruction::CloseProof {
+                args: portal::instructions::CloseProofArgs {
+                    prover_data,
+                    destination,
+                    route_hash,
+                    reward,
+                },
+            }
+            .data(),
+        }
+    }
+
+    pub fn close_proof(
+        &mut self,
+        destination: u64,
+        route_hash: Bytes32,
+        reward: Reward,
+        accounts: impl Into<ProverQuery>,
+    ) -> TransactionResult {
+        let instruction = self.close_proof_instruction(destination, route_hash, reward, accounts);
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
         self.send_transaction(transaction)
     }
 }

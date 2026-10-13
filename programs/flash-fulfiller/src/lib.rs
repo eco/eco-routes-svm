@@ -5,7 +5,7 @@
 //! `local_prover.prove` → `portal.withdraw` → `portal.fulfill` → sweep.
 //! Living in its own program (rather than extending `local-prover`) avoids
 //! Solana's reentrancy rule — `local_prover` only appears on the stack
-//! inside portal's `close_proof` CPI, never twice.
+//! inside portal's proof-validation CPI, never twice.
 //!
 //! # Client requirement
 //!

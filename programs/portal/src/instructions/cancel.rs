@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use eco_svm_std::{Bytes32, SerializableAccountMeta, CANCELLED, CHAIN_ID};
+use eco_svm_std::{claimant, Bytes32, SerializableAccountMeta, CHAIN_ID};
 
 use crate::events::IntentCancelled;
 use crate::instructions::{canonical_route, claim_fulfill_marker, now, PortalError};
@@ -27,7 +27,7 @@ pub struct CancelArgs {
 
 /// Permanently closes an unfulfilled intent on its destination.
 ///
-/// Writes a `FulfillMarker` holding the `CANCELLED` sentinel at the intent's
+/// Writes a `FulfillMarker` holding the cancellation claimant at the intent's
 /// fulfill-marker PDA, the same PDA `fulfill` claims, so the two are
 /// mutually exclusive by construction: whichever lands first owns the PDA and
 /// the other fails to create it. Time separates them too — `fulfill` needs
@@ -99,7 +99,7 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
         &ctx.accounts.payer,
         &ctx.accounts.system_program,
         &intent_hash,
-        CANCELLED,
+        claimant::cancelled().to_bytes().into(),
     )?;
 
     emit!(IntentCancelled::new(intent_hash));
@@ -107,7 +107,7 @@ pub fn cancel_intent(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
     Ok(())
 }
 
-/// True when the intent's fulfill marker already holds `CANCELLED`. A marker
+/// True when the intent's fulfill marker already holds the cancellation sentinel. A marker
 /// holding a solver's claimant reads false, so `claim_fulfill_marker` then
 /// fails with `IntentAlreadyFulfilledOrCancelled`.
 fn is_cancelled(fulfill_marker: &UncheckedAccount, intent_hash: &Bytes32) -> Result<bool> {
@@ -119,7 +119,9 @@ fn is_cancelled(fulfill_marker: &UncheckedAccount, intent_hash: &Bytes32) -> Res
         PortalError::InvalidFulfillMarker
     );
 
-    Ok(fulfillment_claimant(fulfill_marker)? == CANCELLED)
+    Ok(claimant::is_cancelled(&Pubkey::new_from_array(
+        fulfillment_claimant(fulfill_marker)?.into(),
+    )))
 }
 
 /// A flag may carry only the two defined bits, so a route has one accepted

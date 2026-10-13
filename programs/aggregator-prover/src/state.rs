@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::account::AccountExt;
-use eco_svm_std::prover::Proof;
 
 pub const CONFIG_SEED: &[u8] = b"config";
 pub const MAX_PROVERS: usize = 8;
@@ -19,9 +18,3 @@ impl Config {
 }
 
 impl AccountExt for Config {}
-
-#[account]
-#[derive(InitSpace)]
-pub struct ProofAccount(pub Proof);
-
-impl AccountExt for ProofAccount {}

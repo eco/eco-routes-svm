@@ -155,7 +155,7 @@ fn flash_fulfill_should_succeed() {
         .account::<local_prover::state::ProofAccount>(
             &Proof::pda(&intent_hash_value, &local_prover::ID).0,
         )
-        .is_none());
+        .is_some());
 }
 
 #[test]
