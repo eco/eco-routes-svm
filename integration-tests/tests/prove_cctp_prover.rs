@@ -1,5 +1,6 @@
 use anchor_lang::{InstructionData, ToAccountMetas};
 use cctp_prover::cctp::{self, MessageSentAccount, MIN_FINALITY_THRESHOLD, SOLANA_DOMAIN};
+use cctp_prover::constants::MAX_INTENTS_PER_PROVE;
 use cctp_prover::instructions::CctpProverError;
 use eco_svm_std::prover::{IntentHashClaimant, ProofData, ProveArgs};
 use eco_svm_std::CHAIN_ID;
@@ -174,4 +175,20 @@ fn prove_rejects_direct_caller() {
     let result = context.cctp_prover().send(vec![ix], &[&impostor, &event]);
 
     assert!(result.is_err_and(common::is_error(CctpProverError::InvalidPortalDispatcher)));
+}
+
+#[test]
+fn prove_rejects_batch_over_max_intents() {
+    let (mut context, intents) = setup(MAX_INTENTS_PER_PROVE + 1);
+    let hashes = intents.iter().map(|intent| intent.intent_hash).collect();
+
+    let result = context.portal().prove_intent_via_cctp_prover(
+        hashes,
+        BASE_DOMAIN as u64,
+        markers(&intents),
+        evm_recipient(0xcc),
+        &Keypair::new(),
+    );
+
+    assert!(result.is_err_and(common::is_error(CctpProverError::TooManyIntents)));
 }

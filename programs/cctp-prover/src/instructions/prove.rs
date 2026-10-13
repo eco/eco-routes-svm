@@ -3,6 +3,7 @@ use anchor_lang::solana_program::program::invoke_signed;
 use eco_svm_std::prover::ProveArgs;
 
 use crate::cctp::{self, SendMessageParams, MIN_FINALITY_THRESHOLD, SOLANA_DOMAIN};
+use crate::constants::MAX_INTENTS_PER_PROVE;
 use crate::instructions::CctpProverError;
 use crate::state::{sender_authority_pda, SENDER_AUTHORITY_SEED};
 
@@ -41,6 +42,10 @@ pub fn prove_intent(ctx: Context<Prove>, args: ProveArgs) -> Result<()> {
         data,
     } = args;
 
+    require!(
+        proof_data.intent_hashes_claimants.len() <= MAX_INTENTS_PER_PROVE,
+        CctpProverError::TooManyIntents
+    );
     let destination_domain: u32 = domain_id
         .try_into()
         .map_err(|_| CctpProverError::InvalidDomainId)?;

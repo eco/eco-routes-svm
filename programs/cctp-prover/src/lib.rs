@@ -4,6 +4,7 @@ use eco_svm_std::prover;
 declare_id!("Ecor8EE3VDHBu8JGU7LxoFYkfXDyLdsheRzDMmT4iWjz");
 
 pub mod cctp;
+pub mod constants;
 pub mod instructions;
 pub mod state;
 
