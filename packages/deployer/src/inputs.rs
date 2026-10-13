@@ -95,13 +95,17 @@ pub struct EvmAddress([u8; EVM_ADDRESS_LEN]);
 #[error("expected 0x followed by 40 hex characters")]
 pub struct ParseEvmAddressError;
 
-/// An EVM address as CCTP carries it: 20 bytes left-padded to 32, or the 32 bytes themselves.
+/// An EVM address as CCTP carries it: 20 bytes left-padded to 32, or the padded 32 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CctpSender(Bytes32);
 
 #[derive(Debug, thiserror::Error)]
-#[error("expected 0x followed by 40 or 64 hex characters")]
-pub struct ParseCctpSenderError;
+pub enum ParseCctpSenderError {
+    #[error("expected 0x followed by 40 or 64 hex characters")]
+    Malformed,
+    #[error("a 32-byte sender must be an EVM address left-padded with 12 zero bytes")]
+    NotEvmAddress,
+}
 
 impl Inputs {
     pub fn parse(raw: RawInputs) -> Result<Self, Error> {
@@ -172,12 +176,18 @@ impl FromStr for CctpSender {
     type Err = ParseCctpSenderError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let digits = value.strip_prefix("0x").ok_or(ParseCctpSenderError)?;
-        let bytes = hex::decode(digits).map_err(|_| ParseCctpSenderError)?;
+        let digits = value
+            .strip_prefix("0x")
+            .ok_or(ParseCctpSenderError::Malformed)?;
+        let bytes = hex::decode(digits).map_err(|_| ParseCctpSenderError::Malformed)?;
         let mut padded = [0u8; 32];
         match bytes.len() {
             EVM_ADDRESS_LEN | 32 => padded[32 - bytes.len()..].copy_from_slice(&bytes),
-            _ => return Err(ParseCctpSenderError),
+            _ => return Err(ParseCctpSenderError::Malformed),
+        }
+        // Every peer is an EVM `CCTPProver`; any other sender would be a lane nothing can use.
+        if padded[..32 - EVM_ADDRESS_LEN] != [0u8; 32 - EVM_ADDRESS_LEN] {
+            return Err(ParseCctpSenderError::NotEvmAddress);
         }
 
         Ok(Self(padded.into()))
@@ -738,8 +748,36 @@ mod tests {
     }
 
     #[test]
-    fn solana_chain_ids_include_this_build_of_eco_svm_std() {
-        assert!(SOLANA_CHAIN_IDS.contains(&eco_svm_std::CHAIN_ID));
+    fn cctp_sender_rejects_32_bytes_that_are_not_a_padded_evm_address() {
+        let dirty = format!("0x01{}{}", "00".repeat(11), &VALID_ADDRESS[2..]);
+        let padded = format!("0x{}{}", "00".repeat(12), &VALID_ADDRESS[2..]);
+
+        assert!(matches!(
+            dirty.parse::<CctpSender>(),
+            Err(ParseCctpSenderError::NotEvmAddress)
+        ));
+        assert!(matches!(
+            parse_cctp(&[cctp_peer_json(0, 1, &dirty)]),
+            Err(Error::InvalidCctpJson { reason }) if reason.contains("left-padded with 12 zero bytes")
+        ));
+        assert!(parse_cctp(&[cctp_peer_json(0, 1, &padded)]).is_ok());
+    }
+
+    /// Both values against eco-svm-std's source, since this build only compiles one of them.
+    #[test]
+    fn solana_chain_ids_match_eco_svm_std_on_both_clusters() {
+        let source = include_str!("../../eco-svm-std/src/lib.rs");
+        let [mainnet, devnet] = SOLANA_CHAIN_IDS;
+
+        assert_eq!(mainnet, 1399811149);
+        assert_eq!(devnet, 1399811150);
+        assert!(source.contains(&format!(
+            "#[cfg(feature = \"mainnet\")]\npub const CHAIN_ID: u64 = {mainnet};"
+        )));
+        assert!(source.contains(&format!(
+            "#[cfg(not(feature = \"mainnet\"))]\npub const CHAIN_ID: u64 = {devnet};"
+        )));
+        assert_eq!(eco_svm_std::CHAIN_ID, devnet);
     }
 
     #[test]

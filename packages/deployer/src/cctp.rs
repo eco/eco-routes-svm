@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn the_maximum_number_of_peers_fits_one_v1_transaction_but_not_a_v0_packet() {
+    fn the_maximum_peer_set_fits_the_v1_limit_and_exceeds_1232_bytes() {
         let program = Pubkey::new_unique();
         let deployer = Pubkey::new_from_array([1; 32]);
         let size = transaction::size(
