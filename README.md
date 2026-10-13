@@ -379,7 +379,7 @@ EVM `Inbox.prove` batches toward Solana must stay at or below `MAX_PAIRS_PER_MES
 Same interface as hyper-prover: query tail `[proof]`, cleanup tail `[proof, pda_payer]`.
 
 #### Administration and finalization
-`init` is one-shot and gated on the program's upgrade authority. It writes at most `MAX_PEERS` (32) peers `{domain, chain_id, sender}`; past about 19 peers (21 if payer equals authority) it needs a v1 transaction. Finalizing the program fixes the peer set. `packages/cctp-relay` is a reference relayer (`receive`, `create-lookup-table`, `reclaim-event-accounts`).
+`init` is one-shot and gated on the program's upgrade authority. It writes at most `MAX_PEERS` (32) peers `{domain, chain_id, sender}`; past about 19 peers (21 if payer equals authority) it needs a v1 transaction. Finalizing the program fixes the peer set. A relayer builds the `receive_message` account list with `cctp::receive_message_instruction`, using the lookup table from `cctp::receive_lookup_table_addresses()`; the event-account rent is reclaimable after 5 days via Circle's `reclaim_event_account`, while `used_nonce` rent is not.
 
 ### Local-Prover Program
 

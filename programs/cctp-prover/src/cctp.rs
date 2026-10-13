@@ -191,7 +191,7 @@ pub fn send_message_instruction(
 /// `receive_message` delivering an attested `message` to this program, `payer`
 /// signing as both payer and caller. `proofs` are our `Proof` PDAs in body
 /// order. The single source of the account layout `handle_receive_*`
-/// validates, shared by the integration tests and `cctp-relay`.
+/// validates, shared by the integration tests.
 pub fn receive_message_instruction(
     payer: &Pubkey,
     message: Vec<u8>,
