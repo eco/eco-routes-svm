@@ -60,6 +60,9 @@ A pull-based prover backed by Polymer's proof network:
 #### **LayerZero-Prover Program** (`programs/layerzero-prover/`)
 A LayerZero V2-backed prover, both directions, intended as a liveness member of the 1-of-N aggregator. Outbound is two steps (`prove` then a permissionless `send_message`) and inbound follows LayerZero's executor V2 flow; see [LayerZero-Prover Program](#layerzero-prover-program).
 
+#### **CCTP-Prover Program** (`programs/cctp-prover/`)
+A Circle CCTP V2 generic-message prover, both directions; an aggregator member and the preferred prover on fast-attested lanes. Outbound `prove` sends the batch in one step through Circle's `message_transmitter_v2`; inbound is Circle's permissionless `receive_message`, which calls back into the program to create `Proof` PDAs. See [CCTP-Prover Program](#cctp-prover-program).
+
 #### **Local-Prover Program** (`programs/local-prover/`)
 A prover for same-chain intents (Solana source and destination):
 
@@ -358,6 +361,26 @@ Proof rent comes from the `pda_payer` reserve because the EVM sender's options c
 
 `layerzero.rs` hand-mirrors LayerZero-v2@9c741e7f (endpoint and ULN IDs, big-endian seeds, discriminators, V2 executor types). The ignored `layerzero_prover_real` test (needs `LZ_ENDPOINT_SO`) checks it against the dumped endpoint binary.
 
+### CCTP-Prover Program
+
+A Circle CCTP V2 generic-message prover, both directions. It is an aggregator member and the preferred prover on fast-attested lanes.
+
+#### Outbound (one step)
+- `prove` - Gated to Portal's `dispatcher_pda(&cctp_prover::ID)`. It CPIs `message_transmitter_v2::send_message`, signing as its `["sender_authority"]` PDA, so the message's `sender` is this program ID (the EVM `CCTPProver` whitelists it as `bytes32`). Every send uses `min_finality_threshold = 1000` and the default `destination_caller`, so it is always fast and anyone can relay it. The solver signs a fresh `message_sent_event_data` keypair and pays its rent (reclaimable after 5 days).
+
+A batch holds at most `MAX_INTENTS_PER_PROVE` intents (23, measured on `[ComputeBudget, portal::prove]` as a v0 transaction with one lookup table: 1227 bytes, 5 bytes of headroom). The solver's atomic `[ComputeBudget, portal::fulfill, portal::prove]` for one intent fits one v0 transaction (946 bytes).
+
+#### Inbound
+Circle's `receive_message` (relayer-submitted, permissionless) verifies the attestation and CPIs `handle_receive_finalized_message` or `handle_receive_unfinalized_message`. Both check that `remote_domain` is a configured peer, that `sender == peer.sender` and that `ProofData.destination == peer.chain_id`, then create `Proof` PDAs (identical redelivery is a no-op, a conflicting proof fails with `IntentAlreadyProven`). `Proof` rent comes from `pda_payer`; an empty reserve fails delivery retryably.
+
+EVM `Inbox.prove` batches toward Solana must stay at or below `MAX_PAIRS_PER_MESSAGE` (6; 1184 bytes as v0 with a lookup table and a 2-of-2 attestation). EVM deploys must pin `CCTP_MAX_PAIRS_CONFIG=5:6`. The 48 bytes of headroom is less than one 65-byte attester signature, so a Circle threshold of 3 would cut the cap to 5; re-measure if it changes.
+
+#### Proof query and cleanup
+Same interface as hyper-prover: query tail `[proof]`, cleanup tail `[proof, pda_payer]`.
+
+#### Administration and finalization
+`init` is one-shot and gated on the program's upgrade authority. It writes at most `MAX_PEERS` (32) peers `{domain, chain_id, sender}`; past about 19 peers (21 if payer equals authority) it needs a v1 transaction. Finalizing the program fixes the peer set. `packages/cctp-relay` is a reference relayer (`receive`, `create-lookup-table`, `reclaim-event-accounts`).
+
 ### Local-Prover Program
 
 A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
@@ -429,6 +452,7 @@ See [Proof queries and cleanup](docs/prover-interface.md) for account order, pro
 - `init_layerzero_prover.rs`, `prove_layerzero_prover.rs`, `send_layerzero_prover.rs`, `lz_receive_layerzero_prover.rs`, `lz_receive_types_layerzero_prover.rs`, `close_proof_layerzero_prover.rs` - LayerZeroProver admin, outbound commit/send, inbound executor flow, receive-types discovery, `get_proof` (direct and through the aggregator) and Portal `close_proof` cleanup (against `mock-layerzero-endpoint`)
 - `layerzero_prover_batch_limits.rs` - Pins the outbound and inbound batch ceilings
 - `layerzero_prover_real.rs` - Ignored test (needs `LZ_ENDPOINT_SO`) checking the hand-mirrored endpoint CPIs against LayerZero's dumped deployed binary
+- `*_cctp_prover.rs`, `cctp_prover_batch_limits.rs` - CCTPProver admin, outbound `prove`, inbound delivery and the batch and peer-set ceilings (against Circle's dumped `message_transmitter_v2`)
 
 #### Test Patterns:
 ```rust
@@ -480,7 +504,7 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`):
+The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`, `cctp-prover`):
 
 ```toml
 [features]
@@ -530,6 +554,7 @@ hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
+cctp-prover = "..."
 portal = "..."
 proof-helper = "..."
 
@@ -540,6 +565,7 @@ hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
+cctp-prover = "..."
 portal = "..."
 proof-helper = "..."
 # localnet-only test programs excluded
@@ -551,6 +577,7 @@ hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
+cctp-prover = "..."
 portal = "..."
 proof-helper = "..."
 # localnet-only test programs excluded
@@ -581,7 +608,7 @@ dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.js
 
 plus `program-ids.json`, recording each program's `address`, `seed`, `salt` and `dependencies` (the released programs whose IDs it compiles in, plus the aggregator's members; see [Program IDs](#program-ids)).
 
-`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover` and `layerzero_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
+`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover`, `layerzero_prover` and `cctp_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 

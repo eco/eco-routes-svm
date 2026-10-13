@@ -12,8 +12,9 @@ pub const PDA_PAYER_SEED: &[u8] = b"pda_payer";
 /// under the sending program (`seeds::program = sender_program`).
 pub const SENDER_AUTHORITY_SEED: &[u8] = b"sender_authority";
 /// Fixed at `init` and never extended; a chain beyond it needs a new program
-/// ID. Past ~18 peers `init` overflows a v0 transaction and needs a v1 one
-/// (pinned by `cctp_prover_batch_limits::max_peers_init_needs_v1`).
+/// ID. Past about 19 peers (21 if payer == authority; 32 peers measured at
+/// 1694 B as v0, about 44 B per peer) `init` overflows a v0 transaction and
+/// needs a v1 one (pinned by `cctp_prover_batch_limits::max_peers_init_needs_v1`).
 pub const MAX_PEERS: usize = 32;
 
 /// A remote EVM chain: the inbound whitelist entry and the trusted

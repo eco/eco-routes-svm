@@ -264,7 +264,8 @@ fn max_inbound_batch_executes_under_compute_limit() {
         .all(|pda| context.get_account(pda).is_some()));
 }
 
-/// A full peer set overflows a v0 `init` but fits a v1 one.
+/// A full peer set overflows a v0 `init` but fits a v1 one. Each peer costs about 44 B, so
+/// v0 stops fitting past about 19 peers (21 if payer == authority); 32 peers measure 1694 B.
 #[test]
 fn max_peers_init_needs_v1() {
     let deployer = Pubkey::new_unique();

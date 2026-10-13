@@ -18,4 +18,10 @@ pub const MAX_INTENTS_PER_PROVE: usize = 23;
 /// `CCTPProver` must pin `maxPairs` for domain 5 to this value
 /// (`CCTP_MAX_PAIRS_CONFIG=5:6`) so larger batches revert at send. Pinned by
 /// `cctp_prover_batch_limits::inbound_ceiling_matches_max_pairs_per_message`.
+///
+/// The 48 B of headroom is less than one 65 B attester signature. If Circle
+/// raises the mainnet signature threshold to 3, a 6-pair message no longer fits
+/// a v0 transaction (the cap becomes 5) while EVM deploys pinned to `5:6` still
+/// send 6. Recovery: re-prove with at most 5 pairs, or deliver with a v1
+/// transaction. Re-measure if the threshold changes.
 pub const MAX_PAIRS_PER_MESSAGE: usize = 6;
