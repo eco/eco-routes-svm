@@ -61,6 +61,7 @@ jobs:
         run: |
           cargo +nightly fmt --all -- --check
           cargo +nightly fmt --all --manifest-path packages/deployer/Cargo.toml -- --check
+          cargo +nightly fmt --all --manifest-path packages/cctp-relay/Cargo.toml -- --check
 
   import-sort:
     runs-on: ubuntu-latest
@@ -84,6 +85,7 @@ jobs:
         run: |
           cargo sort --workspace --check
           cargo sort --check packages/deployer
+          cargo sort --check packages/cctp-relay
 
   clippy:
     runs-on: ubuntu-latest
@@ -187,6 +189,31 @@ jobs:
         env:
           CARGO_TARGET_DIR: target/deployer
         run: cargo test --manifest-path packages/deployer/Cargo.toml --locked --no-fail-fast
+
+  # The relay is its own workspace (packages/cctp-relay/Cargo.toml explains why). It needs no
+  # built programs: it links cctp-prover as a library and its tests make no network calls.
+  cctp-relay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          components: clippy
+          cache-key-suffix: cctp-relay
+
+      - name: Run Clippy
+        env:
+          CARGO_TARGET_DIR: target/cctp-relay
+        run: cargo clippy --manifest-path packages/cctp-relay/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        env:
+          CARGO_TARGET_DIR: target/cctp-relay
+        run: cargo test --manifest-path packages/cctp-relay/Cargo.toml --locked --no-fail-fast
 
   workflow-lint:
     runs-on: ubuntu-latest
