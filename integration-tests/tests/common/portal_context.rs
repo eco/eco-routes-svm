@@ -631,6 +631,29 @@ impl Portal<'_> {
         event_account: &Keypair,
     ) -> TransactionResult {
         let payer = self.payer.pubkey();
+        let accounts = super::cctp_prover_context::prove_accounts(&payer, &event_account.pubkey());
+
+        self.prove_intent_via_cctp_prover_with_accounts(
+            intent_hashes,
+            destination_domain,
+            fulfill_markers,
+            data,
+            event_account,
+            accounts,
+        )
+    }
+
+    /// As [`Self::prove_intent_via_cctp_prover`], with cctp-prover's own
+    /// accounts (everything after the dispatcher) supplied by the caller.
+    pub fn prove_intent_via_cctp_prover_with_accounts(
+        &mut self,
+        intent_hashes: Vec<Bytes32>,
+        destination_domain: u64,
+        fulfill_markers: Vec<Pubkey>,
+        data: Vec<u8>,
+        event_account: &Keypair,
+        accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
         self.prove_intent(
             intent_hashes,
             cctp_prover::ID,
@@ -639,7 +662,7 @@ impl Portal<'_> {
             portal::state::dispatcher_pda(&cctp_prover::ID).0,
             data,
             vec![event_account.insecure_clone()],
-            super::cctp_prover_context::prove_accounts(&payer, &event_account.pubkey()),
+            accounts,
             Some(super::cctp_prover_context::COMPUTE_UNIT_LIMIT),
         )
     }

@@ -10,7 +10,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
-use crate::common::cctp_prover_context::{evm_recipient, BASE_DOMAIN};
+use crate::common::cctp_prover_context::{evm_recipient, prove_accounts, BASE_DOMAIN};
 
 pub mod common;
 
@@ -191,4 +191,52 @@ fn prove_rejects_batch_over_max_intents() {
     );
 
     assert!(result.is_err_and(common::is_error(CctpProverError::TooManyIntents)));
+}
+
+/// `prove` CPIs the transmitter with our signed `sender_authority`; an
+/// impostor in the transmitter slot must never receive it, executable or not.
+#[test]
+fn prove_rejects_foreign_transmitter_program() {
+    for fake in [anchor_lang::system_program::ID, hyper_prover::ID] {
+        let (mut context, intents) = setup(1);
+        let event = Keypair::new();
+        let mut accounts = prove_accounts(&context.payer.pubkey(), &event.pubkey());
+        let slot = accounts.len() - 1;
+        assert_eq!(accounts[slot].pubkey, cctp::MESSAGE_TRANSMITTER_V2_ID);
+        accounts[slot].pubkey = fake;
+
+        let result = context.portal().prove_intent_via_cctp_prover_with_accounts(
+            vec![intents[0].intent_hash],
+            BASE_DOMAIN as u64,
+            markers(&intents),
+            evm_recipient(0xcc),
+            &event,
+            accounts,
+        );
+
+        assert!(result.is_err_and(common::is_error(CctpProverError::InvalidTransmitter)));
+    }
+}
+
+#[test]
+fn prove_rejects_wrong_sender_authority() {
+    let (mut context, intents) = setup(1);
+    let event = Keypair::new();
+    let mut accounts = prove_accounts(&context.payer.pubkey(), &event.pubkey());
+    assert_eq!(
+        accounts[0].pubkey,
+        cctp_prover::state::sender_authority_pda().0
+    );
+    accounts[0].pubkey = Pubkey::new_unique();
+
+    let result = context.portal().prove_intent_via_cctp_prover_with_accounts(
+        vec![intents[0].intent_hash],
+        BASE_DOMAIN as u64,
+        markers(&intents),
+        evm_recipient(0xcc),
+        &event,
+        accounts,
+    );
+
+    assert!(result.is_err_and(common::is_error(CctpProverError::InvalidSenderAuthority)));
 }
