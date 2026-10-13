@@ -7,7 +7,6 @@ use crate::cctp::SOLANA_DOMAIN;
 use crate::instructions::CctpProverError;
 
 pub const CONFIG_SEED: &[u8] = b"config";
-pub const PDA_PAYER_SEED: &[u8] = b"pda_payer";
 /// The PDA `message_transmitter_v2::send_message` requires to sign, derived
 /// under the sending program (`seeds::program = sender_program`).
 pub const SENDER_AUTHORITY_SEED: &[u8] = b"sender_authority";
@@ -76,6 +75,10 @@ impl Config {
 
 impl AccountExt for Config {}
 
+/// Rent is paid by the relayer that submits `receive_message` and refunded on
+/// `close_proof` to the proof's claimant (to the closer for a cancellation).
+/// There is no protocol reserve, so a fabricated proof costs only whoever
+/// relays it.
 #[account]
 #[derive(InitSpace)]
 pub struct ProofAccount(pub Proof);
@@ -86,12 +89,6 @@ impl From<Proof> for ProofAccount {
     fn from(proof: Proof) -> Self {
         Self(proof)
     }
-}
-
-/// System-owned lamport reserve that pays `Proof` rent in `handle_receive_*`
-/// (CCTP does not forward the relayer's payer) and gets it back on `close_proof`.
-pub fn pda_payer_pda() -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[PDA_PAYER_SEED], &crate::ID)
 }
 
 pub fn sender_authority_pda() -> (Pubkey, u8) {
@@ -114,7 +111,7 @@ mod tests {
 
     #[test]
     fn pdas_deterministic() {
-        goldie::assert_json!(vec![Config::pda(), pda_payer_pda(), sender_authority_pda()]);
+        goldie::assert_json!(vec![Config::pda(), sender_authority_pda()]);
     }
 
     /// The portal authority `prove` accepts, scoped to this program's ID. A seed

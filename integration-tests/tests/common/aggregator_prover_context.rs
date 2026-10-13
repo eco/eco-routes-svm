@@ -87,7 +87,11 @@ impl AggregatorProver<'_> {
         let query = member_queries(provers.iter().map(|prover| {
             let cleanup = [
                 AccountMeta::new(Proof::pda(intent_hash, prover).0, false),
-                cleanup_recipient(prover, self.payer.pubkey()),
+                cleanup_recipient(
+                    prover,
+                    self.payer.pubkey(),
+                    self.proof_claimant(intent_hash, prover),
+                ),
             ]
             .into();
 

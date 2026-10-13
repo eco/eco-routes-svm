@@ -12,14 +12,16 @@ pub const MAX_INTENTS_PER_PROVE: usize = 23;
 /// Largest EVM -> Solana batch one relay transaction can deliver: every pair
 /// needs its brand-new `Proof` PDA as a static key plus 64 body bytes, next to
 /// a 148-byte header and a 130-byte (2-of-2) attestation, in a v0 transaction
-/// with `cctp::receive_lookup_table_addresses()` in a lookup table. Measured: 6
-/// pairs take 1184 bytes (48 bytes headroom), 18 of 64 account locks and 229k
-/// CU with a 2-of-2 attestation; a legacy transaction fits only 4. The EVM
+/// with `cctp::receive_lookup_table_addresses()` in a lookup table. The rent
+/// `payer` in the forwarded tail is the relayer, already the fee payer, so it
+/// costs one account index. Measured: 6 pairs take 1183 bytes (49 bytes
+/// headroom), 17 of 64 account locks and 223k CU with a 2-of-2 attestation; a
+/// legacy transaction fits only 4. The EVM
 /// `CCTPProver` must pin `maxPairs` for domain 5 to this value
 /// (`CCTP_MAX_PAIRS_CONFIG=5:6`) so larger batches revert at send. Pinned by
 /// `cctp_prover_batch_limits::inbound_ceiling_matches_max_pairs_per_message`.
 ///
-/// The 48 B of headroom is less than one 65 B attester signature. If Circle
+/// The 49 B of headroom is less than one 65 B attester signature. If Circle
 /// raises the mainnet signature threshold to 3, a 6-pair message no longer fits
 /// a v0 transaction (the cap becomes 5) while EVM deploys pinned to `5:6` still
 /// send 6. Recovery: re-prove with at most 5 pairs, or deliver with a v1

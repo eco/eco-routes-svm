@@ -479,6 +479,14 @@ impl Context {
             .and_then(|account| T::try_deserialize(&mut account.data.as_slice()).ok())
     }
 
+    /// The claimant recorded in `prover`'s proof of `intent_hash`, or the zero
+    /// key when there is none.
+    pub fn proof_claimant(&self, intent_hash: &Bytes32, prover: &Pubkey) -> Pubkey {
+        self.account::<ProofAccount>(&Proof::pda(intent_hash, prover).0)
+            .map(|account| account.0.claimant)
+            .unwrap_or_default()
+    }
+
     /// Plants a `Proof` as `owner` would have written it. The discriminator is
     /// hyper-prover's `ProofAccount::DISCRIMINATOR` whichever prover `owner`
     /// names; that stands in for local-prover's and polymer-prover's only because
@@ -580,15 +588,16 @@ pub fn sol_amount(amount: f64) -> u64 {
 }
 
 /// The rent recipient a concrete prover's cleanup tail ends with: Hyperlane
-/// and LayerZero pin it to their (non-signing) PDA payer, the others pay a
+/// and LayerZero pin it to their (non-signing) PDA payer, CCTP to the proof's
+/// `claimant` (non-signing) unless it is a cancellation, and the rest pay a
 /// signing recipient.
-pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey) -> AccountMeta {
+pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey, claimant: Pubkey) -> AccountMeta {
     if *prover == hyper_prover::ID {
         AccountMeta::new(hyper_prover::state::pda_payer_pda().0, false)
     } else if *prover == layerzero_prover::ID {
         AccountMeta::new(layerzero_prover::state::pda_payer_pda().0, false)
-    } else if *prover == cctp_prover::ID {
-        AccountMeta::new(cctp_prover::state::pda_payer_pda().0, false)
+    } else if *prover == cctp_prover::ID && !eco_svm_std::claimant::is_cancelled(&claimant) {
+        AccountMeta::new(claimant, false)
     } else {
         AccountMeta::new(signer, true)
     }

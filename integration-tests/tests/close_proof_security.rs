@@ -20,11 +20,8 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
             let mut context = common::Context::default();
             let victim_hash: Bytes32 = [3; 32].into();
             let victim_proof = Proof::pda(&victim_hash, &prover).0;
-            context.set_proof(
-                victim_proof,
-                Proof::new(CHAIN_ID, Pubkey::new_unique()),
-                prover,
-            );
+            let victim_claimant = Pubkey::new_unique();
+            context.set_proof(victim_proof, Proof::new(CHAIN_ID, victim_claimant), prover);
             let victim_before = context.get_account(&victim_proof).unwrap();
             let reward = Reward {
                 deadline: context.now() + 3600,
@@ -50,7 +47,8 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                     )
                     .unwrap();
             }
-            let recipient = common::cleanup_recipient(&prover, context.payer.pubkey());
+            let recipient =
+                common::cleanup_recipient(&prover, context.payer.pubkey(), victim_claimant);
             let result = context.portal().close_proof(
                 CHAIN_ID,
                 route_hash,

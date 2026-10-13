@@ -6,7 +6,7 @@ use cctp_prover::cctp::{
     self, MESSAGE_TRANSMITTER_ACCOUNT_DISCRIMINATOR, MESSAGE_TRANSMITTER_V2_ID, SOLANA_DOMAIN,
 };
 use cctp_prover::instructions::InitArgs;
-use cctp_prover::state::{pda_payer_pda, Config, Peer};
+use cctp_prover::state::{Config, Peer};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::prover::{Proof, ProofData};
 use eco_svm_std::Bytes32;
@@ -21,7 +21,7 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 use tiny_keccak::{Hasher, Keccak};
 
-use crate::common::{program_data_address, sol_amount, Context, TransactionResult};
+use crate::common::{program_data_address, Context, TransactionResult};
 
 pub const ETHEREUM_DOMAIN: u32 = 0;
 pub const ETHEREUM_CHAIN_ID: u64 = 1;
@@ -79,10 +79,9 @@ impl Context {
 }
 
 impl CctpProver<'_> {
-    /// Makes `authority` the program's upgrade authority and funds `pda_payer`.
+    /// Makes `authority` the program's upgrade authority.
     pub fn install(&mut self, authority: Pubkey) {
         self.set_upgrade_authority(&cctp_prover::ID, Some(authority));
-        self.airdrop(&pda_payer_pda().0, sol_amount(10.0)).unwrap();
         install_transmitter(self, &[TestAttester::new(TEST_ATTESTER_SECRET)], 1);
     }
 
@@ -258,6 +257,19 @@ pub fn proof_pdas(proof_data: &ProofData) -> Vec<Pubkey> {
         .collect()
 }
 
+/// Index of the forwarded tail's rent `payer` in `receive_message_instruction`.
+pub const TAIL_PAYER_INDEX: usize = 10;
+
+pub fn receive_instruction(payer: &Pubkey, inbound: &Inbound, proofs: &[Pubkey]) -> Instruction {
+    cctp::receive_message_instruction(
+        payer,
+        inbound.message.clone(),
+        inbound.attestation.clone(),
+        proofs,
+    )
+    .unwrap()
+}
+
 impl CctpProver<'_> {
     /// An attested EVM -> Solana message, as Iris returns it: random nonce,
     /// `finality` as executed, signed by the installed test attester.
@@ -286,17 +298,25 @@ impl CctpProver<'_> {
         }
     }
 
+    /// Relays `inbound` with the context payer as the relayer.
     pub fn receive(&mut self, inbound: &Inbound, proofs: &[Pubkey]) -> TransactionResult {
         let payer = self.payer.pubkey();
-        let ix = cctp::receive_message_instruction(
-            &payer,
-            inbound.message.clone(),
-            inbound.attestation.clone(),
-            proofs,
-        )
-        .unwrap();
+        let ix = receive_instruction(&payer, inbound, proofs);
 
         self.send(vec![ix], &[])
+    }
+
+    /// Relays `inbound` with `relayer` paying Circle's `used_nonce` and our
+    /// `Proof` rent, while the context payer pays only the transaction fee.
+    pub fn receive_by(
+        &mut self,
+        relayer: &Keypair,
+        inbound: &Inbound,
+        proofs: &[Pubkey],
+    ) -> TransactionResult {
+        let ix = receive_instruction(&relayer.pubkey(), inbound, proofs);
+
+        self.send(vec![ix], &[relayer])
     }
 
     pub fn deliver(
@@ -341,9 +361,15 @@ impl CctpProver<'_> {
     }
 }
 
-pub fn cleanup_tail(intent_hash: &eco_svm_std::Bytes32) -> Vec<AccountMeta> {
+/// Portal `close_proof` cleanup tail for our proof of `intent_hash`:
+/// `[proof, claimant]`, or `[proof, closer]` (signing) for a cancellation.
+pub fn cleanup_tail(
+    intent_hash: &eco_svm_std::Bytes32,
+    claimant: Pubkey,
+    closer: Pubkey,
+) -> Vec<AccountMeta> {
     vec![
         AccountMeta::new(Proof::pda(intent_hash, &cctp_prover::ID).0, false),
-        crate::common::cleanup_recipient(&cctp_prover::ID, Pubkey::default()),
+        crate::common::cleanup_recipient(&cctp_prover::ID, closer, claimant),
     ]
 }

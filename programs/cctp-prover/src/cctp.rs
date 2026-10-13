@@ -8,7 +8,7 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::system_program;
 
 use crate::instructions::CctpProverError;
-use crate::state::{pda_payer_pda, sender_authority_pda, Config};
+use crate::state::{sender_authority_pda, Config};
 
 /// Identical on mainnet and devnet, so no `mainnet` feature gate.
 pub const MESSAGE_TRANSMITTER_V2_ID: Pubkey =
@@ -189,9 +189,10 @@ pub fn send_message_instruction(
 }
 
 /// `receive_message` delivering an attested `message` to this program, `payer`
-/// signing as both payer and caller. `proofs` are our `Proof` PDAs in body
-/// order. The single source of the account layout `handle_receive_*`
-/// validates, shared by the integration tests.
+/// signing as Circle's payer and caller and again in the forwarded tail, where
+/// it pays the `Proof` rent. `proofs` are our `Proof` PDAs in body order. The
+/// single source of the account layout `handle_receive_*` validates, shared by
+/// the integration tests.
 pub fn receive_message_instruction(
     payer: &Pubkey,
     message: Vec<u8>,
@@ -211,7 +212,7 @@ pub fn receive_message_instruction(
         AccountMeta::new_readonly(MESSAGE_TRANSMITTER_V2_ID, false),
         // Forwarded by the transmitter to `handle_receive_*`, after its authority.
         AccountMeta::new_readonly(Config::pda().0, false),
-        AccountMeta::new(pda_payer_pda().0, false),
+        AccountMeta::new(*payer, true),
         AccountMeta::new_readonly(system_program::ID, false),
         AccountMeta::new_readonly(eco_svm_std::event_authority_pda(&crate::ID).0, false),
         AccountMeta::new_readonly(crate::ID, false),
@@ -235,7 +236,8 @@ pub fn receive_message_instruction(
 
 /// Every `receive_message` account that exists before delivery and is neither
 /// a signer nor the invoked program: the contents of a relayer's lookup table.
-/// `used_nonce` and the `Proof` PDAs are new per message and stay static.
+/// `used_nonce` and the `Proof` PDAs are new per message and stay static; the
+/// payer signs, so it is static too and its tail entry dedups to its index.
 pub fn receive_lookup_table_addresses() -> Vec<Pubkey> {
     vec![
         authority_pda(&crate::ID).0,
@@ -244,7 +246,6 @@ pub fn receive_lookup_table_addresses() -> Vec<Pubkey> {
         system_program::ID,
         event_authority_pda().0,
         Config::pda().0,
-        pda_payer_pda().0,
         eco_svm_std::event_authority_pda(&crate::ID).0,
     ]
 }
@@ -407,7 +408,7 @@ mod tests {
                 event_authority_pda().0,
                 MESSAGE_TRANSMITTER_V2_ID,
                 crate::state::Config::pda().0,
-                crate::state::pda_payer_pda().0,
+                payer,
                 anchor_lang::system_program::ID,
                 eco_svm_std::event_authority_pda(&crate::ID).0,
                 crate::ID,
@@ -417,11 +418,18 @@ mod tests {
         );
         assert!(ix.accounts[0].is_signer && ix.accounts[0].is_writable);
         assert!(ix.accounts[4].is_writable);
-        assert!(ix.accounts[10].is_writable && !ix.accounts[10].is_signer);
+        assert!(ix.accounts[10].is_writable && ix.accounts[10].is_signer);
         assert!(ix.accounts[14..]
             .iter()
             .all(|meta| meta.is_writable && !meta.is_signer));
         assert_eq!(ix.data[..8], RECEIVE_MESSAGE_DISCRIMINATOR);
+        // A lookup table cannot carry a signer.
+        let table = receive_lookup_table_addresses();
+        assert!(ix
+            .accounts
+            .iter()
+            .filter(|meta| table.contains(&meta.pubkey))
+            .all(|meta| !meta.is_signer));
     }
 
     /// Circle computes the CPI discriminator from the handler's name; ours

@@ -19,7 +19,7 @@ pub enum CctpProverError {
     InvalidPortalProofCloser,
     InvalidAuthority,
     InvalidConfig,
-    InvalidPdaPayer,
+    InvalidRentRecipient,
     InvalidPeerSet,
     InvalidData,
     InvalidDomainId,

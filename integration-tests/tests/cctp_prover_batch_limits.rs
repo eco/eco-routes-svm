@@ -8,9 +8,10 @@
 //! and program, the system program).
 //!
 //! Inbound: `[ComputeBudget, receive_message]` with one lookup table holding
-//! `cctp::receive_lookup_table_addresses()`. The payer, the per-message
-//! `used_nonce` PDA, the invoked transmitter, and each new `Proof` PDA are
-//! static. The attestation is mainnet's 2-of-2 (130 bytes).
+//! `cctp::receive_lookup_table_addresses()`. The payer (Circle's payer and
+//! caller, and again our tail's rent payer), the per-message `used_nonce` PDA,
+//! the invoked transmitter, and each new `Proof` PDA are static. The
+//! attestation is mainnet's 2-of-2 (130 bytes).
 //!
 //! Atomic: the solver's `[ComputeBudget, portal::fulfill, portal::prove]`.
 

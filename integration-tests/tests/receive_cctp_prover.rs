@@ -1,7 +1,7 @@
 use anchor_lang::{InstructionData, Space, ToAccountMetas};
 use cctp_prover::cctp::{self, HandleReceiveMessageParams};
 use cctp_prover::instructions::CctpProverError;
-use cctp_prover::state::{pda_payer_pda, Config, ProofAccount};
+use cctp_prover::state::{Config, ProofAccount};
 use eco_svm_std::prover::{IntentHashClaimant, IntentProven, Proof, ProofData};
 use eco_svm_std::Bytes32;
 use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -11,8 +11,8 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 use crate::common::cctp_prover_context::{
-    evm_sender, peers, proof_pdas, BASE_CHAIN_ID, BASE_DOMAIN, ETHEREUM_CHAIN_ID, ETHEREUM_DOMAIN,
-    OP_DOMAIN,
+    evm_sender, peers, proof_pdas, receive_instruction, Inbound, BASE_CHAIN_ID, BASE_DOMAIN,
+    ETHEREUM_CHAIN_ID, ETHEREUM_DOMAIN, OP_DOMAIN, TAIL_PAYER_INDEX,
 };
 
 pub mod common;
@@ -39,15 +39,38 @@ fn recorded(context: &common::Context, hash: u8) -> Option<Proof> {
         .map(|account| account.0)
 }
 
+fn proof_rent() -> u64 {
+    common::Context::default()
+        .get_sysvar::<Rent>()
+        .minimum_balance(8 + ProofAccount::INIT_SPACE)
+}
+
+fn nonce_used(context: &common::Context, inbound: &Inbound) -> bool {
+    let nonce = cctp::nonce(&inbound.message).unwrap();
+    context
+        .get_account(&cctp::used_nonce_pda(&nonce).0)
+        .is_some()
+}
+
+/// The relayer, not the context's fee payer, pays exactly Circle's
+/// `used_nonce` rent plus one `Proof` rent per pair.
 #[test]
 fn finalized_message_from_base_records_proofs() {
     let mut context = initialized();
-    let payer_before = context.balance(&pda_payer_pda().0);
+    let relayer = Keypair::new();
+    context
+        .airdrop(&relayer.pubkey(), common::sol_amount(1.0))
+        .unwrap();
+    let relayer_before = context.balance(&relayer.pubkey());
     let data = ProofData::new(BASE_CHAIN_ID, vec![pair(1, 11), pair(2, 12)]);
+    let proofs = proof_pdas(&data);
+    let inbound = context
+        .cctp_prover()
+        .inbound(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
 
     let result = context
         .cctp_prover()
-        .deliver(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
+        .receive_by(&relayer, &inbound, &proofs);
 
     assert!(
         result.is_ok_and(common::contains_cpi_event(IntentProven::new(
@@ -64,7 +87,15 @@ fn finalized_message_from_base_records_proofs() {
         recorded(&context, 2),
         Some(Proof::new(BASE_CHAIN_ID, Pubkey::new_from_array([12; 32])))
     );
-    assert!(context.balance(&pda_payer_pda().0) < payer_before);
+    let nonce = cctp::nonce(&inbound.message).unwrap();
+    let used_nonce_rent = context
+        .get_account(&cctp::used_nonce_pda(&nonce).0)
+        .unwrap()
+        .lamports;
+    assert_eq!(
+        relayer_before - context.balance(&relayer.pubkey()),
+        used_nonce_rent + 2 * proof_rent()
+    );
 }
 
 /// Review Focus 5: Fast attestation (1000) reaches the unfinalized handler
@@ -200,31 +231,78 @@ fn duplicate_pair_in_one_message_records_once() {
     );
 }
 
-/// Review Focus 2: the whole `receive_message` reverts, so the nonce stays
-/// unused and the same message + attestation succeed after a refill.
+/// Review Focus 2: a relayer too poor for the `Proof` rent reverts the whole
+/// `receive_message`, so the nonce stays unused and the same message +
+/// attestation succeed once the relayer is funded.
 #[test]
-fn empty_pda_payer_fails_retryably() {
+fn underfunded_payer_fails_retryably() {
     let mut context = initialized();
-    let reserve = pda_payer_pda().0;
-    let mut account = context.get_account(&reserve).unwrap();
-    account.lamports = 0;
-    context.set_account(reserve, account).unwrap();
+    let relayer = Keypair::new();
     let data = ProofData::new(BASE_CHAIN_ID, vec![pair(22, 32)]);
     let proofs = proof_pdas(&data);
     let inbound = context
         .cctp_prover()
         .inbound(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
+    // Enough for Circle's `used_nonce` (8-byte discriminator + `is_used`),
+    // one lamport short of the `Proof` that follows.
+    let used_nonce_rent = context.get_sysvar::<Rent>().minimum_balance(8 + 1);
+    context
+        .airdrop(&relayer.pubkey(), used_nonce_rent + proof_rent() - 1)
+        .unwrap();
 
-    assert!(context.cctp_prover().receive(&inbound, &proofs).is_err());
+    let result = context
+        .cctp_prover()
+        .receive_by(&relayer, &inbound, &proofs);
+
+    assert!(
+        result
+            .clone()
+            .is_err_and(common::reached_program(cctp_prover::ID)),
+        "{result:?}"
+    );
+    assert!(result
+        .unwrap_err()
+        .meta
+        .logs
+        .iter()
+        .any(|log| log.contains("insufficient lamports")));
     assert!(recorded(&context, 22).is_none());
-    let nonce = cctp::nonce(&inbound.message).unwrap();
-    assert!(context
-        .get_account(&cctp::used_nonce_pda(&nonce).0)
-        .is_none());
+    assert!(!nonce_used(&context, &inbound));
 
-    context.airdrop(&reserve, common::sol_amount(1.0)).unwrap();
-    context.cctp_prover().receive(&inbound, &proofs).unwrap();
+    context.airdrop(&relayer.pubkey(), 1).unwrap();
+    context
+        .cctp_prover()
+        .receive_by(&relayer, &inbound, &proofs)
+        .unwrap();
     assert!(recorded(&context, 22).is_some());
+    assert!(nonce_used(&context, &inbound));
+}
+
+/// Circle forwards the tail's signer flags, so a relayer cannot name someone
+/// else's account as the rent payer: unsigned, it is rejected and untouched.
+#[test]
+fn unsigned_payer_is_rejected() {
+    let mut context = initialized();
+    let victim = Pubkey::new_unique();
+    context.airdrop(&victim, common::sol_amount(1.0)).unwrap();
+    let data = ProofData::new(BASE_CHAIN_ID, vec![pair(28, 38)]);
+    let proofs = proof_pdas(&data);
+    let inbound = context
+        .cctp_prover()
+        .inbound(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
+    let payer = context.payer.pubkey();
+    let mut ix = receive_instruction(&payer, &inbound, &proofs);
+    ix.accounts[TAIL_PAYER_INDEX] = AccountMeta::new(victim, false);
+
+    let result = context.cctp_prover().send(vec![ix], &[]);
+
+    assert!(result.is_err_and(common::is_program_error(
+        cctp_prover::ID,
+        anchor_lang::error::ErrorCode::AccountNotSigner
+    )));
+    assert_eq!(context.balance(&victim), common::sol_amount(1.0));
+    assert!(recorded(&context, 28).is_none());
+    assert!(!nonce_used(&context, &inbound));
 }
 
 /// Review Focus 1: a griefer's lamport transfer to the Proof PDA cannot block
@@ -297,7 +375,7 @@ fn direct_call(
     let mut accounts = cctp_prover::accounts::HandleReceiveMessage {
         authority_pda: authority,
         config: Config::pda().0,
-        pda_payer: pda_payer_pda().0,
+        payer: context.payer.pubkey(),
         system_program: anchor_lang::system_program::ID,
         event_authority: eco_svm_std::event_authority_pda(&cctp_prover::ID).0,
         program: cctp_prover::ID,

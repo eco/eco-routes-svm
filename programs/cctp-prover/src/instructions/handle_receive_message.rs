@@ -5,16 +5,17 @@ use eco_svm_std::Bytes32;
 
 use crate::cctp::{self, HandleReceiveMessageParams};
 use crate::instructions::CctpProverError;
-use crate::state::{pda_payer_pda, Config, ProofAccount, PDA_PAYER_SEED};
+use crate::state::{Config, ProofAccount};
 
 /// Shared by both `handle_receive_*` entrypoints. The transmitter has already
 /// verified Circle's attestation (which signs `remote_domain` and `sender`),
 /// the destination domain, the recipient and the nonce; it passes its
-/// authority PDA as signer, then forwards the relayer's remaining accounts:
-/// these four, our `#[event_cpi]` pair, then one `Proof` PDA per pair. It does
-/// not forward its payer, so rent comes from `pda_payer`. The only CPIs here
-/// are system-program creates and our own event, so Circle's self-reentrancy
-/// warning does not apply.
+/// authority PDA as signer, then forwards the relayer's remaining accounts
+/// with their signer and writable flags: these four, our `#[event_cpi]` pair,
+/// then one `Proof` PDA per pair. It does not forward its own payer, so the
+/// relayer signs `payer` again in the tail and that signature pays the `Proof`
+/// rent. The only CPIs here are system-program creates and our own event, so
+/// Circle's self-reentrancy warning does not apply.
 #[event_cpi]
 #[derive(Accounts)]
 #[instruction(params: HandleReceiveMessageParams)]
@@ -32,9 +33,10 @@ pub struct HandleReceiveMessage<'info> {
     pub authority_pda: Signer<'info>,
     #[account(address = Config::pda().0 @ CctpProverError::InvalidConfig)]
     pub config: Account<'info, Config>,
-    /// CHECK: address is validated
-    #[account(mut, address = pda_payer_pda().0 @ CctpProverError::InvalidPdaPayer)]
-    pub pda_payer: UncheckedAccount<'info>,
+    /// The relayer: funds every new `Proof`, refunded to its claimant on
+    /// `close_proof`. Any signer will do; there is no protocol reserve.
+    #[account(mut)]
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -64,19 +66,15 @@ pub fn handle_receive_message<'info>(
         CctpProverError::InvalidProof
     );
 
-    let (_, payer_bump) = pda_payer_pda();
     ctx.remaining_accounts
         .iter()
         .zip(proof_data.intent_hashes_claimants)
-        .try_for_each(|(proof, pair)| {
-            mark_intent_hash_proven(&ctx, proof, payer_bump, destination, pair)
-        })
+        .try_for_each(|(proof, pair)| mark_intent_hash_proven(&ctx, proof, destination, pair))
 }
 
 fn mark_intent_hash_proven<'info>(
     ctx: &Context<'info, HandleReceiveMessage<'info>>,
     proof: &AccountInfo<'info>,
-    payer_bump: u8,
     destination: u64,
     pair: IntentHashClaimant,
 ) -> Result<()> {
@@ -103,12 +101,9 @@ fn mark_intent_hash_proven<'info>(
             let proof_account: ProofAccount = prover::Proof::new(destination, claimant).into();
             proof_account.init(
                 proof,
-                &ctx.accounts.pda_payer,
+                &ctx.accounts.payer,
                 &ctx.accounts.system_program,
-                &[
-                    &[PDA_PAYER_SEED, &[payer_bump]],
-                    &[PROOF_SEED, intent_hash.as_ref(), &[proof_bump]],
-                ],
+                &[&[PROOF_SEED, intent_hash.as_ref(), &[proof_bump]]],
             )?
         }
     }
