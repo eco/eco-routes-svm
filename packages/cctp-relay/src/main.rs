@@ -12,6 +12,8 @@ use solana_sdk::pubkey::Pubkey;
 
 #[derive(Parser)]
 struct Cli {
+    /// Solana RPC URL. Prefer the `SOLANA_RPC_URL` environment variable: a URL on the command
+    /// line (often carrying an API key) lands in shell history and `ps`.
     #[arg(long, env = "SOLANA_RPC_URL", hide_env_values = true)]
     rpc_url: String,
     /// Path to the signer's keypair file.
@@ -74,5 +76,33 @@ fn main() {
         // The single exit path for failures: redact here too, whatever the module did.
         eprintln!("error: {}", rpc::redact(error, &cli.rpc_url));
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rpc_url_is_accepted_from_the_environment_variable() {
+        // `try_parse_from` reads the process environment, so assert through the arg's metadata
+        // instead of mutating it.
+        let command = <Cli as clap::CommandFactory>::command();
+        let arg = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "rpc_url")
+            .unwrap();
+
+        assert_eq!(arg.get_env().unwrap(), "SOLANA_RPC_URL");
+        assert!(arg.is_hide_env_values_set());
+        assert!(Cli::try_parse_from([
+            "cctp-relay",
+            "--rpc-url",
+            "x",
+            "--keypair",
+            "k",
+            "create-lookup-table"
+        ])
+        .is_ok());
     }
 }

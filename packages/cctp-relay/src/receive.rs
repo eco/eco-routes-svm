@@ -115,7 +115,11 @@ pub fn run(
             "simulation: err={:?} units={:?}",
             simulation.value.err, simulation.value.units_consumed
         );
-        return Ok(());
+        return check_simulation(
+            simulation.value.err.as_ref(),
+            simulation.value.logs.as_deref().unwrap_or_default(),
+            rpc_url,
+        );
     }
     let signature = client
         .send_and_confirm_transaction(&transaction)
@@ -123,6 +127,22 @@ pub fn run(
     println!("delivered: {signature}");
 
     Ok(())
+}
+
+/// A dry run only passes if the simulation did. The logs are printed (redacted) either way
+/// so a failure can be diagnosed.
+fn check_simulation(
+    err: Option<&impl std::fmt::Debug>,
+    logs: &[String],
+    rpc_url: &str,
+) -> Result<(), String> {
+    for line in logs {
+        println!("log: {}", rpc::redact(line, rpc_url));
+    }
+    match err {
+        Some(err) => Err(format!("simulation failed: {err:?}")),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -223,5 +243,13 @@ mod tests {
         assert!(instructions(&payer, ragged)
             .unwrap_err()
             .contains("malformed"));
+    }
+
+    #[test]
+    fn dry_run_fails_when_the_simulation_errors() {
+        let logs = vec!["Program log: boom".to_string()];
+
+        assert!(check_simulation(Some(&"InstructionError"), &logs, "").is_err());
+        assert!(check_simulation(None::<&String>, &logs, "").is_ok());
     }
 }
