@@ -459,7 +459,8 @@ mod tests {
     use super::*;
     use crate::cli::{ActionKind, ChainArgs, InputArgs, ReadArgs};
     use crate::plan::{
-        Action, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
+        Action, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER,
+        POLYMER_PROVER,
     };
     use crate::selection::SelectionFile;
     use crate::testing::{
@@ -468,8 +469,9 @@ mod tests {
 
     const VERIFY_PROGRAM_ID: Pubkey =
         Pubkey::from_str_const("verifycLy8mB96wd9wqq3WDXQwM4oU6r42Th37Db9fC");
-    const PROGRAMS: [&str; 5] = [
+    const PROGRAMS: [&str; 6] = [
         AGGREGATOR_PROVER,
+        CCTP_PROVER,
         HYPER_PROVER,
         LAYERZERO_PROVER,
         LOCAL_PROVER,
@@ -859,6 +861,7 @@ mod tests {
             .for_each(|name| fs::remove_file(env.path(&format!("{name}.devnet.so"))).unwrap());
 
         let members_then_aggregator = [
+            CCTP_PROVER,
             HYPER_PROVER,
             LAYERZERO_PROVER,
             LOCAL_PROVER,
@@ -1024,6 +1027,7 @@ mod tests {
         assert_eq!(
             env.actions(ActionKind::Finalize),
             [
+                CCTP_PROVER,
                 HYPER_PROVER,
                 LAYERZERO_PROVER,
                 LOCAL_PROVER,
@@ -1091,7 +1095,8 @@ mod tests {
                 POLYMER_PROVER,
                 LOCAL_PROVER,
                 LAYERZERO_PROVER,
-                HYPER_PROVER
+                HYPER_PROVER,
+                CCTP_PROVER
             ]
         );
     }

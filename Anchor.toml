@@ -23,6 +23,7 @@ proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.devnet]
 aggregator-prover = "EcoACmxgWf3v4o3UBqro2qBaYxgidaXnqdAT55ue1UFe"
+cctp-prover = "Ecor8EE3VDHBu8JGU7LxoFYkfXDyLdsheRzDMmT4iWjz"
 flash-fulfiller = "EcoFPd5rxoSdvW3sdkrx3DLAmATfVaibfNvLq3ZUh9ge"
 hyper-prover = "EcoHjwFYKtiHp5ZuFQBc87GDikm9Lc5EYapKywjNAQQF"
 portal = "EcoowmRRrMyYtQCuh5fCvMDWcD6B9ZDZkpgedf2bWKXi"
@@ -33,6 +34,7 @@ proof-helper = "EcoouNeez8PvCP9NJTywGdjYFAXnZ6pkMapZwymxg2GC"
 
 [programs.mainnet]
 aggregator-prover = "EcoACmxgWf3v4o3UBqro2qBaYxgidaXnqdAT55ue1UFe"
+cctp-prover = "Ecor8EE3VDHBu8JGU7LxoFYkfXDyLdsheRzDMmT4iWjz"
 flash-fulfiller = "EcoFPd5rxoSdvW3sdkrx3DLAmATfVaibfNvLq3ZUh9ge"
 hyper-prover = "EcoHjwFYKtiHp5ZuFQBc87GDikm9Lc5EYapKywjNAQQF"
 portal = "EcoowmRRrMyYtQCuh5fCvMDWcD6B9ZDZkpgedf2bWKXi"
@@ -50,6 +52,6 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 build-localnet = "anchor build"
-build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper && anchor build --program-name aggregator-prover && anchor build --program-name polymer-prover && anchor build --program-name layerzero-prover"
-build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet && anchor build --program-name aggregator-prover -- --features mainnet && anchor build --program-name polymer-prover -- --features mainnet && anchor build --program-name layerzero-prover -- --features mainnet"
+build-devnet = "anchor build --program-name portal && anchor build --program-name hyper-prover && anchor build --program-name local-prover && anchor build --program-name flash-fulfiller && anchor build --program-name proof-helper && anchor build --program-name aggregator-prover && anchor build --program-name polymer-prover && anchor build --program-name layerzero-prover && anchor build --program-name cctp-prover"
+build-mainnet = "anchor build --program-name portal -- --features mainnet && anchor build --program-name hyper-prover -- --features mainnet && anchor build --program-name local-prover -- --features mainnet && anchor build --program-name flash-fulfiller -- --features mainnet && anchor build --program-name proof-helper -- --features mainnet && anchor build --program-name aggregator-prover -- --features mainnet && anchor build --program-name polymer-prover -- --features mainnet && anchor build --program-name layerzero-prover -- --features mainnet && anchor build --program-name cctp-prover -- --features mainnet"
 test = "cargo test --no-fail-fast"

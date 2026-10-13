@@ -371,11 +371,11 @@ mod tests {
 
         assert_eq!(
             funding.required(),
-            Sol(4 * (rent(45 + 1_000) + rent(36))
+            Sol(5 * (rent(45 + 1_000) + rent(36))
                 + rent(45 + 3_000)
                 + rent(36)
                 + rent(37 + 3_000)
-                + 4 * (2 * 5_000 + 2 * 10_000)
+                + 5 * (2 * 5_000 + 2 * 10_000)
                 + (4 * 5_000 + 2 * 10_000)
                 + FIXED)
         );
@@ -441,8 +441,8 @@ mod tests {
 
         let priced = fees(1_000_000);
 
-        // Five 1,000-byte programs: 2 writes and 2 setup transactions each, at 10,000 units.
-        let deploy_units = 5 * 4 * 10_000;
+        // Six 1,000-byte programs: 2 writes and 2 setup transactions each, at 10,000 units.
+        let deploy_units = 6 * 4 * 10_000;
         let apply_units = 10 * 1_400_000;
         assert_eq!(priced, Sol(unpriced.0 + deploy_units + apply_units));
         assert_eq!(fees(u64::MAX), Sol(u64::MAX));

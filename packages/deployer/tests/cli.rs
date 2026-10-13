@@ -8,8 +8,8 @@ use common::{Context, RELEASE_PROGRAMS};
 use deployer::cli::{ActionKind, ActionsArgs, ApplyArgs, ChainArgs, InputArgs, PlanArgs, ReadArgs};
 use deployer::commands::{self, Error};
 use deployer::plan::{
-    Cluster, PlanHash, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
-    LOCAL_PROVER, POLYMER_PROVER,
+    Cluster, PlanHash, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER,
+    LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::account::Account;
@@ -26,9 +26,10 @@ const DVN: &str = "11111111111111111111111111111112";
 const EXECUTOR: &str = "11111111111111111111111111111113";
 const SLOT_HASHES_SPAN: u64 = 512;
 
-fn programs() -> [(&'static str, Pubkey); 5] {
+fn programs() -> [(&'static str, Pubkey); 6] {
     [
         (AGGREGATOR_PROVER, aggregator_prover::ID),
+        (CCTP_PROVER, cctp_prover::ID),
         (HYPER_PROVER, hyper_prover::ID),
         (LAYERZERO_PROVER, layerzero_prover::ID),
         (LOCAL_PROVER, local_prover::ID),
@@ -196,6 +197,7 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
             .lines()
             .collect::<Vec<_>>(),
         [
+            CCTP_PROVER,
             HYPER_PROVER,
             LAYERZERO_PROVER,
             LOCAL_PROVER,

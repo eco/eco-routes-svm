@@ -549,7 +549,7 @@ struct CanonicalProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{AGGREGATOR_PROVER, POLYMER_PROVER};
+    use crate::plan::{AGGREGATOR_PROVER, CCTP_PROVER, POLYMER_PROVER};
     use crate::testing::{self, address, full_setup};
 
     fn deployer() -> Pubkey {
@@ -660,11 +660,11 @@ mod tests {
         let alone = build(Operation::Finalize, AGGREGATOR_PROVER, |_| {});
         let with_members = build(
             Operation::Finalize,
-            "aggregator_prover,hyper_prover,polymer_prover,layerzero_prover",
+            "aggregator_prover,hyper_prover,polymer_prover,layerzero_prover,cctp_prover",
             |_| {},
         );
         let members_final = build(Operation::Finalize, AGGREGATOR_PROVER, |observed| {
-            [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER]
+            [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER, CCTP_PROVER]
                 .into_iter()
                 .for_each(|member| set_status(observed, member, Status::Live));
         });

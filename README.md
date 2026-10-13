@@ -701,7 +701,7 @@ The hash covers the release, the binaries, the cluster's genesis hash, the deplo
 **3. Approve** the `deploy` job, or reject it to stop. Once approved it plans again and fails without writing if the hash differs from the approved plan's (the chain changed while it waited); otherwise it:
 
 1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
-2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init` with every peer, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
+2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover`, taken from the release), then LayerZero (`init` with every peer, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final. The workflow does not run `cctp_prover`'s `init` yet: send it by hand (see [Manual fallback](#manual-fallback), step 4) before finalizing;
 3. reads every config back and compares it with the inputs; any difference fails the run with every program still upgradeable;
 4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record, and fails unless the rebuild matches the deployed bytecode;
 5. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
@@ -712,7 +712,7 @@ Every program stays upgradeable after the run, so the provers can be tested end 
 
 After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then approve the `finalize` job. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final or closed. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
 
-- is not deployed, was closed, or is not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`);
+- is not deployed, was closed, or is not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`; `cctp_prover`'s config is not checked yet, so read it back yourself before finalizing it, or an uninitialized one becomes permanent);
 - has no verification record uploaded by the deployer (the deploy run's verify step writes it);
 - depends on a program that would stay upgradeable: `aggregator_prover` before its members, and any prover before `portal`. Dependencies come from the release's `program-ids.json`;
 - is `layerzero_prover` without its full setup on chain (every peer's path and the frozen lookup table). Finalizing it also revokes the `pda_payer` delegate, so wait for the manual gate in [Administration and finalization](#administration-and-finalization).
@@ -776,7 +776,7 @@ solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deploy
 |---|---|---|
 | `hyper_prover` | `whitelisted_senders`: the EVM HyperProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
 | `polymer_prover` | `whitelisted_emitters`: the EVM PolymerProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
-| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
+| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
 | `layerzero_prover` | `init` with every peer (one v1 transaction), then `init_path` and `set_path_config` per peer, a frozen lookup table of `required_alt_addresses`, and `set_alt`; see [Administration and finalization](#administration-and-finalization) | deployer, as payer and upgrade authority |
 
 Every config is permanent. Read each one back and compare it with what you sent:

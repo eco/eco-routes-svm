@@ -350,6 +350,7 @@ mod tests {
 
     use super::*;
     use crate::classify::Status;
+    use crate::plan::CCTP_PROVER;
     use crate::testing::{
         chain_with_deployed_members, chain_with_layerzero_store, keys, layerzero_store, pda, plan,
         program_data, release_address,
@@ -459,6 +460,7 @@ mod tests {
                 release_address(HYPER_PROVER),
                 release_address(POLYMER_PROVER),
                 release_address(LAYERZERO_PROVER),
+                release_address(CCTP_PROVER),
             ]
         );
     }

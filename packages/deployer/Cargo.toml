@@ -33,6 +33,7 @@ thiserror = "2"
 wincode = "0.5"
 
 [dev-dependencies]
+cctp-prover = { path = "../../programs/cctp-prover", features = ["no-entrypoint"] }
 goldie = "0.7.0"
 litesvm = "0.16.0"
 local-prover = { path = "../../programs/local-prover", features = ["no-entrypoint"] }

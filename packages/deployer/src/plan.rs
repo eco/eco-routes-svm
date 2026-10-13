@@ -21,8 +21,10 @@ pub const LOCAL_PROVER: &str = "local_prover";
 pub const POLYMER_PROVER: &str = "polymer_prover";
 pub const AGGREGATOR_PROVER: &str = "aggregator_prover";
 pub const LAYERZERO_PROVER: &str = "layerzero_prover";
+pub const CCTP_PROVER: &str = "cctp_prover";
 /// Mirrors `AGGREGATOR_MEMBERS` in `scripts/program-keypairs.mjs`; the order is the on-chain config order.
-pub const AGGREGATOR_MEMBERS: [&str; 3] = [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER];
+pub const AGGREGATOR_MEMBERS: [&str; 4] =
+    [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER, CCTP_PROVER];
 pub const PROGRAMS_WITH_INIT: [&str; 4] = [
     HYPER_PROVER,
     POLYMER_PROVER,
@@ -822,8 +824,9 @@ mod tests {
     const DVN: &str = "11111111111111111111111111111112";
     const OTHER_DVN: &str = "11111111111111111111111111111114";
     const EXECUTOR: &str = "11111111111111111111111111111113";
-    const PROGRAMS: [&str; 8] = [
+    const PROGRAMS: [&str; 9] = [
         "aggregator_prover",
+        "cctp_prover",
         "flash_fulfiller",
         "hyper_prover",
         "layerzero_prover",
@@ -896,7 +899,13 @@ mod tests {
     /// The release's real dependency graph.
     fn fixture_dependencies(program: &str) -> Vec<String> {
         let dependencies: &[&str] = match program {
-            AGGREGATOR_PROVER => &[HYPER_PROVER, LAYERZERO_PROVER, POLYMER_PROVER, "portal"],
+            AGGREGATOR_PROVER => &[
+                CCTP_PROVER,
+                HYPER_PROVER,
+                LAYERZERO_PROVER,
+                POLYMER_PROVER,
+                "portal",
+            ],
             LOCAL_PROVER => &["flash_fulfiller", "portal"],
             "portal" | "proof_helper" => &[],
             _ => &["portal"],

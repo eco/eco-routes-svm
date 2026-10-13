@@ -18,6 +18,7 @@ pub mod litesvm_chain;
 const PAYER_LAMPORTS: u64 = 10_000_000_000;
 const AGGREGATOR_PROVER_BIN: &[u8] =
     include_bytes!("../../../../target/deploy/aggregator_prover.so");
+const CCTP_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/cctp_prover.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/hyper_prover.so");
 const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/layerzero_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/local_prover.so");
@@ -25,8 +26,9 @@ const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/poly
 const MOCK_LAYERZERO_ENDPOINT_BIN: &[u8] =
     include_bytes!("../../../../target/deploy/mock_layerzero_endpoint.so");
 
-pub const RELEASE_PROGRAMS: [Pubkey; 5] = [
+pub const RELEASE_PROGRAMS: [Pubkey; 6] = [
     aggregator_prover::ID,
+    cctp_prover::ID,
     hyper_prover::ID,
     layerzero_prover::ID,
     local_prover::ID,
@@ -49,6 +51,7 @@ impl Default for Context {
         svm.airdrop(&payer.pubkey(), PAYER_LAMPORTS).unwrap();
         [
             (aggregator_prover::ID, AGGREGATOR_PROVER_BIN),
+            (cctp_prover::ID, CCTP_PROVER_BIN),
             (hyper_prover::ID, HYPER_PROVER_BIN),
             (layerzero_prover::ID, LAYERZERO_PROVER_BIN),
             (local_prover::ID, LOCAL_PROVER_BIN),

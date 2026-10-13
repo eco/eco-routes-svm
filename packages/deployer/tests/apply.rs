@@ -10,7 +10,7 @@ use deployer::classify::{ProgramState, Status};
 use deployer::config::{self, Configs};
 use deployer::plan::{
     self, Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER,
-    HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
+    CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 use deployer::readback::{self, readback};
 use deployer::{setup, Chain, Inputs, RawInputs};
@@ -74,6 +74,7 @@ impl Env {
                 (POLYMER_PROVER, polymer_prover::ID),
                 (AGGREGATOR_PROVER, aggregator_prover::ID),
                 (LAYERZERO_PROVER, layerzero_prover::ID),
+                (CCTP_PROVER, cctp_prover::ID),
             ]),
         }
     }
