@@ -1,7 +1,7 @@
 name: Deploy
 
-# Deploys, initializes, reads back and verifies a release; never finalizes (finalize.yml does,
-# after testing). One dispatch, two jobs: `plan` reads the chain and writes the plan to its
+# Deploys, initializes, reads back, uploads the canonical IDLs of and verifies a release; never
+# finalizes (finalize.yml does, after testing). One dispatch, two jobs: `plan` reads the chain and writes the plan to its
 # summary without approval; `deploy` waits for the release environment's approval, re-plans, and
 # writes only if that plan's hash equals the approved one.
 on:
@@ -169,6 +169,13 @@ jobs:
         run: |
           deployer apply --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR" 2>&1 \
             | scripts/deploy-step.sh redact | tee out/apply.log
+
+      # Canonical IDLs need the deployer as upgrade authority, so they land here, before
+      # finalize.yml (which refuses a program whose IDL differs) makes that impossible.
+      - name: Upload IDLs
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: scripts/deploy-step.sh idl 2>&1 | scripts/deploy-step.sh redact | tee out/idl.log
 
       - name: Verify
         env:

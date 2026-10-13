@@ -14,4 +14,4 @@ Closing returns each program's rent to the deployer and burns its address: it ca
 - hyper_prover `pda_payer`: 7 lamports
 - layerzero_prover `pda_payer`: 9 lamports
 
-Plan hash: 5a4fad9c11a312d3c67b58cf20509658aac1cc1079f7d402e938c3ab1341b74a
+Plan hash: 1870524102c721d103d37c7b96696cdcc866efaf3bb43b7e5415245978219992

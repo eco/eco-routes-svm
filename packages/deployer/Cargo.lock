@@ -1347,6 +1347,7 @@ dependencies = [
  "cctp-prover",
  "clap",
  "eco-svm-std",
+ "flate2",
  "goldie",
  "hex",
  "hyper-prover",

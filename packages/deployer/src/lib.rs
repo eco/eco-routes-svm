@@ -6,6 +6,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod funding;
+pub mod idl;
 pub mod inputs;
 pub mod layerzero;
 pub mod layerzero_state;
