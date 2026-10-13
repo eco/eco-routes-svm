@@ -1,8 +1,10 @@
 use anchor_lang::prelude::*;
 
 mod get_proof;
+mod init;
 
 pub use get_proof::*;
+pub use init::*;
 
 /// The full list up front so error codes stay stable as instructions land.
 #[error_code]

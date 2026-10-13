@@ -19,4 +19,8 @@ pub mod cctp_prover {
     ) -> Result<Option<prover::Proof>> {
         instructions::get_proof(ctx, args)
     }
+
+    pub fn init(ctx: Context<Init>, args: InitArgs) -> Result<()> {
+        instructions::init(ctx, args)
+    }
 }

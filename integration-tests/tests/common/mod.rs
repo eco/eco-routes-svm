@@ -28,6 +28,7 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::{Transaction, TransactionError, VersionedTransaction};
 
 mod aggregator_prover_context;
+pub mod cctp_prover_context;
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
@@ -51,6 +52,7 @@ const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malic
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
 const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const CCTP_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/cctp_prover.so");
 const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
 const MOCK_POLYMER_PROVER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/mock_polymer_prover.so");
@@ -101,6 +103,9 @@ impl Default for Context {
         // can stage the admin that `LayerZeroProver::install` configures.
         svm.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
             .unwrap();
+        // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
+        // can stage the admin `init` checks.
+        svm.add_program(cctp_prover::ID, CCTP_PROVER_BIN).unwrap();
         // The mock declares Polymer's devnet ID, which is what non-mainnet
         // polymer-prover builds CPI into. Under `--features mainnet` this
         // address is the mainnet one and the mock's declared ID no longer

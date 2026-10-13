@@ -1645,6 +1645,7 @@ dependencies = [
  "anchor-spl",
  "base64 0.23.1",
  "bincode",
+ "cctp-prover",
  "derive_more",
  "dummy-ism",
  "eco-svm-std",
