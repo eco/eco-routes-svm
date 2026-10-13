@@ -163,6 +163,31 @@ fn cleanup_refunds_exactly_the_rent_to_the_claimant() {
     assert_eq!(context.balance(&claimant), proof_rent);
 }
 
+/// The claimant must be passed writable to be credited.
+#[test]
+fn cleanup_rejects_a_read_only_claimant() {
+    let mut context = initialized();
+    let claimant = Pubkey::new_unique();
+    let (reward, route_hash, hash, proof) = proven_intent(&mut context, claimant);
+    context.set_withdrawn_marker(WithdrawnMarker::pda(&hash).0);
+
+    let result = context.portal().close_proof(
+        BASE_CHAIN_ID,
+        route_hash,
+        reward,
+        vec![
+            AccountMeta::new(proof, false),
+            AccountMeta::new_readonly(claimant, false),
+        ],
+    );
+
+    assert!(result.is_err_and(common::is_program_error(
+        cctp_prover::ID,
+        anchor_lang::error::ErrorCode::ConstraintMut
+    )));
+    assert!(context.get_account(&proof).is_some());
+}
+
 /// On a payable proof only the claimant can take the rent, signer or not.
 #[test]
 fn cleanup_rejects_a_recipient_other_than_the_claimant() {

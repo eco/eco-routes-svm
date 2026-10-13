@@ -305,6 +305,36 @@ fn unsigned_payer_is_rejected() {
     assert!(!nonce_used(&context, &inbound));
 }
 
+/// The transmitter signs its authority PDA in the CPI and duplicate accounts
+/// share signer flags, so naming that PDA as the tail payer would reach us
+/// signed; it is rejected, and lamports sent to the PDA stay put.
+#[test]
+fn authority_pda_as_payer_is_rejected() {
+    let mut context = initialized();
+    let authority = cctp::authority_pda(&cctp_prover::ID).0;
+    context
+        .airdrop(&authority, common::sol_amount(1.0))
+        .unwrap();
+    let data = ProofData::new(BASE_CHAIN_ID, vec![pair(29, 39)]);
+    let proofs = proof_pdas(&data);
+    let inbound = context
+        .cctp_prover()
+        .inbound(BASE_DOMAIN, evm_sender(BASE_SENDER), 2000, data);
+    let payer = context.payer.pubkey();
+    let mut ix = receive_instruction(&payer, &inbound, &proofs);
+    ix.accounts[TAIL_PAYER_INDEX] = AccountMeta::new(authority, false);
+
+    let result = context.cctp_prover().send(vec![ix], &[]);
+
+    assert!(result.is_err_and(common::is_program_error(
+        cctp_prover::ID,
+        CctpProverError::InvalidRentRecipient
+    )));
+    assert_eq!(context.balance(&authority), common::sol_amount(1.0));
+    assert!(recorded(&context, 29).is_none());
+    assert!(!nonce_used(&context, &inbound));
+}
+
 /// Review Focus 1: a griefer's lamport transfer to the Proof PDA cannot block
 /// delivery, below the rent minimum (top-up branch) or at/above it (no top-up).
 #[test]

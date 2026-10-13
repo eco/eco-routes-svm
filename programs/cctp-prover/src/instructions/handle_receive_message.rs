@@ -34,7 +34,8 @@ pub struct HandleReceiveMessage<'info> {
     #[account(address = Config::pda().0 @ CctpProverError::InvalidConfig)]
     pub config: Account<'info, Config>,
     /// The relayer: funds every new `Proof`, refunded to its claimant on
-    /// `close_proof`. Any signer will do; there is no protocol reserve.
+    /// `close_proof`. Any signer but `authority_pda` will do (checked in the
+    /// handler); there is no protocol reserve.
     #[account(mut)]
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -46,6 +47,14 @@ pub fn handle_receive_message<'info>(
     ctx: Context<'info, HandleReceiveMessage<'info>>,
     params: HandleReceiveMessageParams,
 ) -> Result<()> {
+    // The transmitter signs `authority_pda` in its CPI and duplicate accounts
+    // share signer flags, so a relayer naming it as `payer` would spend
+    // whatever lamports were sent to that PDA.
+    require_keys_neq!(
+        ctx.accounts.payer.key(),
+        ctx.accounts.authority_pda.key(),
+        CctpProverError::InvalidRentRecipient
+    );
     let peer = *ctx
         .accounts
         .config
