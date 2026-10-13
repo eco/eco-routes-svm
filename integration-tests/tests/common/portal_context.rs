@@ -620,6 +620,30 @@ impl Portal<'_> {
         )
     }
 
+    /// `portal::prove` into cctp-prover; `event_account` is the fresh keypair
+    /// Circle's `send_message` creates as `message_sent_event_data`.
+    pub fn prove_intent_via_cctp_prover(
+        &mut self,
+        intent_hashes: Vec<Bytes32>,
+        destination_domain: u64,
+        fulfill_markers: Vec<Pubkey>,
+        data: Vec<u8>,
+        event_account: &Keypair,
+    ) -> TransactionResult {
+        let payer = self.payer.pubkey();
+        self.prove_intent(
+            intent_hashes,
+            cctp_prover::ID,
+            destination_domain,
+            fulfill_markers,
+            portal::state::dispatcher_pda(&cctp_prover::ID).0,
+            data,
+            vec![event_account.insecure_clone()],
+            super::cctp_prover_context::prove_accounts(&payer, &event_account.pubkey()),
+            Some(super::cctp_prover_context::COMPUTE_UNIT_LIMIT),
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn prove_intent_via_hyper_prover(
         &mut self,

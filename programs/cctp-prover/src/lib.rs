@@ -23,4 +23,8 @@ pub mod cctp_prover {
     pub fn init(ctx: Context<Init>, args: InitArgs) -> Result<()> {
         instructions::init(ctx, args)
     }
+
+    pub fn prove(ctx: Context<Prove>, args: prover::ProveArgs) -> Result<()> {
+        prove_intent(ctx, args)
+    }
 }

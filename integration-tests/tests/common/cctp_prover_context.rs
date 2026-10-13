@@ -10,7 +10,7 @@ use cctp_prover::state::{pda_payer_pda, Config, Peer};
 use derive_more::{Deref, DerefMut};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::account::Account;
-use solana_sdk::instruction::Instruction;
+use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
@@ -215,4 +215,24 @@ pub fn install_transmitter(context: &mut Context, attesters: &[TestAttester], th
             },
         )
         .unwrap();
+}
+
+/// `prove`'s accounts after the Portal dispatcher (which Portal prepends).
+pub fn prove_accounts(payer: &Pubkey, message_sent_event_data: &Pubkey) -> Vec<AccountMeta> {
+    vec![
+        AccountMeta::new_readonly(cctp_prover::state::sender_authority_pda().0, false),
+        AccountMeta::new(*payer, true),
+        AccountMeta::new(cctp::message_transmitter_pda().0, false),
+        AccountMeta::new(*message_sent_event_data, true),
+        AccountMeta::new_readonly(cctp_prover::ID, false),
+        AccountMeta::new_readonly(system_program::ID, false),
+        AccountMeta::new_readonly(MESSAGE_TRANSMITTER_V2_ID, false),
+    ]
+}
+
+/// An EVM `CCTPProver` address, left-padded: `prove`'s `data`.
+pub fn evm_recipient(byte: u8) -> Vec<u8> {
+    let mut recipient = [0u8; 32];
+    recipient[12..].fill(byte);
+    recipient.to_vec()
 }
