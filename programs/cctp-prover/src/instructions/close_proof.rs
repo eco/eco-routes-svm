@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use eco_svm_std::claimant;
 use eco_svm_std::prover::{CloseProofArgs, Proof};
 
 use crate::instructions::CctpProverError;
@@ -6,8 +7,9 @@ use crate::state::ProofAccount;
 
 /// Cleanup tail `[proof, rent_recipient]`. The relayer paid the rent in
 /// `handle_receive_*`; it goes to the proof's claimant, who need not sign. A
-/// cancellation's claimant is the uncontrolled sentinel, so its rent goes to
-/// a recipient that signs: Portal and the aggregator forward the tail's signer
+/// cancelled or zero claimant is not payable (nobody controls the sentinel,
+/// and the zero key is the executable System Program), so its rent goes to a
+/// recipient that signs: Portal and the aggregator forward the tail's signer
 /// flags, so only the closer can name itself. Takes no dependency beyond its
 /// own accounts so it cannot fail once the program is finalized.
 #[derive(Accounts)]
@@ -17,7 +19,7 @@ pub struct CloseProof<'info> {
     pub portal_proof_closer: Signer<'info>,
     #[account(mut, address = Proof::pda(&args.intent_hash, &crate::ID).0 @ CctpProverError::InvalidProof)]
     pub proof: Account<'info, ProofAccount>,
-    /// CHECK: the claimant, or a signer for a cancellation
+    /// CHECK: the claimant, or a signer when the claimant is cancelled or zero
     #[account(
         mut,
         constraint = is_rent_recipient(&proof.0, &rent_recipient) @ CctpProverError::InvalidRentRecipient,
@@ -26,10 +28,10 @@ pub struct CloseProof<'info> {
 }
 
 fn is_rent_recipient(proof: &Proof, recipient: &AccountInfo) -> bool {
-    if proof.is_cancelled() {
-        recipient.is_signer
-    } else {
+    if claimant::is_payable(&proof.claimant) {
         recipient.key() == proof.claimant
+    } else {
+        recipient.is_signer
     }
 }
 

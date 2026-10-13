@@ -230,3 +230,42 @@ fn cancelled_cleanup_pays_only_a_signing_closer() {
     assert!(context.get_account(&proof).is_none());
     assert_eq!(context.balance(&closer.pubkey()), proof_rent);
 }
+
+/// A zero claimant is not payable either (the zero key is the executable
+/// System Program, which cannot take lamports), so the rule matches a
+/// cancellation: only a signing closer can take the rent. Withdrawal cleanup
+/// reaches it when another aggregator member's proof paid out.
+#[test]
+fn zero_claimant_cleanup_pays_only_a_signing_closer() {
+    let mut context = initialized();
+    let (reward, route_hash, hash, proof) = proven_intent(&mut context, Pubkey::default());
+    context.set_withdrawn_marker(WithdrawnMarker::pda(&hash).0);
+    let proof_rent = context.get_account(&proof).unwrap().lamports;
+
+    let result = context.portal().close_proof(
+        BASE_CHAIN_ID,
+        route_hash,
+        reward.clone(),
+        vec![
+            AccountMeta::new(proof, false),
+            AccountMeta::new(Pubkey::new_unique(), false),
+        ],
+    );
+
+    assert!(result.is_err_and(common::is_program_error(
+        cctp_prover::ID,
+        CctpProverError::InvalidRentRecipient
+    )));
+    assert!(context.get_account(&proof).is_some());
+
+    let closer = Keypair::new();
+    let tail = cleanup_tail(&hash, Pubkey::default(), closer.pubkey());
+    assert!(tail[1].is_signer);
+    let ix = context
+        .portal()
+        .close_proof_instruction(BASE_CHAIN_ID, route_hash, reward, tail);
+    context.cctp_prover().send(vec![ix], &[&closer]).unwrap();
+
+    assert!(context.get_account(&proof).is_none());
+    assert_eq!(context.balance(&closer.pubkey()), proof_rent);
+}

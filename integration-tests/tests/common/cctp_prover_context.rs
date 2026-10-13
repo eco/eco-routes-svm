@@ -362,7 +362,8 @@ impl CctpProver<'_> {
 }
 
 /// Portal `close_proof` cleanup tail for our proof of `intent_hash`:
-/// `[proof, claimant]`, or `[proof, closer]` (signing) for a cancellation.
+/// `[proof, claimant]`, or `[proof, closer]` (signing) when the claimant is
+/// cancelled or zero.
 pub fn cleanup_tail(
     intent_hash: &eco_svm_std::Bytes32,
     claimant: Pubkey,

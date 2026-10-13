@@ -76,7 +76,8 @@ impl Config {
 impl AccountExt for Config {}
 
 /// Rent is paid by the relayer that submits `receive_message` and refunded on
-/// `close_proof` to the proof's claimant (to the closer for a cancellation).
+/// `close_proof` to the proof's claimant (to the closer when the claimant is
+/// cancelled or zero).
 /// There is no protocol reserve, so a fabricated proof costs only whoever
 /// relays it.
 #[account]

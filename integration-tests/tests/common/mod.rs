@@ -589,14 +589,14 @@ pub fn sol_amount(amount: f64) -> u64 {
 
 /// The rent recipient a concrete prover's cleanup tail ends with: Hyperlane
 /// and LayerZero pin it to their (non-signing) PDA payer, CCTP to the proof's
-/// `claimant` (non-signing) unless it is a cancellation, and the rest pay a
+/// `claimant` (non-signing) unless it is cancelled or zero, and the rest pay a
 /// signing recipient.
 pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey, claimant: Pubkey) -> AccountMeta {
     if *prover == hyper_prover::ID {
         AccountMeta::new(hyper_prover::state::pda_payer_pda().0, false)
     } else if *prover == layerzero_prover::ID {
         AccountMeta::new(layerzero_prover::state::pda_payer_pda().0, false)
-    } else if *prover == cctp_prover::ID && !eco_svm_std::claimant::is_cancelled(&claimant) {
+    } else if *prover == cctp_prover::ID && eco_svm_std::claimant::is_payable(&claimant) {
         AccountMeta::new(claimant, false)
     } else {
         AccountMeta::new(signer, true)
