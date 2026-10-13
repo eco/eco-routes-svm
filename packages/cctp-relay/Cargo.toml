@@ -1,0 +1,29 @@
+[package]
+name = "cctp-relay"
+version = "0.1.0"
+edition = "2021"
+
+# Its own workspace and lockfile: the RPC/HTTP client's dependency tree must never take part
+# in the programs' feature and version resolution, which decides their bytecode and addresses.
+[workspace]
+
+[dependencies]
+anchor-lang = "1.1.2"
+cctp-prover = { path = "../../programs/cctp-prover", features = ["no-entrypoint"] }
+clap = { version = "4", features = ["derive", "env"] }
+eco-svm-std = { path = "../eco-svm-std" }
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+solana-account-decoder-client-types = "4.2"
+solana-address-lookup-table-interface = { version = "3.1", features = ["bincode", "bytemuck"] }
+solana-commitment-config = "3.1"
+solana-compute-budget-interface = "3.0.0"
+solana-rpc-client = "4.2"
+solana-rpc-client-api = "4.2"
+solana-sdk = "4.0.1"
+thiserror = "2"
+
+[profile.release]
+overflow-checks = true
