@@ -555,11 +555,12 @@ impl Context {
 
 /// The programs a portal `reward.prover` can name, each loaded by
 /// [`Context::default`].
-pub const CONCRETE_PROVERS: [Pubkey; 4] = [
+pub const CONCRETE_PROVERS: [Pubkey; 5] = [
     local_prover::ID,
     hyper_prover::ID,
     polymer_prover::ID,
     layerzero_prover::ID,
+    cctp_prover::ID,
 ];
 
 /// The upgradeable-loader ProgramData account of `program_id`.
@@ -586,6 +587,8 @@ pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey) -> AccountMeta {
         AccountMeta::new(hyper_prover::state::pda_payer_pda().0, false)
     } else if *prover == layerzero_prover::ID {
         AccountMeta::new(layerzero_prover::state::pda_payer_pda().0, false)
+    } else if *prover == cctp_prover::ID {
+        AccountMeta::new(cctp_prover::state::pda_payer_pda().0, false)
     } else {
         AccountMeta::new(signer, true)
     }

@@ -1,10 +1,12 @@
 use anchor_lang::prelude::*;
 
+mod close_proof;
 mod get_proof;
 mod handle_receive_message;
 mod init;
 mod prove;
 
+pub use close_proof::*;
 pub use get_proof::*;
 pub use handle_receive_message::*;
 pub use init::*;

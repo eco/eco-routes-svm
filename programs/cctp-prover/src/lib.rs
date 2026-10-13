@@ -13,6 +13,10 @@ use instructions::*;
 pub mod cctp_prover {
     use super::*;
 
+    pub fn close_proof(ctx: Context<CloseProof>, args: prover::CloseProofArgs) -> Result<()> {
+        instructions::close_proof(ctx, args)
+    }
+
     pub fn get_proof(
         ctx: Context<GetProof>,
         args: prover::GetProofArgs,

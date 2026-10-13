@@ -89,6 +89,12 @@ fn forwarded_authority_cannot_close_another_intents_proof() {
                 (program, false) if program == layerzero_prover::ID => {
                     layerzero_prover::instructions::LayerZeroProverError::InvalidProof as u32
                 }
+                (program, true) if program == cctp_prover::ID => {
+                    cctp_prover::instructions::CctpProverError::InvalidPortalProofCloser as u32
+                }
+                (program, false) if program == cctp_prover::ID => {
+                    cctp_prover::instructions::CctpProverError::InvalidProof as u32
+                }
                 (program, _) => unreachable!("no expected error for prover {program}"),
             };
             assert!(

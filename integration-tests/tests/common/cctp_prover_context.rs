@@ -340,3 +340,10 @@ impl CctpProver<'_> {
         (reward, route_hash, hash)
     }
 }
+
+pub fn cleanup_tail(intent_hash: &eco_svm_std::Bytes32) -> Vec<AccountMeta> {
+    vec![
+        AccountMeta::new(Proof::pda(intent_hash, &cctp_prover::ID).0, false),
+        crate::common::cleanup_recipient(&cctp_prover::ID, Pubkey::default()),
+    ]
+}
