@@ -1,0 +1,22 @@
+use anchor_lang::prelude::*;
+use eco_svm_std::prover;
+
+declare_id!("Ecor8EE3VDHBu8JGU7LxoFYkfXDyLdsheRzDMmT4iWjz");
+
+pub mod cctp;
+pub mod instructions;
+pub mod state;
+
+use instructions::*;
+
+#[program]
+pub mod cctp_prover {
+    use super::*;
+
+    pub fn get_proof(
+        ctx: Context<GetProof>,
+        args: prover::GetProofArgs,
+    ) -> Result<Option<prover::Proof>> {
+        instructions::get_proof(ctx, args)
+    }
+}

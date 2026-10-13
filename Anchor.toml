@@ -7,6 +7,7 @@ skip-lint = false
 
 [programs.localnet]
 aggregator-prover = "EcoACmxgWf3v4o3UBqro2qBaYxgidaXnqdAT55ue1UFe"
+cctp-prover = "Ecor8EE3VDHBu8JGU7LxoFYkfXDyLdsheRzDMmT4iWjz"
 dummy-ism = "4GHxwWyKB9exhKG4fdyU2hfLgfFzhHp2WcsSKc2uNR1k"
 malicious-proof-closer = "3AArgehkyg8pPZUEfSQqZEp9WNJLCQStdWjz9HcrVPTp"
 malicious-prover = "HuYH6b8g196g3Zi5nvSadhQLBYMnLsy5RCkx4xmCXxoE"

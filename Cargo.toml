@@ -13,6 +13,7 @@ resolver = "2"
 aggregator-prover = { path = "programs/aggregator-prover" }
 anchor-lang = "1.1.2"
 anchor-spl = "1.1.2"
+cctp-prover = { path = "programs/cctp-prover" }
 derive-new = "0.7.0"
 dummy-ism = { path = "programs/dummy-ism" }
 eco-svm-std = { path = "packages/eco-svm-std" }
