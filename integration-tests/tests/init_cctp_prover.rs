@@ -3,7 +3,9 @@ use cctp_prover::state::{Config, MAX_PEERS};
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
-use crate::common::cctp_prover_context::{evm_peer, peers, BASE_DOMAIN};
+use crate::common::cctp_prover_context::{
+    build_init_instruction, evm_peer, peers, BASE_DOMAIN, OP_DOMAIN,
+};
 
 pub mod common;
 
@@ -35,7 +37,30 @@ fn init_rejects_non_authority_and_repeat() {
 
     context.cctp_prover().init(&authority, peers()).unwrap();
     context.expire_blockhash();
-    assert!(context.cctp_prover().init(&authority, peers()).is_err());
+    let other = vec![evm_peer(OP_DOMAIN, 10, 0x0a)];
+    let result = context.cctp_prover().init(&authority, other);
+    assert!(result.is_err_and(common::is_error(
+        anchor_lang::error::ErrorCode::ConstraintZero
+    )));
+
+    let config = context.account::<Config>(&Config::pda().0).unwrap();
+    assert_eq!(config.peers, peers());
+}
+
+/// The real authority signs but points `program_data` at another program's
+/// ProgramData (which it also controls); the `programdata_address` pointer
+/// check must reject it.
+#[test]
+fn init_rejects_foreign_program_data() {
+    let (mut context, authority) = installed();
+    context.set_upgrade_authority(&layerzero_prover::ID, Some(authority.pubkey()));
+    let mut instruction =
+        build_init_instruction(&context.payer.pubkey(), &authority.pubkey(), peers());
+    instruction.accounts[3].pubkey = common::program_data_address(&layerzero_prover::ID);
+
+    let result = context.cctp_prover().send(vec![instruction], &[&authority]);
+
+    assert!(result.is_err_and(common::is_error(CctpProverError::InvalidAuthority)));
 }
 
 #[test]
