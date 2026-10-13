@@ -25,7 +25,7 @@ const SEED = "ab".repeat(32);
 const PORTAL_ADDRESS = "Ecoi8woUrmkLq8PjpPFVF2k7xALmeKnAvWz2qVCkW1d7";
 // Pins the seed framing: changing it re-keys every program at the next release.
 const PORTAL_SEED = "5d57eacc653da7bcfd39a637cb2235dd88de5628abd089d697330c942bb16355";
-const AGGREGATOR_SEED = "e9712167f4126926fe91da24716c16a4b60685af9dbdc6ebe0b9dfd9b2f7e8fb";
+const AGGREGATOR_SEED = "6f4aac64f36d952143e1969134b48b96309e7d35b375b1e6534bf48aada13ec4";
 const PROGRAMS = [
   "aggregator_prover",
   "portal",
@@ -34,6 +34,7 @@ const PROGRAMS = [
   "flash_fulfiller",
   "proof_helper",
   "polymer_prover",
+  "layerzero_prover",
 ];
 const CARGO_DEPENDENCIES = {
   aggregator_prover: ["portal", "anchor-lang"],
@@ -43,16 +44,18 @@ const CARGO_DEPENDENCIES = {
   flash_fulfiller: ["portal"],
   proof_helper: [],
   polymer_prover: ["portal"],
+  layerzero_prover: ["portal", "eco-svm-std"],
   eco_svm_std: [],
 };
 const DEPENDENCIES = {
-  aggregator_prover: ["hyper_prover", "local_prover", "polymer_prover", "portal"],
+  aggregator_prover: ["hyper_prover", "layerzero_prover", "local_prover", "polymer_prover", "portal"],
   portal: [],
   hyper_prover: ["portal"],
   local_prover: ["flash_fulfiller", "portal"],
   flash_fulfiller: ["portal"],
   proof_helper: [],
   polymer_prover: ["portal"],
+  layerzero_prover: ["portal"],
 };
 
 const secret = () => parseSecret(SECRET_HEX);
@@ -132,7 +135,7 @@ test("dependencies reject unknown programs and an aggregator without its members
   assert.throws(() => dependencies(metadata(), [...PROGRAMS, "unknown"]), /not a workspace package/);
   assert.throws(
     () => dependencies(metadata(), ["aggregator_prover", "portal"]),
-    /aggregator_prover is released without its members: hyper_prover, local_prover, polymer_prover/,
+    /aggregator_prover is released without its members: hyper_prover, layerzero_prover, local_prover, polymer_prover/,
   );
 });
 

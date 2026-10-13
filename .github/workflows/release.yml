@@ -25,7 +25,7 @@ env:
   SOLANA_VERIFY_VERSION: "0.5.2"
   # Production programs only. The localnet test programs (dummy-ism, mock-polymer-prover,
   # malicious-*) must never reach a release, so assets are copied by name, never by glob.
-  RELEASED_PROGRAMS: "aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover"
+  RELEASED_PROGRAMS: "aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover layerzero_prover"
 
 jobs:
   release:

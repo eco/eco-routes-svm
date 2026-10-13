@@ -16,6 +16,7 @@ mainnet = [
     "eco-svm-std/mainnet",
     "flash-fulfiller/mainnet",
     "hyper-prover/mainnet",
+    "layerzero-prover/mainnet",
     "local-prover/mainnet",
     "polymer-prover/mainnet",
     "portal/mainnet",
@@ -33,11 +34,13 @@ dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
+layerzero-prover = { workspace = true, features = ["no-entrypoint"] }
 litesvm = "0.16.0"
 local-prover = { workspace = true, features = ["no-entrypoint"] }
 malicious-proof-closer = { workspace = true, features = ["no-entrypoint"] }
 malicious-prover = { workspace = true, features = ["no-entrypoint"] }
 mock-igp = { workspace = true, features = ["no-entrypoint"] }
+mock-layerzero-endpoint = { workspace = true, features = ["no-entrypoint"] }
 mock-polymer-prover = { workspace = true, features = ["no-entrypoint"] }
 polymer-prover = { workspace = true, features = ["no-entrypoint"] }
 portal = { workspace = true, features = ["no-entrypoint"] }

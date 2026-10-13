@@ -57,6 +57,9 @@ A pull-based prover backed by Polymer's proof network:
 - **Reverse Direction**: `prove` emits a `Prove: program: <id>, <hex>` log per intent for the EVM `PolymerProver.validateSolana` side to parse (at most 24 intents per call; see the `prove` note under [Polymer-Prover Program](#polymer-prover-program) for the per-transaction log budget)
 - **Proof Cleanup**: Called back by Portal during `withdraw` to close the Proof PDA and reclaim rent
 
+#### **LayerZero-Prover Program** (`programs/layerzero-prover/`)
+A LayerZero V2-backed prover, both directions, intended as a liveness member of the 1-of-N aggregator. Outbound is two steps (`prove` then a permissionless `send_message`) and inbound follows LayerZero's executor V2 flow; see [LayerZero-Prover Program](#layerzero-prover-program).
+
 #### **Local-Prover Program** (`programs/local-prover/`)
 A prover for same-chain intents (Solana source and destination):
 
@@ -308,6 +311,47 @@ A pull-based prover backed by Polymer's proof network. Unlike Hyper-Prover, nobo
 - `ProofAccount` - Stores proof data for intent fulfillment
 - `Config` - Prover configuration with whitelisted emitters
 
+### LayerZero-Prover Program
+
+A LayerZero V2-backed prover, both directions. It is a liveness member for the 1-of-N aggregator: a proof from any member is enough to settle.
+
+#### Outbound (two-step)
+- `prove` - Gated to Portal's `dispatcher_pda(&layerzero_prover::ID)`. It only commits the batch to a content-addressed `PendingSend` PDA.
+- `send_message` - Permissionless and top-level. It CPIs the endpoint's `send`, which nests endpoint, ULN, worker and pricefeed and already fills Solana's 5-frame invoke stack, so it cannot run under `portal::prove` (SIMD-0268, raising the limit, was not active when this shipped).
+- `quote_message` - Simulate it to get the fee.
+
+Solvers send `[ComputeBudget, portal::prove, layerzero_prover::send_message]` in one v0 transaction with address lookup tables. A batch holds at most `MAX_INTENTS_PER_PROVE` intents (21, measured with that transaction shape; it uses 62 of the 64 account locks). Executor options are computed on-chain with the EVM gas floor (`200_000 + 50_000·n`).
+
+The margin is thin. The cap assumes one address lookup table and at most 4 DVNs per path; a second lookup table pushes 21 intents over the 1232-byte packet limit. The fallback is to send `portal::prove` and `send_message` in separate transactions; the `PendingSend` commit persists between them.
+
+#### Inbound (executor V2)
+- `lz_receive_types_info` and `lz_receive_types_v2` - Executor discovery. `lz_receive_types_info` returns `[store, alt]`, the accounts `lz_receive_types_v2` takes. `lz_receive_types_v2` returns `lz_receive_accounts` (the single source of the account list) compacted against the lookup table the way LayerZero's `compact_accounts_with_alts` does: every account in the table becomes an `AltIndex` locator, and only the per-message `PayloadHash` and `Proof` PDAs stay plain addresses.
+- `lz_receive` - CPIs `endpoint::clear` first, checks `sender == peer[src_eid].address` and `ProofData.destination == peer.chain_id`, then creates `Proof` PDAs (identical redelivery is a no-op, a conflicting proof fails with `IntentAlreadyProven`).
+
+EVM `Inbox.prove` batches toward Solana must stay at or below `MAX_PAIRS_PER_MESSAGE` (6). LayerZero's executor refuses delivery transactions over 1220 bytes; on devnet 6 pairs delivered at 1142 bytes and 7 measured 1227 and were refused. The EVM `LayerZeroProver` must pin the Solana pathway's `maxMessageSize` to 392 bytes (`8 + 64 * 6`) so larger batches revert at send. A verified message over the cap is not lost: anyone can execute it with a lean `[compute-limit, lz_receive]` v0 transaction using the program's lookup table (7 pairs: 1079 bytes).
+
+The cap of 6 assumes the executor resolves every static `lz_receive` account through the lookup table recorded by `set_alt`. That table must hold every address `required_alt_addresses` returns: the `Store` PDA, `pda_payer`, the system program, this program's event authority and ID, the endpoint program, the OApp registry, the endpoint settings and event authority, and the endpoint `Nonce` of every configured peer. `set_alt` checks this on-chain and also requires the table to be frozen (no authority) and never deactivated, failing with `InvalidLookupTable`, `LookupTableNotFrozen`, `LookupTableDeactivated` or `LookupTableMissingAddress`. Until a table is recorded, `lz_receive_types_v2` fails with `AltNotSet`.
+
+#### Proof query and cleanup
+- `get_proof` - Return `Option<Proof>` for the requested intent hash and destination. Portal's `withdraw` and `refund` (and the aggregator) query it with the tail `[proof]`; query data is ignored.
+- `close_proof(args)` - Close the canonical proof with Portal's intent-scoped authorization. Portal's `close_proof` calls it after withdrawal, or for a cancellation at/after the reward deadline, with the cleanup tail `[proof, pda_payer]`; the rent goes back to `pda_payer`, which paid it in `lz_receive`. `withdraw` no longer closes the proof, so cleanup is a separate (permissionless) call.
+
+#### Funding
+Proof rent comes from the `pda_payer` reserve because the EVM sender's options carry gas only. An empty reserve makes delivery fail retryably, so monitor its balance. The rent only comes back when Portal's `close_proof` runs for the intent, and nobody but the reserve profits from it, so bundle cleanup with `withdraw` or run it from an operator job; otherwise every settled proof stays a permanent drain on the reserve. `pda_payer` must also be pre-funded before `init_path` / `set_path_config`, since it pays endpoint and ULN rent as the LayerZero delegate.
+
+#### EVM-side configuration
+- Whitelist the program's **`Store` PDA** on the EVM `LayerZeroProver` — it is the OApp address LayerZero reports as `origin.sender` — not the program ID.
+- Map Solana's EID (30168 mainnet / 40168 devnet) to `CHAIN_ID`.
+
+#### Administration and finalization
+`pda_payer` is the LayerZero delegate. `init`, `init_path`, `set_path_config` and `set_alt` are gated on the program's upgrade authority, so finalizing the program is the delegate revocation. The peer set (at most `MAX_PEERS`, 32) is fixed at finalization: `init` takes the whole set at once; more than about 18 peers overflow a v0 transaction's 1232 bytes, so send it as a v1 transaction (up to 4096 bytes; 32 peers fit), and register every chain before finalizing. Every path must be fully pinned (ULN302 send/receive library, explicit DVNs, confirmations, executor; `set_path_config` rejects LayerZero defaults and `NIL_CONFIRMATIONS`, which ULN302 resolves to zero confirmations) and read back before finalizing. An unpinned path after finalization needs a new program ID.
+- `set_path_config` runs ULN302 `init_config`, which creates the per-OApp Send/ReceiveConfig accounts, so on a real chain it is one-shot per eid. A wrong config must be corrected by a program upgrade before finalizing, then read back again.
+- The lookup table recorded by `set_alt` must be frozen (authority removed) and complete (`required_alt_addresses`) before `set_alt`, which rejects anything else. After finalizing, `set_alt` can never replace it.
+
+**Finalization gate.** Before finalizing the program, run one real outbound `send_message` and one inbound executor delivery on every configured mainnet path, then read back every path's `Nonce`, send and receive library, and ULN send/receive and executor config. CI verifies the ULN302 `init_config`/`set_config` account tails, `SendParams`/`QuoteParams` and the `send` account head only against the mock endpoint. A devnet E2E against Base Sepolia (2026-10-08) exercised them against the real endpoint, ULN302, executor and DVN in both directions, but every mainnet path still needs its own run and read-back.
+
+`layerzero.rs` hand-mirrors LayerZero-v2@9c741e7f (endpoint and ULN IDs, big-endian seeds, discriminators, V2 executor types). The ignored `layerzero_prover_real` test (needs `LZ_ENDPOINT_SO`) checks it against the dumped endpoint binary.
+
 ### Local-Prover Program
 
 A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
@@ -376,6 +420,9 @@ See [Proof queries and cleanup](docs/prover-interface.md) for account order, pro
 - `prove_polymer_prover.rs` - PolymerProver reverse-direction log emission
 - `close_proof_polymer_prover.rs` - PolymerProver proof cleanup
 - `validate_polymer_prover_real.rs` - Ignored smoke test against Polymer's real deployed program
+- `init_layerzero_prover.rs`, `prove_layerzero_prover.rs`, `send_layerzero_prover.rs`, `lz_receive_layerzero_prover.rs`, `lz_receive_types_layerzero_prover.rs`, `close_proof_layerzero_prover.rs` - LayerZeroProver admin, outbound commit/send, inbound executor flow, receive-types discovery, `get_proof` (direct and through the aggregator) and Portal `close_proof` cleanup (against `mock-layerzero-endpoint`)
+- `layerzero_prover_batch_limits.rs` - Pins the outbound and inbound batch ceilings
+- `layerzero_prover_real.rs` - Ignored test (needs `LZ_ENDPOINT_SO`) checking the hand-mirrored endpoint CPIs against LayerZero's dumped deployed binary
 
 #### Test Patterns:
 ```rust
@@ -427,7 +474,7 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`):
+The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`):
 
 ```toml
 [features]
@@ -459,7 +506,7 @@ The committed `declare_id!`s are placeholders, so devnet and mainnet deploy only
 
 The `Anchor.toml` file includes network-specific program configurations:
 
-- **Localnet**: Includes the localnet-only test programs — `dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`
+- **Localnet**: Includes the localnet-only test programs — `dummy-ism`, `mock-polymer-prover`, `mock-layerzero-endpoint`, `malicious-prover`, `malicious-proof-closer`
 - **Devnet** / **Mainnet**: Exclude the localnet-only test programs (production-like / production only)
 
 What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]` registration — that only maps names to IDs — but the explicit `--program-name` enumeration in `Anchor.toml`'s `build-devnet` / `build-mainnet` scripts and the `RELEASED_PROGRAMS` list `release.yml` copies assets by.
@@ -469,12 +516,14 @@ What keeps them out of devnet/mainnet artifacts is not the `[programs.<cluster>]
 aggregator-prover = "..."
 dummy-ism = "..."              # localnet-only test program
 mock-polymer-prover = "..."    # localnet-only test program
+mock-layerzero-endpoint = "..."  # localnet-only test program
 malicious-prover = "..."       # localnet-only test program
 malicious-proof-closer = "..." # localnet-only test program
 flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
+layerzero-prover = "..."
 portal = "..."
 proof-helper = "..."
 
@@ -484,6 +533,7 @@ flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
+layerzero-prover = "..."
 portal = "..."
 proof-helper = "..."
 # localnet-only test programs excluded
@@ -494,6 +544,7 @@ flash-fulfiller = "..."
 hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
+layerzero-prover = "..."
 portal = "..."
 proof-helper = "..."
 # localnet-only test programs excluded
@@ -524,7 +575,7 @@ dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.js
 
 plus `program-ids.json`, recording each program's `address`, `seed` and `salt` (see [Program IDs](#program-ids)).
 
-`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper` and `polymer_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
+`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover` and `layerzero_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 
@@ -623,7 +674,7 @@ solana program set-upgrade-authority -u <rpc> -k <deployer-keypair> "$address" -
 
 Then delete `keys/`.
 
-The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
+The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `mock-layerzero-endpoint`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
 ### Versioning
 

@@ -27,7 +27,7 @@ const CLUSTERS = ["mainnet", "devnet"];
 // whenever any of them does, although it does not compile their IDs in. Keep this equal to
 // the set the deployer passes to `init`.
 const AGGREGATOR = "aggregator_prover";
-const AGGREGATOR_MEMBERS = ["hyper_prover", "local_prover", "polymer_prover"];
+const AGGREGATOR_MEMBERS = ["hyper_prover", "layerzero_prover", "local_prover", "polymer_prover"];
 // Changing the domain re-keys every program; add a new version instead of editing it.
 const DOMAIN = "eco-routes-svm/program-keypair/v1";
 const MIN_SECRET_BYTES = 32;
