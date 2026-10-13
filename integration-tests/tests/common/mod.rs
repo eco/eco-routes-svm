@@ -44,6 +44,10 @@ pub use prover_query::ProverQuery;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
+/// Circle's `message_transmitter_v2`, dumped from mainnet at slot 343321624
+/// (sha256 abbe67181ec4edcad11f4a0773d8bf658b2e599d6f1365ebfee1ab0f85fe9bb4). Loaded at its real ID;
+/// `cctp_prover_context::install_transmitter` plants a state account with test attesters.
+const MESSAGE_TRANSMITTER_V2_BIN: &[u8] = include_bytes!("../../../bins/message_transmitter_v2.so");
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
@@ -106,6 +110,11 @@ impl Default for Context {
         // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
         // can stage the admin `init` checks.
         svm.add_program(cctp_prover::ID, CCTP_PROVER_BIN).unwrap();
+        svm.add_program(
+            cctp_prover::cctp::MESSAGE_TRANSMITTER_V2_ID,
+            MESSAGE_TRANSMITTER_V2_BIN,
+        )
+        .unwrap();
         // The mock declares Polymer's devnet ID, which is what non-mainnet
         // polymer-prover builds CPI into. Under `--features mainnet` this
         // address is the mainnet one and the mock's declared ID no longer

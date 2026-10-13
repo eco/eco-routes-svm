@@ -1,16 +1,23 @@
 use std::iter;
 
-use anchor_lang::{system_program, InstructionData, ToAccountMetas};
+use anchor_lang::prelude::borsh;
+use anchor_lang::{system_program, AnchorSerialize, InstructionData, ToAccountMetas};
+use cctp_prover::cctp::{
+    self, MESSAGE_TRANSMITTER_ACCOUNT_DISCRIMINATOR, MESSAGE_TRANSMITTER_V2_ID, SOLANA_DOMAIN,
+};
 use cctp_prover::instructions::InitArgs;
 use cctp_prover::state::{pda_payer_pda, Config, Peer};
 use derive_more::{Deref, DerefMut};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
+use solana_sdk::account::Account;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
+use tiny_keccak::{Hasher, Keccak};
 
 use crate::common::{program_data_address, sol_amount, Context, TransactionResult};
 
@@ -74,6 +81,7 @@ impl CctpProver<'_> {
     pub fn install(&mut self, authority: Pubkey) {
         self.set_upgrade_authority(&cctp_prover::ID, Some(authority));
         self.airdrop(&pda_payer_pda().0, sol_amount(10.0)).unwrap();
+        install_transmitter(self, &[TestAttester::new(TEST_ATTESTER_SECRET)], 1);
     }
 
     /// Simulates `solana program set-upgrade-authority --final`.
@@ -109,4 +117,102 @@ impl CctpProver<'_> {
 
         self.send_transaction(transaction)
     }
+}
+
+/// Synthetic attester key, generated for these tests only.
+pub const TEST_ATTESTER_SECRET: [u8; 32] = [0x11; 32];
+
+fn keccak(data: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut hasher = Keccak::v256();
+    hasher.update(data);
+    hasher.finalize(&mut out);
+    out
+}
+
+/// An EVM-style attester: Circle stores its 20-byte address left-padded with
+/// zeros as a `Pubkey` (`MessageTransmitter::recover_attester`).
+pub struct TestAttester(libsecp256k1::SecretKey);
+
+impl TestAttester {
+    pub fn new(secret: [u8; 32]) -> Self {
+        Self(libsecp256k1::SecretKey::parse(&secret).unwrap())
+    }
+
+    pub fn address(&self) -> Pubkey {
+        let public = libsecp256k1::PublicKey::from_secret_key(&self.0).serialize();
+        let mut address = keccak(&public[1..]);
+        address[..12].fill(0);
+        Pubkey::new_from_array(address)
+    }
+
+    /// `r || s || v` over `keccak256(message)`, `v = recovery id + 27`.
+    /// libsecp256k1 normalizes `s` low, which Circle requires.
+    pub fn sign(&self, message: &[u8]) -> [u8; 65] {
+        let digest = libsecp256k1::Message::parse(&keccak(message));
+        let (signature, recovery) = libsecp256k1::sign(&digest, &self.0);
+        let mut out = [0u8; 65];
+        out[..64].copy_from_slice(&signature.serialize());
+        out[64] = recovery.serialize() + 27;
+        out
+    }
+}
+
+/// Signatures in strictly increasing attester-address order, as Circle requires.
+pub fn attest(attesters: &[TestAttester], message: &[u8]) -> Vec<u8> {
+    let mut ordered: Vec<_> = attesters.iter().collect();
+    ordered.sort_by_key(|attester| attester.address());
+    ordered
+        .iter()
+        .flat_map(|attester| attester.sign(message))
+        .collect()
+}
+
+/// Circle's `MessageTransmitter` account (state.rs), field for field.
+#[derive(AnchorSerialize)]
+struct MessageTransmitterState {
+    owner: Pubkey,
+    pending_owner: Pubkey,
+    attester_manager: Pubkey,
+    pauser: Pubkey,
+    paused: bool,
+    local_domain: u32,
+    version: u32,
+    signature_threshold: u32,
+    enabled_attesters: Vec<Pubkey>,
+    max_message_body_size: u64,
+}
+
+/// Plants the transmitter's state PDA as Solana's domain with `attesters`
+/// enabled at `threshold`, the way `initialize` + `enable_attester` leave it.
+pub fn install_transmitter(context: &mut Context, attesters: &[TestAttester], threshold: u32) {
+    let state = MessageTransmitterState {
+        owner: Pubkey::new_unique(),
+        pending_owner: Pubkey::default(),
+        attester_manager: Pubkey::new_unique(),
+        pauser: Pubkey::new_unique(),
+        paused: false,
+        local_domain: SOLANA_DOMAIN,
+        version: cctp::MESSAGE_VERSION,
+        signature_threshold: threshold,
+        enabled_attesters: attesters.iter().map(TestAttester::address).collect(),
+        max_message_body_size: 8192,
+    };
+    let data: Vec<u8> = MESSAGE_TRANSMITTER_ACCOUNT_DISCRIMINATOR
+        .into_iter()
+        .chain(borsh::to_vec(&state).unwrap())
+        .collect();
+    let lamports = context.get_sysvar::<Rent>().minimum_balance(data.len());
+    context
+        .set_account(
+            cctp::message_transmitter_pda().0,
+            Account {
+                lamports,
+                data,
+                owner: MESSAGE_TRANSMITTER_V2_ID,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
 }
