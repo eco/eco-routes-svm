@@ -101,7 +101,7 @@ fn undeployed(chain: &impl Chain, address: &Pubkey) -> Result<ProgramState, Erro
     }
 }
 
-fn programdata_address(program: &Account) -> Option<Pubkey> {
+pub(crate) fn programdata_address(program: &Account) -> Option<Pubkey> {
     if program.owner != solana_sdk_ids::bpf_loader_upgradeable::id() {
         return None;
     }
@@ -114,7 +114,7 @@ fn programdata_address(program: &Account) -> Option<Pubkey> {
     }
 }
 
-fn split_programdata(programdata: &Account) -> Option<(Option<Pubkey>, &[u8])> {
+pub(crate) fn split_programdata(programdata: &Account) -> Option<(Option<Pubkey>, &[u8])> {
     let elf = programdata
         .data
         .get(UpgradeableLoaderState::size_of_programdata_metadata()..)?;

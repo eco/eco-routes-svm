@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One step of .github/workflows/{deploy,finalize,close}.yml:
-# deploy-step.sh <check|hash <plan-log>|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>.
+# deploy-step.sh <check|hash <plan-log>|gate <plan-log>|deploy|idl|verify|finalize|close|close-buffers|redact>.
 # Reads CLUSTER, RPC_URL, ASSETS (release download dir, holds program-ids.json), PLAN (plan.json)
 # and KEYPAIR (deployer keypair file) from the environment; KEYS_DIR (default target/keys) holds
 # the derived program keypairs. Never prints key material.
@@ -65,6 +65,17 @@ deploy() {
       --use-rpc --max-sign-attempts "$MAX_SIGN_ATTEMPTS" \
       ${price_flags[@]+"${price_flags[@]}"} "${ASSETS}/${program}.${CLUSTER}.so"
   done
+}
+
+# Each upgradeable program's release IDL becomes its canonical Program Metadata account, which
+# only its upgrade authority (the deployer) can write and nobody can once it is final. The
+# deployer skips an IDL already on chain, resumes a half-written one, and reads every upload
+# back; final programs are reported and left alone.
+idl() {
+  deployer idl --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR" || {
+    echo "IDL upload failed; nothing is lost: rerun the deploy workflow, whose IDL step resumes from the chain, before finalizing" >&2
+    return 1
+  }
 }
 
 verify() {
@@ -138,8 +149,8 @@ close() {
 }
 
 case "${1:-}" in
-  check | deploy | verify | finalize | close | redact) "$1" ;;
+  check | deploy | idl | verify | finalize | close | redact) "$1" ;;
   hash | gate) "$1" "${2:?usage: $0 $1 <plan-log>}" ;;
   close-buffers) close_buffers ;;
-  *) echo "usage: $0 <check|hash <plan-log>|gate <plan-log>|deploy|verify|finalize|close|close-buffers|redact>" >&2; exit 2 ;;
+  *) echo "usage: $0 <check|hash <plan-log>|gate <plan-log>|deploy|idl|verify|finalize|close|close-buffers|redact>" >&2; exit 2 ;;
 esac

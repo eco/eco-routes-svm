@@ -20,7 +20,7 @@ for (const name of ["VERIFY_IMAGE", "SOLANA_VERIFY_VERSION"]) {
   });
 }
 
-const DEPLOY_WORKFLOWS = { "deploy.yml": 5, "finalize.yml": 2, "close.yml": 2 };
+const DEPLOY_WORKFLOWS = { "deploy.yml": 6, "finalize.yml": 2, "close.yml": 2 };
 const workflow = (name) => readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8");
 
 for (const [name, minimumTees] of Object.entries(DEPLOY_WORKFLOWS)) {
@@ -110,6 +110,59 @@ test("deploy workflow closes leftover buffers after any outcome, while the deplo
   assert.ok(verify > 0 && close > verify);
   assert.ok(close < text.indexOf("      - name: Delete keys\n"));
   assert.match(text.slice(close), /^ {8}if: always\(\) && steps\.gate\.outcome == 'success'$/m);
+});
+
+test("deploy workflow uploads the IDLs after apply and before verify, while the deployer key exists", () => {
+  const text = workflow("deploy.yml");
+  const step = (name) => text.indexOf(`      - name: ${name}\n`);
+  const upload = step("Upload IDLs");
+
+  assert.ok(step("Apply") > 0 && upload > step("Apply"));
+  assert.ok(upload < step("Verify") && upload < step("Delete keys"));
+  assert.match(
+    text.slice(upload, step("Verify")),
+    /RPC_URL: https:\/\/solana-\$\{\{ inputs\.cluster \}\}\.g\.alchemy\.com\/v2\/\$\{\{ secrets\.ALCHEMY_API_KEY \}\}\n {8}run: scripts\/deploy-step\.sh idl 2>&1 \| scripts\/deploy-step\.sh redact \| tee out\/idl\.log\n/,
+  );
+  assert.doesNotMatch(workflow("finalize.yml"), /deploy-step\.sh idl/);
+});
+
+// Runs `deploy-step.sh idl` against a stub `deployer` exiting with `status`.
+const idlStep = (status) => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
+  const calls = join(bin, "calls");
+  writeFileSync(join(bin, "deployer"), `#!/usr/bin/env bash\necho "deployer $*" >> "${calls}"\nexit ${status}\n`, {
+    mode: 0o755,
+  });
+  const result = spawnSync("bash", [script, "idl"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      RPC_URL: "http://rpc",
+      KEYPAIR: "deployer.json",
+      ASSETS: "release",
+      PLAN: "out/plan.json",
+    },
+  });
+  const sent = readFileSync(calls, "utf8");
+  rmSync(bin, { recursive: true });
+
+  return { ...result, sent };
+};
+
+test("idl uploads through the deployer, signed by the deployer keypair", () => {
+  const { status, stderr, sent } = idlStep(0);
+
+  assert.equal(status, 0, stderr);
+  assert.equal(sent, "deployer idl --plan out/plan.json --assets release --deployer-keypair deployer.json\n");
+});
+
+test("a failed IDL upload fails the step and says how to resume", () => {
+  const { status, stderr } = idlStep(1);
+
+  assert.notEqual(status, 0);
+  assert.match(stderr, /IDL upload failed; .*rerun the deploy workflow, whose IDL step resumes from the chain/);
 });
 
 // Runs `deploy-step.sh deploy` against stub `solana` and `deployer` commands and returns the
