@@ -108,6 +108,15 @@ pub fn authority_pda(receiver: &Pubkey) -> (Pubkey, u8) {
     )
 }
 
+/// `authority_pda` for a caller-supplied bump, `None` when it is not a valid PDA.
+pub fn authority_pda_with_bump(receiver: &Pubkey, bump: u8) -> Option<Pubkey> {
+    Pubkey::create_program_address(
+        &[AUTHORITY_SEED, receiver.as_ref(), &[bump]],
+        &MESSAGE_TRANSMITTER_V2_ID,
+    )
+    .ok()
+}
+
 pub fn used_nonce_pda(nonce: &[u8; 32]) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[USED_NONCE_SEED, nonce], &MESSAGE_TRANSMITTER_V2_ID)
 }
@@ -413,6 +422,21 @@ mod tests {
             .iter()
             .all(|meta| meta.is_writable && !meta.is_signer));
         assert_eq!(ix.data[..8], RECEIVE_MESSAGE_DISCRIMINATOR);
+    }
+
+    /// Circle computes the CPI discriminator from the handler's name; ours
+    /// must be Anchor's default for the identically named instructions.
+    #[test]
+    fn handler_discriminators_match_generated_instructions() {
+        use anchor_lang::Discriminator;
+        assert_eq!(
+            crate::instruction::HandleReceiveFinalizedMessage::DISCRIMINATOR,
+            HANDLE_RECEIVE_FINALIZED_MESSAGE_DISCRIMINATOR.as_slice()
+        );
+        assert_eq!(
+            crate::instruction::HandleReceiveUnfinalizedMessage::DISCRIMINATOR,
+            HANDLE_RECEIVE_UNFINALIZED_MESSAGE_DISCRIMINATOR.as_slice()
+        );
     }
 
     #[test]

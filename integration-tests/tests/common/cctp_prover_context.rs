@@ -8,6 +8,8 @@ use cctp_prover::cctp::{
 use cctp_prover::instructions::InitArgs;
 use cctp_prover::state::{pda_payer_pda, Config, Peer};
 use derive_more::{Deref, DerefMut};
+use eco_svm_std::prover::{Proof, ProofData};
+use eco_svm_std::Bytes32;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::account::Account;
 use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -235,4 +237,106 @@ pub fn evm_recipient(byte: u8) -> Vec<u8> {
     let mut recipient = [0u8; 32];
     recipient[12..].fill(byte);
     recipient.to_vec()
+}
+
+pub struct Inbound {
+    pub message: Vec<u8>,
+    pub attestation: Vec<u8>,
+}
+
+pub fn evm_sender(byte: u8) -> [u8; 32] {
+    let mut sender = [0u8; 32];
+    sender[12..].fill(byte);
+    sender
+}
+
+pub fn proof_pdas(proof_data: &ProofData) -> Vec<Pubkey> {
+    proof_data
+        .intent_hashes_claimants
+        .iter()
+        .map(|pair| Proof::pda(&pair.intent_hash, &cctp_prover::ID).0)
+        .collect()
+}
+
+impl CctpProver<'_> {
+    /// An attested EVM -> Solana message, as Iris returns it: random nonce,
+    /// `finality` as executed, signed by the installed test attester.
+    pub fn inbound(
+        &self,
+        source_domain: u32,
+        sender: [u8; 32],
+        finality: u32,
+        proof_data: ProofData,
+    ) -> Inbound {
+        let message = cctp::format_message(
+            source_domain,
+            SOLANA_DOMAIN,
+            rand::random(),
+            &Pubkey::new_from_array(sender),
+            &cctp_prover::ID,
+            cctp::MIN_FINALITY_THRESHOLD,
+            finality,
+            &proof_data.to_bytes(),
+        );
+        let attestation = attest(&[TestAttester::new(TEST_ATTESTER_SECRET)], &message);
+
+        Inbound {
+            message,
+            attestation,
+        }
+    }
+
+    pub fn receive(&mut self, inbound: &Inbound, proofs: &[Pubkey]) -> TransactionResult {
+        let payer = self.payer.pubkey();
+        let ix = cctp::receive_message_instruction(
+            &payer,
+            inbound.message.clone(),
+            inbound.attestation.clone(),
+            proofs,
+        )
+        .unwrap();
+
+        self.send(vec![ix], &[])
+    }
+
+    pub fn deliver(
+        &mut self,
+        source_domain: u32,
+        sender: [u8; 32],
+        finality: u32,
+        proof_data: ProofData,
+    ) -> TransactionResult {
+        let proofs = proof_pdas(&proof_data);
+        let inbound = self.inbound(source_domain, sender, finality, proof_data);
+
+        self.receive(&inbound, &proofs)
+    }
+
+    /// A funded, native-only intent on this (source) chain naming `prover`.
+    pub fn funded_native_intent(
+        &mut self,
+        destination: u64,
+        prover: Pubkey,
+    ) -> (portal::types::Reward, Bytes32, Bytes32) {
+        let (_, _, mut reward) = self.rand_intent();
+        reward.prover = prover;
+        reward.tokens.clear();
+        let route_hash: Bytes32 = rand::random::<[u8; 32]>().into();
+        let hash = portal::types::intent_hash(destination, &route_hash, &reward.hash());
+        let vault = portal::state::vault_pda(&hash).0;
+        let funder = self.funder.pubkey();
+        self.airdrop(&funder, reward.native_amount).unwrap();
+        self.portal()
+            .fund_intent(
+                destination,
+                reward.clone(),
+                vault,
+                route_hash,
+                false,
+                Vec::<AccountMeta>::new(),
+            )
+            .unwrap();
+
+        (reward, route_hash, hash)
+    }
 }
