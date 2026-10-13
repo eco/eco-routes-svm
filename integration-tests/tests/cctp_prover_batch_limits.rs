@@ -295,6 +295,11 @@ fn max_peers_init_needs_v1() {
 /// transaction. The `FulfillMarker` and the executor's ATA are created by
 /// `fulfill` itself, so they stay static (conservative: an already-existing
 /// executor ATA could move into the table).
+///
+/// Measured: 946 bytes and 20 account locks, so the solver can fulfill and
+/// prove one intent in a single v0 transaction. Using the solver as the payer
+/// (payer == solver) drops one signature and one static key, shrinking it
+/// further.
 #[test]
 fn atomic_fulfill_and_prove_one_intent_fits_v0() {
     let mut ctx = common::Context::default();
