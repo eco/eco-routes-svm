@@ -18,6 +18,11 @@ pub struct Init<'info> {
     pub config: UncheckedAccount<'info>,
     #[account(mut)]
     pub payer: Signer<'info>,
+    pub authority: Signer<'info>,
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PolymerProverError::InvalidAuthority)]
+    pub program: Program<'info, crate::program::PolymerProver>,
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ PolymerProverError::InvalidAuthority)]
+    pub program_data: Account<'info, ProgramData>,
     pub system_program: Program<'info, System>,
 }
 

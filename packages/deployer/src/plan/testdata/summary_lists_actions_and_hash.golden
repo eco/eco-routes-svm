@@ -1,0 +1,31 @@
+## Deploy plan v1.2.3 on devnet
+
+| Program | Address | Status | Actions |
+|---|---|---|---|
+| aggregator_prover | `4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi` | new | deploy, init, verify |
+| flash_fulfiller | `8qbHbw2BbbTHBW1sbeqakYXVKRQM8Ne7pLK7m6CVfeR` | new | deploy, verify |
+| hyper_prover | `CktRuQ2mttgRGkXJtyksdKHjUdc2C4TgDzyB98oEzy8` | partial | init, verify |
+| layerzero_prover | `EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm` | partial | init, verify |
+| local_prover | `LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY` | new | deploy, verify |
+| polymer_prover | `QWmroo4YnnMqYW3cnxWkFdaTxGD3P7vMSzwMHGbUzwF` | new | deploy, init, verify |
+| portal | `US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx` | live | none |
+| proof_helper | `YMN9Qj5jPNp7j14VPcML1B6xGgcPWVZUGLFU3Mnyfaf` | new | deploy, verify |
+
+### Init values
+
+- compute unit price (micro-lamports): 0
+- hyper_prover senders: 0xabcdef0123456789abcdef0123456789abcdef01, 0x1111111111111111111111111111111111111111
+- hyper_prover reserve lamports: 1000000
+- polymer_prover emitters: 0x1111111111111111111111111111111111111111
+- aggregator_prover members: hyper_prover, polymer_prover, layerzero_prover
+- layerzero_prover reserve lamports: 2000000
+- layerzero_prover peer eid 30184: 0xabcdef0123456789abcdef0123456789abcdef01, chain id 30184
+  - send: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
+  - receive: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
+  - executor: 11111111111111111111111111111113 (max message size 10000)
+- layerzero_prover peer eid 30101: 0x1111111111111111111111111111111111111111, chain id 30101
+  - send: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
+  - receive: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)
+  - executor: 11111111111111111111111111111113 (max message size 10000)
+
+Plan hash: 74f4ea94e718b84b45bec03c8bea36a5f866286c01da2b01bd81caf0a32654a6

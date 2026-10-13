@@ -25,14 +25,30 @@ impl Context {
 }
 
 impl HyperProver<'_> {
+    /// Signed by the payer, the default upgrade authority.
     pub fn init(&mut self, whitelisted_senders: Vec<Bytes32>, config: Pubkey) -> TransactionResult {
+        let payer = self.payer.insecure_clone();
+
+        self.init_with_authority(&payer, whitelisted_senders, config)
+    }
+
+    pub fn init_with_authority(
+        &mut self,
+        authority: &Keypair,
+        whitelisted_senders: Vec<Bytes32>,
+        config: Pubkey,
+    ) -> TransactionResult {
         let args = hyper_prover::instructions::InitArgs {
             whitelisted_senders,
         };
         let instruction = hyper_prover::instruction::Init { args };
+        let loader = self.get_account(&hyper_prover::ID).unwrap().owner;
         let accounts: Vec<_> = hyper_prover::accounts::Init {
             config,
             payer: self.payer.pubkey(),
+            authority: authority.pubkey(),
+            program: hyper_prover::ID,
+            program_data: Pubkey::find_program_address(&[hyper_prover::ID.as_ref()], &loader).0,
             system_program: anchor_lang::system_program::ID,
         }
         .to_account_metas(None);
@@ -43,7 +59,7 @@ impl HyperProver<'_> {
         };
 
         let transaction = Transaction::new(
-            &[&self.payer],
+            &[&self.payer, authority],
             Message::new(&[instruction], Some(&self.payer.pubkey())),
             self.latest_blockhash(),
         );

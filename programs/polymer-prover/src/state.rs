@@ -9,8 +9,7 @@ pub const CONFIG_SEED: &[u8] = b"config";
 /// `4 + 32 * MAX_WHITELIST_LEN` and `AccountExt::init` allocates exactly
 /// `8 + INIT_SPACE`, so a full whitelist serializes byte-for-byte into the
 /// account; raising this constant without the `#[max_len]` below moving with
-/// it makes `init` fail at serialization. `init` is one-shot and
-/// unauthenticated, so that failure burns the program ID at rollout.
+/// it makes `init` fail at serialization.
 /// Pinned by `init_polymer_prover_at_max_whitelist_success`.
 pub const MAX_WHITELIST_LEN: usize = 20;
 

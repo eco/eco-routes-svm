@@ -136,7 +136,7 @@ impl Default for Context {
             .unwrap();
         svm.airdrop(&payer.pubkey(), sol_amount(10.0)).unwrap();
 
-        Self {
+        let mut context = Self {
             svm,
             mint_authority,
             token_program: token::ID,
@@ -145,7 +145,12 @@ impl Default for Context {
             funder,
             solver,
             sender,
-        }
+        };
+        let payer = context.payer.pubkey();
+        context.set_upgrade_authority(&hyper_prover::ID, Some(payer));
+        context.set_upgrade_authority(&polymer_prover::ID, Some(payer));
+
+        context
     }
 }
 
