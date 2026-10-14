@@ -619,15 +619,11 @@ fn init_values(inputs: &Inputs) -> String {
         .iter()
         .fold(header, |values, peer| values + &peer_summary(peer));
 
-    cctp_peers.iter().fold(values, |values, peer| {
-        values
-            + &format!(
-                "- {CCTP_PROVER} peer domain {}: chain id {}, sender 0x{}\n",
-                peer.domain,
-                peer.chain_id,
-                hex::encode(*peer.sender)
-            )
-    })
+    config::cctp_peer_strings(cctp_peers)
+        .into_iter()
+        .fold(values, |values, peer| {
+            values + &format!("- {CCTP_PROVER} peer {peer}\n")
+        })
 }
 
 fn peer_summary(peer: &LayerZeroPeer) -> String {

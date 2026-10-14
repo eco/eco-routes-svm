@@ -13,7 +13,8 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 const EVM_ADDRESS_LEN: usize = 20;
 /// eco-svm-std's mainnet and devnet `CHAIN_ID`. The deployer is one build for both clusters, so
 /// a CCTP peer may claim neither.
-pub const SOLANA_CHAIN_IDS: [u64; 2] = [1399811149, 1399811150];
+pub const SOLANA_CHAIN_IDS: [u64; 2] =
+    [eco_svm_std::MAINNET_CHAIN_ID, eco_svm_std::DEVNET_CHAIN_ID];
 /// ULN302's `DVN_MAX_LEN`, for the required and the optional list alike.
 pub const MAX_DVNS: u8 = 16;
 
@@ -763,21 +764,12 @@ mod tests {
         assert!(parse_cctp(&[cctp_peer_json(0, 1, &padded)]).is_ok());
     }
 
-    /// Both values against eco-svm-std's source, since this build only compiles one of them.
+    /// The values the G4 runbook and every counterpart chain use; this build compiles the
+    /// devnet one as `CHAIN_ID`.
     #[test]
-    fn solana_chain_ids_match_eco_svm_std_on_both_clusters() {
-        let source = include_str!("../../eco-svm-std/src/lib.rs");
-        let [mainnet, devnet] = SOLANA_CHAIN_IDS;
-
-        assert_eq!(mainnet, 1399811149);
-        assert_eq!(devnet, 1399811150);
-        assert!(source.contains(&format!(
-            "#[cfg(feature = \"mainnet\")]\npub const CHAIN_ID: u64 = {mainnet};"
-        )));
-        assert!(source.contains(&format!(
-            "#[cfg(not(feature = \"mainnet\"))]\npub const CHAIN_ID: u64 = {devnet};"
-        )));
-        assert_eq!(eco_svm_std::CHAIN_ID, devnet);
+    fn solana_chain_ids_are_mainnet_then_devnet() {
+        assert_eq!(SOLANA_CHAIN_IDS, [1399811149, 1399811150]);
+        assert_eq!(eco_svm_std::CHAIN_ID, SOLANA_CHAIN_IDS[1]);
     }
 
     #[test]

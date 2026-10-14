@@ -4,10 +4,15 @@ pub mod account;
 pub mod claimant;
 pub mod prover;
 
+/// Solana's chain ID in proofs and intent hashes on mainnet.
+pub const MAINNET_CHAIN_ID: u64 = 1399811149;
+/// Solana's chain ID everywhere else (devnet, localnet).
+pub const DEVNET_CHAIN_ID: u64 = 1399811150;
+
 #[cfg(feature = "mainnet")]
-pub const CHAIN_ID: u64 = 1399811149;
+pub const CHAIN_ID: u64 = MAINNET_CHAIN_ID;
 #[cfg(not(feature = "mainnet"))]
-pub const CHAIN_ID: u64 = 1399811150;
+pub const CHAIN_ID: u64 = DEVNET_CHAIN_ID;
 
 const EVENT_AUTHORITY_SEED: &[u8] = b"__event_authority";
 
