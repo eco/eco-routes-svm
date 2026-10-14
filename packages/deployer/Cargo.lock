@@ -1000,6 +1000,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cctp-prover"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "eco-svm-std",
+ "getrandom 0.2.17",
+ "portal",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1334,8 +1344,10 @@ dependencies = [
  "aggregator-prover",
  "anchor-lang",
  "bincode",
+ "cctp-prover",
  "clap",
  "eco-svm-std",
+ "flate2",
  "goldie",
  "hex",
  "hyper-prover",
@@ -1346,6 +1358,7 @@ dependencies = [
  "polymer-prover",
  "serde",
  "serde_json",
+ "solana-account-decoder-client-types",
  "solana-address-lookup-table-interface",
  "solana-cluster-type",
  "solana-commitment-config",

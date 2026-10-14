@@ -23,8 +23,8 @@ pub enum Command {
     /// run the init steps and read them back.
     Apply(ApplyArgs),
     /// Plan making the selected upgradeable programs immutable; writes `plan.json` and prints
-    /// `plan_hash=<hex>`. Refuses a program before its dependencies, or one not initialized or
-    /// verified.
+    /// `plan_hash=<hex>`. Refuses a program before its dependencies, one not initialized or
+    /// verified, or one whose canonical IDL is not the release's `<program>.<cluster>.json`.
     #[command(name = "plan-finalize")]
     PlanFinalize(SelectionArgs),
     /// Plan closing the selected upgradeable programs, which burns their addresses; writes
@@ -34,6 +34,13 @@ pub enum Command {
     /// Print the programs `plan.json` assigns to an action, one per line, each after the
     /// programs it depends on (before them for `close`).
     Actions(ActionsArgs),
+    /// Upload each upgradeable release program's `<program>.<cluster>.json` as its canonical
+    /// IDL, resuming a half-written one, and read it back; leaves final programs as they are.
+    Idl(IdlArgs),
+    /// Close the canonical IDL and scratch buffer of every program a close plan closes,
+    /// returning their rent; run before the programs themselves are closed.
+    #[command(name = "close-idl")]
+    CloseIdl(CloseIdlArgs),
 }
 
 /// The RPC and the deployer's address, for the plan commands: they only read the chain, so they
@@ -66,6 +73,8 @@ pub struct InputArgs {
     pub polymer_emitters: String,
     #[arg(long, env = "LAYERZERO")]
     pub layerzero: String,
+    #[arg(long, env = "CCTP")]
+    pub cctp: String,
     #[arg(long, env = "HYPER_RESERVE_LAMPORTS")]
     pub hyper_reserve_lamports: String,
     #[arg(long, env = "LAYERZERO_RESERVE_LAMPORTS")]
@@ -134,6 +143,31 @@ pub struct ApplyArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct IdlArgs {
+    /// The release and the compute-unit price come from it.
+    #[arg(long)]
+    pub plan: PathBuf,
+    /// Directory of the release `<program>.<cluster>.json` IDLs.
+    #[arg(long)]
+    pub assets: PathBuf,
+    #[command(flatten)]
+    pub chain: ChainArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct CloseIdlArgs {
+    /// The close plan: which programs close comes from it.
+    #[arg(long)]
+    pub plan: PathBuf,
+    /// Directory of the release `<program>.<cluster>.so` binaries, to confirm each program is
+    /// still the deployer's to sign for.
+    #[arg(long)]
+    pub assets: PathBuf,
+    #[command(flatten)]
+    pub chain: ChainArgs,
+}
+
+#[derive(Debug, Args)]
 pub struct ActionsArgs {
     #[arg(long)]
     pub plan: PathBuf,
@@ -176,12 +210,14 @@ mod tests {
         "--deployer",
         "11111111111111111111111111111112",
     ];
-    const INPUTS: [&str; 10] = [
+    const INPUTS: [&str; 12] = [
         "--hyper-senders",
         "0xaa",
         "--polymer-emitters",
         "0xbb",
         "--layerzero",
+        "{}",
+        "--cctp",
         "{}",
         "--hyper-reserve-lamports",
         "1",
@@ -268,6 +304,23 @@ mod tests {
     }
 
     #[test]
+    fn idl_parses_plan_assets_and_chain() {
+        let arguments = [
+            &["idl", "--plan", "plan.json", "--assets", "assets"][..],
+            &CHAIN,
+        ]
+        .concat();
+
+        let Command::Idl(idl) = parse(&arguments).unwrap().command else {
+            panic!("expected the idl command");
+        };
+
+        assert_eq!(idl.plan, PathBuf::from("plan.json"));
+        assert_eq!(idl.assets, PathBuf::from("assets"));
+        assert_eq!(idl.chain.deployer_keypair, PathBuf::from("deployer.json"));
+    }
+
+    #[test]
     fn plan_takes_the_compute_unit_price_as_an_input() {
         let arguments = [
             &["plan", "--version", "1", "--cluster", "mainnet"][..],
@@ -324,7 +377,7 @@ mod tests {
         const SECRET: &str = "http://rpc.example/?api-key=help-must-not-print-this";
         std::env::set_var("RPC_URL", SECRET);
 
-        ["plan", "apply"].iter().for_each(|command| {
+        ["plan", "apply", "idl"].iter().for_each(|command| {
             let help = parse(&[command, "--help"]).unwrap_err().to_string();
 
             assert!(help.contains("RPC_URL"), "{help}");

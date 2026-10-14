@@ -3,6 +3,7 @@
 | Program | Address | Status | Action |
 |---|---|---|---|
 | aggregator_prover | `EnTJCS15dqbDTU2XywYSMaScoPv4Py4GzExrtY9DQxoD` | partial | finalize |
+| cctp_prover | `ErNbLjU6E8tSbZH3REsMeTDP3Z8G52k6YedWwvBpAJ7v` | partial | finalize |
 | hyper_prover | `EahQmXc3rwhY3CH1g3ZgUx8L4vHTNmzpK1xtiQ1RAxq6` | partial | finalize |
 | layerzero_prover | `EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm` | partial | finalize |
 | local_prover | `Eechuq54TEzmBHXX7Ltbmpu6K5Vf3qgdsRdYmn41vJ9o` | partial | finalize |
@@ -13,10 +14,11 @@
 ```
 hyper_prover: [0x000000000000000000000000abcdef0123456789abcdef0123456789abcdef01]
 polymer_prover: [0x000000000000000000000000abcdef0123456789abcdef0123456789abcdef01]
-aggregator_prover: [EahQmXc3rwhY3CH1g3ZgUx8L4vHTNmzpK1xtiQ1RAxq6, EiY148Y53YHzKNn2YeDX4hfrZEhriuNTRqJCqA6cfdUW, EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm]
+aggregator_prover: [EahQmXc3rwhY3CH1g3ZgUx8L4vHTNmzpK1xtiQ1RAxq6, EiY148Y53YHzKNn2YeDX4hfrZEhriuNTRqJCqA6cfdUW, EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm, ErNbLjU6E8tSbZH3REsMeTDP3Z8G52k6YedWwvBpAJ7v]
 layerzero_prover: [eid 1 chain_id 1 address 0x000000000000000000000000abcdef0123456789abcdef0123456789abcdef01]
+cctp_prover: [domain 0 chain_id 1 sender 0x000000000000000000000000abcdef0123456789abcdef0123456789abcdef01]
 layerzero_prover lookup table: 7gyGAp71YXQRoxmFBaHxofQXAipvgHyBKPyxmdSJxyvz ok
 layerzero_prover path: eid 1 nonce true send [confirmations 15 required 1/[5M7zug6X5Rs2rhA1w4AfKQLxBytYMKtkNhf1smpfP1SH] optional 255/0/[], executor 483SprNKkq27QSkvgBZnRMmSSkXgCUqEnntnHw6kYXtq max size 10000] receive [confirmations 15 required 1/[5M7zug6X5Rs2rhA1w4AfKQLxBytYMKtkNhf1smpfP1SH] optional 255/0/[]]
 ```
 
-Plan hash: 56fb29dc75d78d9f195fcc9208216f6befb1ae7301894417d3cb3bd0cd91ec35
+Plan hash: 2e9d4ba67b5cc0b02b5d5d04e5a2c7a5d042b0006c25fd76e3bb1e3f0b03afae

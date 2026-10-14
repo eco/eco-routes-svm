@@ -8,7 +8,9 @@ use solana_sdk_ids::{bpf_loader_upgradeable, system_program};
 
 use crate::chain::{self, Chain};
 use crate::layerzero_state::{self, Alt, Path};
-use crate::plan::{Release, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER, POLYMER_PROVER};
+use crate::plan::{
+    Release, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER, POLYMER_PROVER,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -46,6 +48,7 @@ pub struct Configs {
     pub polymer_emitters: Option<Vec<Bytes32>>,
     pub aggregator_provers: Option<Vec<Pubkey>>,
     pub layerzero_peers: Option<Vec<Peer>>,
+    pub cctp_peers: Option<Vec<cctp_prover::state::Peer>>,
     /// The lookup table recorded in the LayerZero `Store`; `None` until `set_alt` ran. Only
     /// observed, never planned, so it is outside [`Self::entries`].
     pub layerzero_alt: Option<Alt>,
@@ -82,12 +85,13 @@ impl Configs {
         self.entries().iter().all(|(_, values)| values.is_none())
     }
 
-    pub fn entries(&self) -> [(&'static str, Option<Vec<String>>); 4] {
+    pub fn entries(&self) -> [(&'static str, Option<Vec<String>>); 5] {
         let Self {
             hyper_senders,
             polymer_emitters,
             aggregator_provers,
             layerzero_peers,
+            cctp_peers,
             layerzero_alt: _,
             layerzero_paths: _,
         } = self;
@@ -108,6 +112,7 @@ impl Configs {
                 LAYERZERO_PROVER,
                 layerzero_peers.as_deref().map(peer_strings),
             ),
+            (CCTP_PROVER, cctp_peers.as_deref().map(cctp_peer_strings)),
         ]
     }
 
@@ -180,6 +185,7 @@ pub fn read(chain: &impl Chain, release: &Release) -> Result<Configs, Error> {
         polymer_emitters: polymer_emitters(chain, &address(POLYMER_PROVER)?)?,
         aggregator_provers: aggregator_provers(chain, &address(AGGREGATOR_PROVER)?)?,
         layerzero_peers: store.map(|store| store.peers),
+        cctp_peers: cctp_peers(chain, &address(CCTP_PROVER)?)?,
         layerzero_alt,
         layerzero_paths,
     })
@@ -211,6 +217,17 @@ pub fn polymer_emitters(
         read_config(chain, POLYMER_PROVER, seed, program)?;
 
     Ok(config.map(|config| config.whitelisted_emitters))
+}
+
+pub fn cctp_peers(
+    chain: &impl Chain,
+    program: &Pubkey,
+) -> Result<Option<Vec<cctp_prover::state::Peer>>, Error> {
+    let seed = cctp_prover::state::CONFIG_SEED;
+    let config: Option<cctp_prover::state::Config> =
+        read_config(chain, CCTP_PROVER, seed, program)?;
+
+    Ok(config.map(|config| config.peers))
 }
 
 pub fn aggregator_provers(
@@ -280,6 +297,20 @@ fn peer_strings(peers: &[Peer]) -> Vec<String> {
                 peer.eid,
                 peer.chain_id,
                 hex::encode(*peer.address)
+            )
+        })
+        .collect()
+}
+
+pub fn cctp_peer_strings(peers: &[cctp_prover::state::Peer]) -> Vec<String> {
+    peers
+        .iter()
+        .map(|peer| {
+            format!(
+                "domain {} chain_id {} sender 0x{}",
+                peer.domain,
+                peer.chain_id,
+                hex::encode(*peer.sender)
             )
         })
         .collect()

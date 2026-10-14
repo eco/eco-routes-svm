@@ -14,7 +14,7 @@ use crate::plan::{
     self, Action, Cluster, PlanHash, PlannedProgram, PlannedProgramFile, PlannedStatus, Release,
     HYPER_PROVER, LAYERZERO_PROVER, PROGRAMS_WITH_INIT,
 };
-use crate::{layerzero, setup};
+use crate::{idl, layerzero, setup};
 
 /// OtterSec's verification program: `solana-verify verify-from-repo` records each verified build
 /// there, at a PDA of the uploader and the program.
@@ -55,6 +55,8 @@ pub enum Error {
     NotVerified { program: String },
     #[error("{LAYERZERO_PROVER} cannot be finalized while a live path names a wrong worker, which finalizing would lock in: {reason}")]
     InvalidLayerZeroWorker { reason: String },
+    #[error("{program}'s canonical IDL is missing or differs from the release's, and a final program can never change it; the deploy workflow's IDL upload must succeed first")]
+    IdlNotUploaded { program: String },
     #[error("{program} depends on {dependency}, which is neither final nor finalized in this run")]
     DependencyNotFinal { program: String, dependency: String },
     #[error("{program} cannot be closed: the final {dependent} depends on it")]
@@ -83,6 +85,8 @@ pub struct Observed {
     pub live_configs: Configs,
     /// Programs with a verification record uploaded by the deployer.
     pub verified: BTreeSet<String>,
+    /// Programs whose canonical IDL holds exactly the release's.
+    pub idls: BTreeSet<String>,
     /// Lamports in the hyper and LayerZero `pda_payer` reserves; closing a program strands its
     /// reserve. Not hashed: inbound deliveries move them.
     pub reserves: BTreeMap<String, u64>,
@@ -101,6 +105,7 @@ pub struct Selection {
     pub programs: BTreeMap<String, PlannedProgram>,
     pub live_configs: Configs,
     pub verified: BTreeSet<String>,
+    pub idls: BTreeSet<String>,
     pub reserves: BTreeMap<String, u64>,
 }
 
@@ -119,6 +124,7 @@ pub fn observe(
     chain: &impl Chain,
     release: &Release,
     binaries: &BTreeMap<String, Vec<u8>>,
+    idls: &BTreeMap<String, Vec<u8>>,
     deployer: &Pubkey,
 ) -> Result<Observed, Error> {
     let states = release
@@ -145,6 +151,19 @@ pub fn observe(
     let verified = records
         .into_iter()
         .filter_map(|(name, recorded)| recorded.then_some(name))
+        .collect();
+    let idls = release
+        .programs
+        .iter()
+        .map(|(name, program)| {
+            let account = chain.account(&idl::canonical_address(&program.address))?;
+            let uploaded = idl::matches(account.as_ref(), &program.address, &idls[name]);
+
+            Ok((name.clone(), uploaded))
+        })
+        .collect::<Result<Vec<_>, Error>>()?
+        .into_iter()
+        .filter_map(|(name, uploaded)| uploaded.then_some(name))
         .collect();
     let reserves = [
         (HYPER_PROVER, hyper_prover::state::PDA_PAYER_SEED),
@@ -180,6 +199,7 @@ pub fn observe(
         states,
         live_configs,
         verified,
+        idls,
         reserves,
         layerzero_worker_fault,
     })
@@ -207,6 +227,7 @@ impl Selection {
             mut states,
             live_configs,
             verified,
+            idls,
             reserves,
             layerzero_worker_fault,
         } = observed;
@@ -237,6 +258,7 @@ impl Selection {
             live_configs: &live_configs,
             verified: &verified,
             layerzero_worker_fault: &layerzero_worker_fault,
+            idls: &idls,
         };
         targets.iter().try_for_each(|program| match operation {
             Operation::Finalize => checks.finalizable(program),
@@ -266,6 +288,7 @@ impl Selection {
             programs,
             live_configs,
             verified,
+            idls,
             reserves,
         })
     }
@@ -337,8 +360,10 @@ impl Selection {
 
         format!(
             "Closing returns each program's rent to the deployer and burns its address: it can \
-             never be deployed again. Lamports held by the program's own accounts stay locked \
-             for good, including LayerZero's endpoint and ULN account rent and these reserves:\n\n\
+             never be deployed again. Its canonical IDL account and IDL scratch buffer close \
+             first (`deployer close-idl`), so their rent comes back too. Lamports held by the \
+             program's own accounts stay locked for good, including LayerZero's endpoint and ULN \
+             account rent and these reserves:\n\n\
              {stranded}"
         )
     }
@@ -352,6 +377,7 @@ impl Selection {
             programs,
             live_configs,
             verified,
+            idls,
             ..
         } = self;
         let canonical = CanonicalSelection {
@@ -381,6 +407,7 @@ impl Selection {
                 .map(Path::describe)
                 .collect(),
             verified,
+            idls,
         };
 
         serde_json::to_string(&canonical).expect("canonical selection must serialize")
@@ -394,11 +421,12 @@ struct Checks<'a> {
     live_configs: &'a Configs,
     verified: &'a BTreeSet<String>,
     layerzero_worker_fault: &'a Option<String>,
+    idls: &'a BTreeSet<String>,
 }
 
 impl Checks<'_> {
-    /// A final program can no longer be initialized, verified by its authority, or protected
-    /// from a dependency that is later closed.
+    /// A final program can no longer be initialized, verified by its authority, given its
+    /// canonical IDL, or protected from a dependency that is later closed.
     fn finalizable(&self, program: &String) -> Result<(), Error> {
         let configured = self
             .live_configs
@@ -420,6 +448,11 @@ impl Checks<'_> {
         }
         if !self.verified.contains(program) {
             return Err(Error::NotVerified {
+                program: program.clone(),
+            });
+        }
+        if !self.idls.contains(program) {
+            return Err(Error::IdlNotUploaded {
                 program: program.clone(),
             });
         }
@@ -557,6 +590,7 @@ struct CanonicalSelection<'a> {
     live_layerzero_alt: Option<String>,
     live_layerzero_paths: Vec<String>,
     verified: &'a BTreeSet<String>,
+    idls: &'a BTreeSet<String>,
 }
 
 #[derive(Serialize)]
@@ -571,7 +605,7 @@ struct CanonicalProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{AGGREGATOR_PROVER, POLYMER_PROVER};
+    use crate::plan::{AGGREGATOR_PROVER, CCTP_PROVER, POLYMER_PROVER};
     use crate::testing::{self, address, full_setup};
 
     fn deployer() -> Pubkey {
@@ -599,11 +633,12 @@ mod tests {
                 (name.clone(), state)
             })
             .collect();
-        let verified = plan.release.programs.keys().cloned().collect();
+        let verified: BTreeSet<String> = plan.release.programs.keys().cloned().collect();
         let observed = Observed {
             genesis_hash: Cluster::Devnet.genesis_hash(),
             states,
             live_configs,
+            idls: verified.clone(),
             verified,
             reserves: BTreeMap::from([(HYPER_PROVER.into(), 7), (LAYERZERO_PROVER.into(), 9)]),
             layerzero_worker_fault: None,
@@ -683,11 +718,11 @@ mod tests {
         let alone = build(Operation::Finalize, AGGREGATOR_PROVER, |_| {});
         let with_members = build(
             Operation::Finalize,
-            "aggregator_prover,hyper_prover,polymer_prover,layerzero_prover",
+            "aggregator_prover,hyper_prover,polymer_prover,layerzero_prover,cctp_prover",
             |_| {},
         );
         let members_final = build(Operation::Finalize, AGGREGATOR_PROVER, |observed| {
-            [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER]
+            [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER, CCTP_PROVER]
                 .into_iter()
                 .for_each(|member| set_status(observed, member, Status::Live));
         });
@@ -717,6 +752,42 @@ mod tests {
             uninitialized,
             Err(Error::NotInitialized { program }) if program == HYPER_PROVER
         ));
+    }
+
+    #[test]
+    fn finalize_refuses_cctp_prover_before_its_init_alone_or_with_all() {
+        let uninitialized = |selected| {
+            build(Operation::Finalize, selected, |observed| {
+                observed.live_configs.cctp_peers = None;
+            })
+        };
+
+        ["cctp_prover", "all"].into_iter().for_each(|selected| {
+            assert!(
+                matches!(
+                    uninitialized(selected),
+                    Err(Error::NotInitialized { program }) if program == CCTP_PROVER
+                ),
+                "{selected}"
+            );
+        });
+        assert!(build(Operation::Finalize, "cctp_prover", |_| {}).is_ok());
+    }
+
+    #[test]
+    fn finalize_refuses_a_program_without_its_canonical_idl_but_close_does_not() {
+        let missing = |observed: &mut Observed| {
+            observed.idls.remove(POLYMER_PROVER);
+        };
+
+        let finalize = build(Operation::Finalize, POLYMER_PROVER, missing);
+        let close = build(Operation::Close, POLYMER_PROVER, missing);
+
+        assert!(matches!(
+            finalize,
+            Err(Error::IdlNotUploaded { program }) if program == POLYMER_PROVER
+        ));
+        assert_eq!(targeted(&close.unwrap()), [POLYMER_PROVER]);
     }
 
     #[test]
@@ -849,6 +920,12 @@ mod tests {
             hash(Operation::Close, HYPER_PROVER, |_| {}),
             hash(Operation::Close, HYPER_PROVER, |observed| {
                 observed.verified.remove(HYPER_PROVER);
+            })
+        );
+        assert_ne!(
+            hash(Operation::Close, HYPER_PROVER, |_| {}),
+            hash(Operation::Close, HYPER_PROVER, |observed| {
+                observed.idls.remove(HYPER_PROVER);
             })
         );
         assert_eq!(

@@ -1,7 +1,7 @@
 name: Deploy
 
-# Deploys, initializes, reads back and verifies a release; never finalizes (finalize.yml does,
-# after testing). One dispatch, two jobs: `plan` reads the chain and writes the plan to its
+# Deploys, initializes, reads back, uploads the canonical IDLs of and verifies a release; never
+# finalizes (finalize.yml does, after testing). One dispatch, two jobs: `plan` reads the chain and writes the plan to its
 # summary without approval; `deploy` waits for the release environment's approval, re-plans, and
 # writes only if that plan's hash equals the approved one.
 on:
@@ -26,6 +26,10 @@ on:
         default: ""
       layerzero:
         description: 'JSON {"peers":[{"eid","address","chain_id","path":{"send_uln","receive_uln","executor"}}]}'
+        type: string
+        default: ""
+      cctp:
+        description: 'JSON {"peers":[{"domain","chain_id","sender"}]}; sender is the EVM CCTPProver (20- or 32-byte hex)'
         type: string
         default: ""
       hyper_reserve_lamports:
@@ -67,6 +71,7 @@ env:
   HYPER_SENDERS: ${{ inputs.hyper_senders }}
   POLYMER_EMITTERS: ${{ inputs.polymer_emitters }}
   LAYERZERO: ${{ inputs.layerzero }}
+  CCTP: ${{ inputs.cctp }}
   HYPER_RESERVE_LAMPORTS: ${{ inputs.hyper_reserve_lamports }}
   LAYERZERO_RESERVE_LAMPORTS: ${{ inputs.layerzero_reserve_lamports }}
   COMPUTE_UNIT_PRICE: ${{ inputs.compute_unit_price }}
@@ -164,6 +169,13 @@ jobs:
         run: |
           deployer apply --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR" 2>&1 \
             | scripts/deploy-step.sh redact | tee out/apply.log
+
+      # Canonical IDLs need the deployer as upgrade authority, so they land here, before
+      # finalize.yml (which refuses a program whose IDL differs) makes that impossible.
+      - name: Upload IDLs
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: scripts/deploy-step.sh idl 2>&1 | scripts/deploy-step.sh redact | tee out/idl.log
 
       - name: Verify
         env:

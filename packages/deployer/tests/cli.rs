@@ -8,8 +8,8 @@ use common::{Context, DVN, EXECUTOR, RELEASE_PROGRAMS};
 use deployer::cli::{ActionKind, ActionsArgs, ApplyArgs, ChainArgs, InputArgs, PlanArgs, ReadArgs};
 use deployer::commands::{self, Error};
 use deployer::plan::{
-    Cluster, PlanHash, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
-    LOCAL_PROVER, POLYMER_PROVER,
+    Cluster, PlanHash, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER,
+    LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::account::Account;
@@ -24,9 +24,10 @@ use tempfile::TempDir;
 const SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
 const SLOT_HASHES_SPAN: u64 = 512;
 
-fn programs() -> [(&'static str, Pubkey); 5] {
+fn programs() -> [(&'static str, Pubkey); 6] {
     [
         (AGGREGATOR_PROVER, aggregator_prover::ID),
+        (CCTP_PROVER, cctp_prover::ID),
         (HYPER_PROVER, hyper_prover::ID),
         (LAYERZERO_PROVER, layerzero_prover::ID),
         (LOCAL_PROVER, local_prover::ID),
@@ -75,6 +76,7 @@ fn plan_args(directory: &Path, deployer: Pubkey) -> PlanArgs {
             layerzero: format!(
                 r#"{{"peers":[{{"eid":30184,"address":"{SENDER}","chain_id":30184,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
             ),
+            cctp: format!(r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{SENDER}"}}]}}"#),
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "1000000000".into(),
             compute_unit_price: "0".into(),
@@ -143,10 +145,15 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
     programs()
         .iter()
         .zip(&deployed)
-        .for_each(|((name, _), [(_, programdata), _])| {
+        .for_each(|((name, program), [(_, programdata), _])| {
             fs::write(
                 directory.path().join(format!("{name}.devnet.so")),
                 release_binary(programdata),
+            )
+            .unwrap();
+            fs::write(
+                directory.path().join(format!("{name}.devnet.json")),
+                format!(r#"{{"address":"{program}","metadata":{{"name":"{name}"}}}}"#),
             )
             .unwrap();
         });
@@ -194,6 +201,7 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
             .lines()
             .collect::<Vec<_>>(),
         [
+            CCTP_PROVER,
             HYPER_PROVER,
             LAYERZERO_PROVER,
             LOCAL_PROVER,

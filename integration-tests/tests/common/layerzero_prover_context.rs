@@ -800,7 +800,7 @@ impl LayerZeroProver<'_> {
 pub fn cleanup_tail(intent_hash: &Bytes32) -> Vec<AccountMeta> {
     vec![
         AccountMeta::new(Proof::pda(intent_hash, &layerzero_prover::ID).0, false),
-        cleanup_recipient(&layerzero_prover::ID, Pubkey::default()),
+        cleanup_recipient(&layerzero_prover::ID, Pubkey::default(), Pubkey::default()),
     ]
 }
 
