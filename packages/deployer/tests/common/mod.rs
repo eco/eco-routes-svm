@@ -5,6 +5,7 @@ use deployer::plan::Cluster;
 use layerzero_prover::layerzero::{endpoint_settings_pda, DEVNET_SOLANA_EID, ENDPOINT_ID};
 use litesvm::LiteSVM;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
+use solana_sdk::account::Account;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::message::Message;
@@ -16,6 +17,9 @@ use solana_sdk::transaction::Transaction;
 pub mod litesvm_chain;
 
 const PAYER_LAMPORTS: u64 = 10_000_000_000;
+/// The DVN and executor the tests' LayerZero inputs name.
+const WORKER_DVN: &str = "11111111111111111111111111111112";
+const WORKER_EXECUTOR: &str = "11111111111111111111111111111113";
 const AGGREGATOR_PROVER_BIN: &[u8] =
     include_bytes!("../../../../target/deploy/aggregator_prover.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/hyper_prover.so");
@@ -63,6 +67,7 @@ impl Default for Context {
             genesis_hash: Cluster::Devnet.genesis_hash(),
         };
         context.init_endpoint();
+        context.install_workers();
 
         context
     }
@@ -96,6 +101,24 @@ impl Context {
         program_data.data[..metadata.len()].copy_from_slice(&metadata);
         self.set_account(program_data_address, program_data)
             .unwrap();
+    }
+
+    /// The tests' DVN and executor as config accounts of a loaded program (any one will do),
+    /// what `layerzero::check_workers` requires of every path.
+    fn install_workers(&mut self) {
+        let config = Account {
+            lamports: 1,
+            owner: ENDPOINT_ID,
+            data: vec![0; 8],
+            ..Account::default()
+        };
+        [WORKER_DVN, WORKER_EXECUTOR]
+            .into_iter()
+            .for_each(|address| {
+                self.svm
+                    .set_account(address.parse().unwrap(), config.clone())
+                    .unwrap();
+            });
     }
 
     fn init_endpoint(&mut self) {

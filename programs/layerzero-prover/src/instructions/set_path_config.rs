@@ -137,14 +137,20 @@ pub fn set_path_config(ctx: Context<SetPathConfig>, eid: u32, config: PathConfig
         account.uln_receive_config.to_account_info(),
         account.system_program.to_account_info(),
     ];
-    layerzero::invoke(
-        ENDPOINT_ID,
-        INIT_CONFIG_DISCRIMINATOR,
-        &InitConfigParams { oapp, eid },
-        &[endpoint_head.as_slice(), &init_tail].concat(),
-        &[delegate],
-        &[seeds],
-    )?;
+    // `init_config` creates both accounts and fails once they exist, so skip it on
+    // a re-run: a wrong path stays correctable until the program is finalized.
+    // One account without the other is not a state ULN302 produces; `init_config`
+    // then fails loudly rather than leaving the path half-configured.
+    if account.uln_send_config.data_is_empty() || account.uln_receive_config.data_is_empty() {
+        layerzero::invoke(
+            ENDPOINT_ID,
+            INIT_CONFIG_DISCRIMINATOR,
+            &InitConfigParams { oapp, eid },
+            &[endpoint_head.as_slice(), &init_tail].concat(),
+            &[delegate],
+            &[seeds],
+        )?;
+    }
 
     // ULN302 `set_config` tail: [uln, send_config, receive_config, default_send,
     // default_receive, uln event_authority, uln program]

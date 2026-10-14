@@ -31,11 +31,33 @@ pub struct RecordingChain {
 impl Default for RecordingChain {
     fn default() -> Self {
         Self {
-            accounts: HashMap::default(),
+            accounts: worker_accounts().into_iter().collect(),
             sent: Vec::default(),
             genesis_hash: Cluster::Devnet.genesis_hash(),
         }
     }
+}
+
+/// `DVN` and `EXECUTOR` as worker config accounts owned by a worker program, the shape
+/// `layerzero::check_workers` accepts.
+pub fn worker_accounts() -> Vec<(Pubkey, Account)> {
+    let worker = address(98);
+    let program = Account {
+        executable: true,
+        owner: bpf_loader_upgradeable::id(),
+        ..Account::default()
+    };
+    let config = Account {
+        owner: worker,
+        data: vec![0; 8],
+        ..Account::default()
+    };
+
+    [DVN, EXECUTOR]
+        .into_iter()
+        .map(|address| (address.parse().unwrap(), config.clone()))
+        .chain([(worker, program)])
+        .collect()
 }
 
 impl Chain for RecordingChain {

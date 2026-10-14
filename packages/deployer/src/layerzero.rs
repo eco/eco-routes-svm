@@ -9,6 +9,9 @@ use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::signer::Signer;
+use solana_sdk_ids::{
+    bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, loader_v4, native_loader,
+};
 
 use crate::chain::{self, Chain};
 use crate::config::{self, Configs};
@@ -41,6 +44,13 @@ pub enum Error {
     },
     #[error("{LAYERZERO_PROVER} store {address} does not exist after init")]
     StoreMissing { address: Pubkey },
+    #[error("{LAYERZERO_PROVER}: eid {eid} {role} {address} {reason}; ULN302 names every worker by its config account (the executor's is PDA [\"ExecutorConfig\"] under its program), never by its program ID")]
+    NotAWorkerConfig {
+        eid: u32,
+        role: &'static str,
+        address: Pubkey,
+        reason: &'static str,
+    },
 }
 
 /// One LayerZero setup action; `signature` is `None` when it was already done.
@@ -80,6 +90,59 @@ pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Res
                 }),
             }
         })
+}
+
+/// Rejects an executor or DVN that is not a worker's config account: one that is missing, is a
+/// program, or is not owned by a program (a wallet, or a loader's program data). ULN302 stores
+/// whatever `set_path_config` gives it, and a program ID there makes every send and quote fail.
+pub fn check_workers(chain: &impl Chain, peers: &[LayerZeroPeer]) -> Result<(), Error> {
+    peers.iter().try_for_each(|peer| {
+        let path = &peer.path;
+        let dvns = [&path.send_uln, &path.receive_uln]
+            .into_iter()
+            .flat_map(|uln| uln.required_dvns.iter().chain(&uln.optional_dvns))
+            .map(|dvn| ("DVN", dvn));
+
+        std::iter::once(("executor", &path.executor.executor))
+            .chain(dvns)
+            .try_for_each(|(role, address)| check_worker(chain, peer.eid, role, address))
+    })
+}
+
+fn check_worker(
+    chain: &impl Chain,
+    eid: u32,
+    role: &'static str,
+    address: &Pubkey,
+) -> Result<(), Error> {
+    let not_a_program = [
+        system_program::ID,
+        bpf_loader::id(),
+        bpf_loader_deprecated::id(),
+        bpf_loader_upgradeable::id(),
+        loader_v4::id(),
+        native_loader::id(),
+    ];
+    let reason = match chain.account(address)? {
+        None => Some("does not exist"),
+        Some(account) if account.executable => Some("is a program"),
+        Some(account) if not_a_program.contains(&account.owner) => {
+            Some("is not owned by a worker program")
+        }
+        Some(account) => match chain.account(&account.owner)? {
+            Some(owner) if owner.executable => None,
+            _ => Some("is not owned by a worker program"),
+        },
+    };
+
+    reason.map_or(Ok(()), |reason| {
+        Err(Error::NotAWorkerConfig {
+            eid,
+            role,
+            address: *address,
+            reason,
+        })
+    })
 }
 
 /// Every transaction `apply` sends for a LayerZero setup of `peers` from scratch: `init`,
@@ -361,7 +424,9 @@ mod tests {
 
     use super::*;
     use crate::inputs::MAX_DVNS;
-    use crate::testing::{full_setup, plan, uln_account_data, FullSetup};
+    use crate::testing::{
+        address, full_setup, plan, uln_account_data, FullSetup, RecordingChain, DVN, EXECUTOR,
+    };
 
     /// The fewest required DVNs, with no optional ones, whose `set_path_config` exceeds a
     /// transaction.
@@ -523,5 +588,80 @@ mod tests {
             ),
             "{result:?}"
         );
+    }
+
+    /// A peer whose path names the fixture's `DVN` and `EXECUTOR`.
+    fn worker_peer() -> LayerZeroPeer {
+        let dvn = DVN.parse().unwrap();
+        let uln = UlnConfig {
+            confirmations: 15,
+            required_dvn_count: 1,
+            optional_dvn_count: u8::MAX,
+            optional_dvn_threshold: 0,
+            required_dvns: vec![dvn],
+            optional_dvns: vec![],
+        };
+
+        LayerZeroPeer {
+            eid: 30184,
+            address: "0xAbCdEf0123456789aBcDeF0123456789abcdef01"
+                .parse()
+                .unwrap(),
+            chain_id: 30184,
+            path: PathConfig {
+                send_uln: uln.clone(),
+                receive_uln: uln,
+                executor: ExecutorConfig {
+                    max_message_size: 10_000,
+                    executor: EXECUTOR.parse().unwrap(),
+                },
+            },
+        }
+    }
+
+    fn rejected(result: Result<(), Error>, expected_role: &str, expected: &str) {
+        assert!(
+            matches!(
+                &result,
+                Err(Error::NotAWorkerConfig { eid: 30184, role, reason, .. })
+                    if *role == expected_role && *reason == expected
+            ),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn worker_config_accounts_are_accepted() {
+        let chain = RecordingChain::default();
+
+        check_workers(&chain, &[worker_peer()]).unwrap();
+    }
+
+    #[test]
+    fn an_executor_program_id_is_rejected() {
+        let chain = RecordingChain::default();
+        let mut peer = worker_peer();
+        // What the mainnet path held: the worker's program, not its config account.
+        peer.path.executor.executor = address(98);
+
+        rejected(check_workers(&chain, &[peer]), "executor", "is a program");
+    }
+
+    #[test]
+    fn a_missing_or_unowned_dvn_is_rejected() {
+        let mut chain = RecordingChain::default();
+        let wallet = Pubkey::new_unique();
+        chain.accounts.insert(wallet, Account::default());
+        [
+            (Pubkey::new_unique(), "does not exist"),
+            (wallet, "is not owned by a worker program"),
+        ]
+        .into_iter()
+        .for_each(|(dvn, reason)| {
+            let mut peer = worker_peer();
+            peer.path.receive_uln.optional_dvns = vec![dvn];
+
+            rejected(check_workers(&chain, &[peer]), "DVN", reason);
+        });
     }
 }

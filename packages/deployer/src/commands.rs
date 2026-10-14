@@ -21,7 +21,7 @@ use crate::plan::{
 };
 use crate::rpc::RpcChain;
 use crate::selection::{self, Operation, Programs, Selection};
-use crate::{config, funding, readback};
+use crate::{config, funding, layerzero, readback};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -281,6 +281,8 @@ fn build(
         })
         .collect::<Result<BTreeMap<_, _>, Error>>()?;
     let live_configs = config::read(chain, release)?;
+    let inputs = Inputs::parse(inputs.clone())?;
+    layerzero::check_workers(chain, &inputs.layerzero_peers).map_err(plan::Error::from)?;
 
     Ok(Plan::build(
         release.clone(),
@@ -288,7 +290,7 @@ fn build(
         *deployer,
         states,
         live_configs,
-        Inputs::parse(inputs.clone())?,
+        inputs,
     )?)
 }
 
@@ -828,6 +830,34 @@ mod tests {
 
         assert!(
             matches!(error, Error::Plan(plan::Error::ClusterMismatch { .. })),
+            "{error:?}"
+        );
+        assert!(!env.path("plan.json").exists());
+    }
+
+    #[test]
+    fn plan_fails_on_an_executor_program_id_and_writes_nothing() {
+        let env = Env::new();
+        let mut chain = env.chain();
+        let executor = EXECUTOR.parse().unwrap();
+        chain.accounts.get_mut(&executor).unwrap().executable = true;
+
+        let error = plan(
+            &chain,
+            &env.plan_args(),
+            &env.deployer.pubkey(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                Error::Plan(plan::Error::LayerZero(layerzero::Error::NotAWorkerConfig {
+                    role: "executor",
+                    ..
+                }))
+            ),
             "{error:?}"
         );
         assert!(!env.path("plan.json").exists());
