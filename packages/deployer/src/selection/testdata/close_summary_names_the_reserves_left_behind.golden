@@ -3,6 +3,7 @@
 | Program | Address | Status | Action |
 |---|---|---|---|
 | aggregator_prover | `EnTJCS15dqbDTU2XywYSMaScoPv4Py4GzExrtY9DQxoD` | partial | none |
+| cctp_prover | `ErNbLjU6E8tSbZH3REsMeTDP3Z8G52k6YedWwvBpAJ7v` | partial | none |
 | hyper_prover | `EahQmXc3rwhY3CH1g3ZgUx8L4vHTNmzpK1xtiQ1RAxq6` | partial | close |
 | layerzero_prover | `EcoZ3pDi8PJf9ohgg6HJdgPviSqQCnbgD14KCnE4rEZm` | partial | close |
 | local_prover | `Eechuq54TEzmBHXX7Ltbmpu6K5Vf3qgdsRdYmn41vJ9o` | partial | none |
@@ -13,4 +14,4 @@ Closing returns each program's rent to the deployer and burns its address: it ca
 - hyper_prover `pda_payer`: 7 lamports
 - layerzero_prover `pda_payer`: 9 lamports
 
-Plan hash: f2bd497ffd89953a55f32e6f48b5623d9659f6086e509498038cb48fcd4fd334
+Plan hash: 5a4fad9c11a312d3c67b58cf20509658aac1cc1079f7d402e938c3ab1341b74a

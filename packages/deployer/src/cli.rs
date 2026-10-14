@@ -66,6 +66,8 @@ pub struct InputArgs {
     pub polymer_emitters: String,
     #[arg(long, env = "LAYERZERO")]
     pub layerzero: String,
+    #[arg(long, env = "CCTP")]
+    pub cctp: String,
     #[arg(long, env = "HYPER_RESERVE_LAMPORTS")]
     pub hyper_reserve_lamports: String,
     #[arg(long, env = "LAYERZERO_RESERVE_LAMPORTS")]
@@ -176,12 +178,14 @@ mod tests {
         "--deployer",
         "11111111111111111111111111111112",
     ];
-    const INPUTS: [&str; 10] = [
+    const INPUTS: [&str; 12] = [
         "--hyper-senders",
         "0xaa",
         "--polymer-emitters",
         "0xbb",
         "--layerzero",
+        "{}",
+        "--cctp",
         "{}",
         "--hyper-reserve-lamports",
         "1",

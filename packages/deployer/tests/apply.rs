@@ -10,7 +10,7 @@ use deployer::classify::{ProgramState, Status};
 use deployer::config::{self, Configs};
 use deployer::plan::{
     self, Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER,
-    HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
+    CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 use deployer::readback::{self, readback};
 use deployer::{setup, Chain, Inputs, RawInputs};
@@ -29,6 +29,7 @@ use solana_sdk::sysvar::slot_hashes::SlotHashes;
 const HYPER_SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
 const OTHER_SENDER: &str = "0x1111111111111111111111111111111111111111";
 const POLYMER_EMITTER: &str = "0x2222222222222222222222222222222222222222";
+const CCTP_SENDER: &str = "0x3333333333333333333333333333333333333333";
 const DVN: &str = "11111111111111111111111111111112";
 const OTHER_DVN: &str = "11111111111111111111111111111114";
 const EXECUTOR: &str = "11111111111111111111111111111113";
@@ -74,6 +75,7 @@ impl Env {
                 (POLYMER_PROVER, polymer_prover::ID),
                 (AGGREGATOR_PROVER, aggregator_prover::ID),
                 (LAYERZERO_PROVER, layerzero_prover::ID),
+                (CCTP_PROVER, cctp_prover::ID),
             ]),
         }
     }
@@ -193,10 +195,28 @@ fn inputs_with_peer_chain_id(hyper_senders: &str, chain_id: u64) -> RawInputs {
         layerzero: format!(
             r#"{{"peers":[{{"eid":30184,"address":"{OTHER_SENDER}","chain_id":{chain_id},"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
         ),
+        cctp: cctp_json(2),
         hyper_reserve_lamports: HYPER_RESERVE.to_string(),
         layerzero_reserve_lamports: LAYERZERO_RESERVE.to_string(),
         compute_unit_price: "0".into(),
     }
+}
+
+/// `count` peers from Ethereum's domain 0 up, skipping Solana's 5, each with its own chain ID.
+fn cctp_json(count: u32) -> String {
+    let peers = (0..)
+        .filter(|domain| *domain != cctp_prover::cctp::SOLANA_DOMAIN)
+        .take(count as usize)
+        .map(|domain| {
+            format!(
+                r#"{{"domain":{domain},"chain_id":{},"sender":"{CCTP_SENDER}"}}"#,
+                900_000 + domain
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!(r#"{{"peers":[{peers}]}}"#)
 }
 
 /// The reserve tops up to its target on every run, and LayerZero paths spend it, so a re-run
@@ -226,6 +246,7 @@ fn apply_initializes_hyper_polymer_and_aggregator() {
             (LAYERZERO_PROVER, "fund_reserve", true),
             (HYPER_PROVER, "init", true),
             (POLYMER_PROVER, "init", true),
+            (CCTP_PROVER, "init", true),
             (AGGREGATOR_PROVER, "init", true),
             (LAYERZERO_PROVER, "init", true),
             (LAYERZERO_PROVER, "init_path", true),
@@ -255,9 +276,9 @@ fn apply_pays_the_priority_fee_for_the_whole_compute_unit_limit() {
 
         before - env.balance(&env.deployer.pubkey())
     };
-    // Two reserve transfers, three prover inits, LayerZero `init`, `init_path`,
+    // Two reserve transfers, four prover inits, LayerZero `init`, `init_path`,
     // `set_path_config` and two lookup-table transactions.
-    let transactions = 10;
+    let transactions = 11;
 
     let unpriced = spent("0");
     let priced = spent("3");
@@ -297,7 +318,7 @@ fn apply_rerun_sends_nothing() {
     let report = env.apply(&plan).unwrap();
 
     assert!(without_reserve_top_ups(&report).all(|step| step.signature.is_none()));
-    assert_eq!(report.len(), 9);
+    assert_eq!(report.len(), 10);
 }
 
 #[test]
@@ -416,6 +437,55 @@ fn readback_detects_mismatch() {
     assert!(matches!(
         result,
         Err(readback::Error::Mismatch { program, .. }) if program == HYPER_PROVER
+    ));
+}
+
+#[test]
+fn apply_initializes_cctp_with_the_largest_peer_set_and_reads_it_back() {
+    let mut env = Env::new();
+    let max_peers = cctp_prover::state::MAX_PEERS as u32;
+    let plan = env
+        .plan(RawInputs {
+            cctp: cctp_json(max_peers),
+            ..inputs(HYPER_SENDER)
+        })
+        .unwrap();
+
+    env.apply(&plan).unwrap();
+
+    let config = cctp_prover::state::Config::pda().0;
+    let account = env.context.get_account(&config).unwrap();
+    let live = cctp_prover::state::Config::try_deserialize(&mut account.data.as_slice()).unwrap();
+    assert_eq!(account.owner, cctp_prover::ID);
+    assert_eq!(live.peers.len(), max_peers as usize);
+    assert_eq!(live.peers, plan.inputs.cctp_peers);
+    readback(&env.chain(), &plan).unwrap();
+}
+
+#[test]
+fn readback_detects_a_cctp_peer_set_other_than_the_inputs() {
+    let mut env = Env::new();
+    let plan = env.plan(inputs(HYPER_SENDER)).unwrap();
+    env.apply(&plan).unwrap();
+    let stale = Plan::build(
+        plan.release.clone(),
+        plan.genesis_hash,
+        plan.deployer,
+        states(&plan.release, &env.deployer.pubkey()),
+        Configs::default(),
+        Inputs::parse(RawInputs {
+            cctp: cctp_json(3),
+            ..inputs(HYPER_SENDER)
+        })
+        .unwrap(),
+    )
+    .unwrap();
+
+    let result = readback(&env.chain(), &stale);
+
+    assert!(matches!(
+        result,
+        Err(readback::Error::Mismatch { program, .. }) if program == CCTP_PROVER
     ));
 }
 
@@ -816,7 +886,7 @@ fn apply_resumes_from_an_initialized_store() {
     let report = env.apply(&plan).unwrap();
 
     assert_eq!(
-        sent(&report)[5..],
+        sent(&report)[6..],
         [
             (LAYERZERO_PROVER, "init", false),
             (LAYERZERO_PROVER, "init_path", true),
@@ -837,7 +907,7 @@ fn apply_initializes_every_peer_in_one_init_transaction() {
     let report = env.apply(&plan).unwrap();
 
     assert_eq!(
-        sent(&report)[5..7],
+        sent(&report)[6..8],
         [
             (LAYERZERO_PROVER, "init", true),
             (LAYERZERO_PROVER, "init_path", true),

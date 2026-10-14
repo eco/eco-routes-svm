@@ -14,8 +14,8 @@ use crate::config::Configs;
 use crate::inputs::{Inputs, RawInputs};
 use crate::layerzero_state;
 use crate::plan::{
-    Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, HYPER_PROVER,
-    LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
+    Cluster, Plan, Release, ReleaseProgram, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, CCTP_PROVER,
+    HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
 };
 
 pub const SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
@@ -80,6 +80,7 @@ pub fn release_address(program: &str) -> Pubkey {
         LOCAL_PROVER => address(202),
         POLYMER_PROVER => address(203),
         AGGREGATOR_PROVER => address(204),
+        CCTP_PROVER => address(205),
         _ => layerzero_prover::ID,
     }
 }
@@ -91,6 +92,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
         POLYMER_PROVER,
         AGGREGATOR_PROVER,
         LAYERZERO_PROVER,
+        CCTP_PROVER,
     ];
     let release = Release {
         version: "0.0.1".into(),
@@ -130,6 +132,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
         layerzero: format!(
             r#"{{"peers":[{{"eid":1,"address":"{SENDER}","chain_id":1,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
         ),
+        cctp: format!(r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{SENDER}"}}]}}"#),
         hyper_reserve_lamports: reserve_lamports.to_string(),
         layerzero_reserve_lamports: reserve_lamports.to_string(),
         compute_unit_price: "0".into(),
@@ -257,6 +260,13 @@ pub fn full_setup(plan: &Plan) -> FullSetup {
             LAYERZERO_PROVER,
             layerzero_prover::state::STORE_SEED,
             serialize(&store),
+        ),
+        (
+            CCTP_PROVER,
+            cctp_prover::state::CONFIG_SEED,
+            serialize(&cctp_prover::state::Config {
+                peers: expected.cctp_peers.clone().unwrap(),
+            }),
         ),
     ];
     configs.into_iter().for_each(|(name, seed, data)| {

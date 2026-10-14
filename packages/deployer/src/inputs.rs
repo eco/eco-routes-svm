@@ -3,6 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anchor_lang::prelude::Pubkey;
+use cctp_prover::cctp::SOLANA_DOMAIN;
 use eco_svm_std::Bytes32;
 use layerzero_prover::instructions::PathConfig;
 use layerzero_prover::layerzero::{ExecutorConfig, UlnConfig};
@@ -10,12 +11,16 @@ use layerzero_prover::state::{Peer, Store, MAX_PEERS};
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 const EVM_ADDRESS_LEN: usize = 20;
+/// eco-svm-std's mainnet and devnet `CHAIN_ID`. The deployer is one build for both clusters, so
+/// a CCTP peer may claim neither.
+pub const SOLANA_CHAIN_IDS: [u64; 2] = [1399811149, 1399811150];
 /// ULN302's `DVN_MAX_LEN`, for the required and the optional list alike.
 pub const MAX_DVNS: u8 = 16;
 
 const HYPER_SENDERS: &str = "hyper_senders";
 const POLYMER_EMITTERS: &str = "polymer_emitters";
 const LAYERZERO: &str = "layerzero";
+const CCTP: &str = "cctp";
 const HYPER_RESERVE_LAMPORTS: &str = "hyper_reserve_lamports";
 const LAYERZERO_RESERVE_LAMPORTS: &str = "layerzero_reserve_lamports";
 const COMPUTE_UNIT_PRICE: &str = "compute_unit_price";
@@ -36,6 +41,10 @@ pub enum Error {
     UnsortedDvns { eid: u32 },
     #[error("layerzero path for eid {eid} has more than {MAX_DVNS} required or optional DVNs, which ULN302 rejects")]
     TooManyDvns { eid: u32 },
+    #[error("invalid cctp JSON: {reason}")]
+    InvalidCctpJson { reason: String },
+    #[error("cctp peer for domain {domain}: {reason}")]
+    InvalidCctpPeer { domain: u32, reason: &'static str },
     #[error("{input}: {value:?} is not a u64 lamport amount")]
     InvalidLamports { input: &'static str, value: String },
     #[error("{COMPUTE_UNIT_PRICE}: {value:?} is not a u64 micro-lamport price")]
@@ -53,6 +62,7 @@ pub struct RawInputs {
     pub hyper_senders: String,
     pub polymer_emitters: String,
     pub layerzero: String,
+    pub cctp: String,
     pub hyper_reserve_lamports: String,
     pub layerzero_reserve_lamports: String,
     pub compute_unit_price: String,
@@ -63,6 +73,7 @@ pub struct Inputs {
     pub hyper_senders: Vec<EvmAddress>,
     pub polymer_emitters: Vec<EvmAddress>,
     pub layerzero_peers: Vec<LayerZeroPeer>,
+    pub cctp_peers: Vec<cctp_prover::state::Peer>,
     pub hyper_reserve_lamports: u64,
     pub layerzero_reserve_lamports: u64,
     /// Micro-lamports per compute unit on every deploy and `apply` transaction.
@@ -84,12 +95,25 @@ pub struct EvmAddress([u8; EVM_ADDRESS_LEN]);
 #[error("expected 0x followed by 40 hex characters")]
 pub struct ParseEvmAddressError;
 
+/// An EVM address as CCTP carries it: 20 bytes left-padded to 32, or the padded 32 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CctpSender(Bytes32);
+
+#[derive(Debug, thiserror::Error)]
+pub enum ParseCctpSenderError {
+    #[error("expected 0x followed by 40 or 64 hex characters")]
+    Malformed,
+    #[error("a 32-byte sender must be an EVM address left-padded with 12 zero bytes")]
+    NotEvmAddress,
+}
+
 impl Inputs {
     pub fn parse(raw: RawInputs) -> Result<Self, Error> {
         let RawInputs {
             hyper_senders,
             polymer_emitters,
             layerzero,
+            cctp,
             hyper_reserve_lamports,
             layerzero_reserve_lamports,
             compute_unit_price,
@@ -113,6 +137,7 @@ impl Inputs {
             hyper_senders,
             polymer_emitters,
             layerzero_peers: parse_layerzero_peers(&layerzero)?,
+            cctp_peers: parse_cctp_peers(&cctp)?,
             hyper_reserve_lamports: parse_lamports(
                 HYPER_RESERVE_LAMPORTS,
                 &hyper_reserve_lamports,
@@ -144,6 +169,36 @@ impl FromStr for EvmAddress {
 impl fmt::Display for EvmAddress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "0x{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for CctpSender {
+    type Err = ParseCctpSenderError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let digits = value
+            .strip_prefix("0x")
+            .ok_or(ParseCctpSenderError::Malformed)?;
+        let bytes = hex::decode(digits).map_err(|_| ParseCctpSenderError::Malformed)?;
+        let mut padded = [0u8; 32];
+        match bytes.len() {
+            EVM_ADDRESS_LEN | 32 => padded[32 - bytes.len()..].copy_from_slice(&bytes),
+            _ => return Err(ParseCctpSenderError::Malformed),
+        }
+        // Every peer is an EVM `CCTPProver`; any other sender would be a lane nothing can use.
+        if padded[..32 - EVM_ADDRESS_LEN] != [0u8; 32 - EVM_ADDRESS_LEN] {
+            return Err(ParseCctpSenderError::NotEvmAddress);
+        }
+
+        Ok(Self(padded.into()))
+    }
+}
+
+impl<'de> Deserialize<'de> for CctpSender {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(de::Error::custom)
     }
 }
 
@@ -213,6 +268,20 @@ struct UlnConfigInput {
 struct ExecutorConfigInput {
     max_message_size: u32,
     executor: Base58Pubkey,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CctpInput {
+    peers: Vec<CctpPeerInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CctpPeerInput {
+    domain: u32,
+    chain_id: u64,
+    sender: CctpSender,
 }
 
 struct Base58Pubkey(Pubkey);
@@ -317,6 +386,63 @@ fn parse_layerzero_peers(value: &str) -> Result<Vec<LayerZeroPeer>, Error> {
             input: LAYERZERO,
             reason,
         }
+    })?;
+
+    Ok(peers)
+}
+
+/// Mirrors `cctp_prover::state::Config::new` with an error per rule, then runs it, so a plan
+/// never holds an `init` the program would reject.
+fn parse_cctp_peers(value: &str) -> Result<Vec<cctp_prover::state::Peer>, Error> {
+    let CctpInput { peers } =
+        serde_json::from_str(value).map_err(|error| Error::InvalidCctpJson {
+            reason: error.to_string(),
+        })?;
+    let max_peers = cctp_prover::state::MAX_PEERS;
+    if peers.is_empty() {
+        return Err(Error::Empty { input: CCTP });
+    }
+    if peers.len() > max_peers {
+        return Err(Error::InvalidCctpJson {
+            reason: format!("{} peers exceeds the maximum of {max_peers}", peers.len()),
+        });
+    }
+    reject_duplicates(CCTP, &peers, |peer| format!("domain {}", peer.domain))?;
+    reject_duplicates(CCTP, &peers, |peer| format!("chain_id {}", peer.chain_id))?;
+
+    let peers = peers
+        .into_iter()
+        .map(|peer| {
+            let CctpPeerInput {
+                domain,
+                chain_id,
+                sender,
+            } = peer;
+            let rejection = [
+                (domain == SOLANA_DOMAIN, "domain 5 is Solana's own"),
+                (chain_id == 0, "chain_id is zero"),
+                (
+                    SOLANA_CHAIN_IDS.contains(&chain_id),
+                    "chain_id is Solana's own",
+                ),
+                (*sender.0 == [0u8; 32], "sender is zero"),
+            ]
+            .into_iter()
+            .find_map(|(rejected, reason)| rejected.then_some(reason));
+
+            match rejection {
+                Some(reason) => Err(Error::InvalidCctpPeer { domain, reason }),
+                None => Ok(cctp_prover::state::Peer {
+                    domain,
+                    chain_id,
+                    sender: sender.0,
+                }),
+            }
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    cctp_prover::state::Config::new(peers.clone()).map_err(|reason| Error::RejectedByProgram {
+        input: CCTP,
+        reason,
     })?;
 
     Ok(peers)
@@ -477,10 +603,181 @@ mod tests {
             hyper_senders: format!("{VALID_ADDRESS}, {OTHER_ADDRESS}"),
             polymer_emitters: OTHER_ADDRESS.into(),
             layerzero: valid_layerzero(),
+            cctp: cctp_json(&[
+                cctp_peer_json(0, 1, VALID_ADDRESS),
+                cctp_peer_json(6, 8453, OTHER_ADDRESS),
+            ]),
             hyper_reserve_lamports: "1000000".into(),
             layerzero_reserve_lamports: "2000000".into(),
             compute_unit_price: "0".into(),
         }
+    }
+
+    fn cctp_peer_json(domain: u32, chain_id: u64, sender: &str) -> String {
+        format!(r#"{{"domain":{domain},"chain_id":{chain_id},"sender":"{sender}"}}"#)
+    }
+
+    fn cctp_json(peers: &[String]) -> String {
+        format!(r#"{{"peers":[{}]}}"#, peers.join(","))
+    }
+
+    fn parse_cctp(peers: &[String]) -> Result<Inputs, Error> {
+        Inputs::parse(RawInputs {
+            cctp: cctp_json(peers),
+            ..raw_inputs()
+        })
+    }
+
+    #[test]
+    fn cctp_accepts_ethereum_domain_zero_and_left_pads_the_sender() {
+        let inputs = parse_cctp(&[cctp_peer_json(0, 1, VALID_ADDRESS)]).unwrap();
+        let peer = inputs.cctp_peers[0];
+
+        assert_eq!((peer.domain, peer.chain_id), (0, 1));
+        let sender: Bytes32 = (&VALID_ADDRESS.parse::<EvmAddress>().unwrap()).into();
+        assert_eq!(peer.sender, sender);
+    }
+
+    #[test]
+    fn cctp_sender_takes_20_or_32_bytes_and_both_forms_agree() {
+        let padded = format!("0x{}{}", "00".repeat(12), &VALID_ADDRESS[2..]);
+        let short = parse_cctp(&[cctp_peer_json(0, 1, VALID_ADDRESS)]).unwrap();
+        let long = parse_cctp(&[cctp_peer_json(0, 1, &padded)]).unwrap();
+
+        assert_eq!(short.cctp_peers, long.cctp_peers);
+        [
+            format!("0x{}", "ab".repeat(19)),
+            format!("0x{}", "ab".repeat(31)),
+            format!("0x{}", "ab".repeat(33)),
+            "ab".repeat(20),
+        ]
+        .iter()
+        .for_each(|sender| {
+            assert!(
+                matches!(
+                    parse_cctp(&[cctp_peer_json(0, 1, sender)]),
+                    Err(Error::InvalidCctpJson { .. })
+                ),
+                "{sender}"
+            );
+        });
+    }
+
+    #[test]
+    fn cctp_rejects_each_invalid_peer() {
+        let zero = format!("0x{}", "00".repeat(20));
+        let cases = [
+            (cctp_peer_json(5, 8453, VALID_ADDRESS), 5),
+            (cctp_peer_json(6, 0, VALID_ADDRESS), 6),
+            (cctp_peer_json(6, SOLANA_CHAIN_IDS[0], VALID_ADDRESS), 6),
+            (cctp_peer_json(6, SOLANA_CHAIN_IDS[1], VALID_ADDRESS), 6),
+            (cctp_peer_json(6, 8453, &zero), 6),
+        ];
+
+        cases.into_iter().for_each(|(peer, domain)| {
+            assert!(
+                matches!(
+                    parse_cctp(slice::from_ref(&peer)),
+                    Err(Error::InvalidCctpPeer { domain: rejected, .. }) if rejected == domain
+                ),
+                "{peer}"
+            );
+        });
+    }
+
+    #[test]
+    fn cctp_rejects_duplicate_domains_and_chain_ids() {
+        let duplicate = |peers: &[String], value: &str| {
+            matches!(
+                parse_cctp(peers),
+                Err(Error::Duplicate { input: "cctp", value: duplicate }) if duplicate == value
+            )
+        };
+
+        assert!(duplicate(
+            &[
+                cctp_peer_json(6, 8453, VALID_ADDRESS),
+                cctp_peer_json(6, 10, OTHER_ADDRESS),
+            ],
+            "domain 6"
+        ));
+        assert!(duplicate(
+            &[
+                cctp_peer_json(6, 8453, VALID_ADDRESS),
+                cctp_peer_json(2, 8453, OTHER_ADDRESS),
+            ],
+            "chain_id 8453"
+        ));
+    }
+
+    #[test]
+    fn cctp_takes_one_to_the_program_maximum_of_peers() {
+        let peers = |count: u32| {
+            (1..=count)
+                .map(|index| cctp_peer_json(100 + index, 900_000 + u64::from(index), VALID_ADDRESS))
+                .collect::<Vec<_>>()
+        };
+        let max_peers = cctp_prover::state::MAX_PEERS as u32;
+
+        assert!(parse_cctp(&peers(max_peers)).is_ok());
+        assert!(matches!(
+            parse_cctp(&peers(max_peers + 1)),
+            Err(Error::InvalidCctpJson { .. })
+        ));
+        assert!(matches!(
+            parse_cctp(&[]),
+            Err(Error::Empty { input: "cctp" })
+        ));
+        assert!(matches!(
+            Inputs::parse(RawInputs {
+                cctp: "".into(),
+                ..raw_inputs()
+            }),
+            Err(Error::InvalidCctpJson { .. })
+        ));
+    }
+
+    #[test]
+    fn cctp_json_rejects_unknown_fields() {
+        let peer = cctp_peer_json(0, 1, VALID_ADDRESS).replacen('{', r#"{"extra":1,"#, 1);
+
+        assert!(matches!(
+            parse_cctp(&[peer]),
+            Err(Error::InvalidCctpJson { .. })
+        ));
+    }
+
+    #[test]
+    fn cctp_sender_rejects_32_bytes_that_are_not_a_padded_evm_address() {
+        let dirty = format!("0x01{}{}", "00".repeat(11), &VALID_ADDRESS[2..]);
+        let padded = format!("0x{}{}", "00".repeat(12), &VALID_ADDRESS[2..]);
+
+        assert!(matches!(
+            dirty.parse::<CctpSender>(),
+            Err(ParseCctpSenderError::NotEvmAddress)
+        ));
+        assert!(matches!(
+            parse_cctp(&[cctp_peer_json(0, 1, &dirty)]),
+            Err(Error::InvalidCctpJson { reason }) if reason.contains("left-padded with 12 zero bytes")
+        ));
+        assert!(parse_cctp(&[cctp_peer_json(0, 1, &padded)]).is_ok());
+    }
+
+    /// Both values against eco-svm-std's source, since this build only compiles one of them.
+    #[test]
+    fn solana_chain_ids_match_eco_svm_std_on_both_clusters() {
+        let source = include_str!("../../eco-svm-std/src/lib.rs");
+        let [mainnet, devnet] = SOLANA_CHAIN_IDS;
+
+        assert_eq!(mainnet, 1399811149);
+        assert_eq!(devnet, 1399811150);
+        assert!(source.contains(&format!(
+            "#[cfg(feature = \"mainnet\")]\npub const CHAIN_ID: u64 = {mainnet};"
+        )));
+        assert!(source.contains(&format!(
+            "#[cfg(not(feature = \"mainnet\"))]\npub const CHAIN_ID: u64 = {devnet};"
+        )));
+        assert_eq!(eco_svm_std::CHAIN_ID, devnet);
     }
 
     #[test]

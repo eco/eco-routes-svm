@@ -60,6 +60,9 @@ A pull-based prover backed by Polymer's proof network:
 #### **LayerZero-Prover Program** (`programs/layerzero-prover/`)
 A LayerZero V2-backed prover, both directions, intended as a liveness member of the 1-of-N aggregator. Outbound is two steps (`prove` then a permissionless `send_message`) and inbound follows LayerZero's executor V2 flow; see [LayerZero-Prover Program](#layerzero-prover-program).
 
+#### **CCTP-Prover Program** (`programs/cctp-prover/`)
+A Circle CCTP V2 generic-message prover, both directions; an aggregator member and the preferred prover on fast-attested lanes. Outbound `prove` sends the batch in one step through Circle's `message_transmitter_v2`; inbound is Circle's permissionless `receive_message`, which calls back into the program to create `Proof` PDAs. See [CCTP-Prover Program](#cctp-prover-program).
+
 #### **Local-Prover Program** (`programs/local-prover/`)
 A prover for same-chain intents (Solana source and destination):
 
@@ -358,6 +361,28 @@ Proof rent comes from the `pda_payer` reserve because the EVM sender's options c
 
 `layerzero.rs` hand-mirrors LayerZero-v2@9c741e7f (endpoint and ULN IDs, big-endian seeds, discriminators, V2 executor types). The ignored `layerzero_prover_real` test (needs `LZ_ENDPOINT_SO`) checks it against the dumped endpoint binary.
 
+### CCTP-Prover Program
+
+A Circle CCTP V2 generic-message prover, both directions. It is an aggregator member and the preferred prover on fast-attested lanes.
+
+#### Outbound (one step)
+- `prove` - Gated to Portal's `dispatcher_pda(&cctp_prover::ID)`. The destination domain must be a configured peer and `data` (the recipient) must be that peer's `CCTPProver`, read from `Config`, so a batch can never be attested toward a chain or contract that will not deliver it. It CPIs `message_transmitter_v2::send_message`, signing as its `["sender_authority"]` PDA, so the message's `sender` is this program ID (the EVM `CCTPProver` whitelists it as `bytes32`). Every send uses `min_finality_threshold = 1000` and the default `destination_caller`, so it is always fast and anyone can relay it. The solver signs a fresh `message_sent_event_data` keypair and pays its rent (reclaimable after 5 days).
+
+A batch holds at most `MAX_INTENTS_PER_PROVE` intents (23, measured on `[ComputeBudget, portal::prove]` as a v0 transaction with one lookup table, `Config` included: 1229 bytes, 3 bytes of headroom). The solver's atomic `[ComputeBudget, portal::fulfill, portal::prove]` for one intent fits one v0 transaction (948 bytes).
+
+#### Inbound
+Circle's `receive_message` (relayer-submitted, permissionless) verifies the attestation and CPIs `handle_receive_finalized_message` or `handle_receive_unfinalized_message`. Both check that `remote_domain` is a configured peer, that `sender == peer.sender` and that `ProofData.destination == peer.chain_id`, then create `Proof` PDAs (identical redelivery is a no-op, a conflicting proof fails with `IntentAlreadyProven`). `Proof` rent is relayer-paid: Circle forwards the relayer's tail accounts with their signer flags, so the relayer signs a `payer` there that funds every new `Proof`, and an unsigned `payer` is rejected. Circle's own `authority_pda` reaches the handler signed, so it is rejected as `payer` too; that check is what keeps a relayer from spending anyone else's lamports. A relayer too poor for the rent fails delivery retryably (the nonce stays unused). There is no protocol reserve, so fabricated proofs cost only whoever relays them.
+
+**Finality is an accepted risk.** Both handlers accept a message attested at Circle's confirmed level (1000), because the prover must use fast attestations. A `Proof` is permanent, so if the source chain reorgs a fulfillment away after Circle attested it, the solver can still withdraw that intent's reward. Circle does not cover this: its Fast Transfer Allowance backs fast USDC burns, not generic messages, whose finality Circle leaves to the recipient. The aggregator accepts any one member's proof, so this is the finality floor of every intent routed through an aggregator group that includes `cctp_prover`. The party that could profit from such a reorg is the solver, and Eco is the solver, so this is not an attack path against Eco; in the rare event it happens, it is caught off-chain by reconciling delivered proofs against finalized source events, and Eco acts on it.
+
+EVM `Inbox.prove` batches toward Solana must stay at or below `MAX_PAIRS_PER_MESSAGE` (6; 1183 bytes as v0 with a lookup table and a 2-of-2 attestation). EVM deploys must pin `CCTP_MAX_PAIRS_CONFIG=5:6`. The 49 bytes of headroom is less than one 65-byte attester signature, so a Circle threshold of 3 would cut the cap to 5; re-measure if it changes.
+
+#### Proof query and cleanup
+Query tail `[proof]`. Cleanup tail `[proof, rent_recipient]`: `close_proof` refunds the rent to the proof's claimant, who need not sign; any other recipient fails with `InvalidRentRecipient`. A cancelled or zero claimant is not payable (nobody controls the cancellation sentinel, and the zero key is the System Program), so its recipient must sign, and Portal and the aggregator forward that signer flag. A closer could still name a PDA that signs through duplicate-account flag sharing (for example Portal's `proof_closer`), which only forfeits the rent.
+
+#### Administration and finalization
+`init` is one-shot and gated on the program's upgrade authority. It writes at most `MAX_PEERS` (32) peers `{domain, chain_id, sender}`; past about 19 peers (21 if payer equals authority) it needs a v1 transaction. Finalizing the program fixes the peer set, so `init` must run first. The `Deploy` workflow sends it with every peer of its `cctp` input and reads the config back ([Deploying a release](#deploying-a-release)), and `Finalize` refuses `cctp_prover` until that config exists. A relayer builds the `receive_message` account list with `cctp::receive_message_instruction`, using the lookup table from `cctp::receive_lookup_table_addresses()`; the event-account rent is reclaimable after 5 days via Circle's `reclaim_event_account`, while `used_nonce` rent is not.
+
 ### Local-Prover Program
 
 A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
@@ -429,6 +454,7 @@ See [Proof queries and cleanup](docs/prover-interface.md) for account order, pro
 - `init_layerzero_prover.rs`, `prove_layerzero_prover.rs`, `send_layerzero_prover.rs`, `lz_receive_layerzero_prover.rs`, `lz_receive_types_layerzero_prover.rs`, `close_proof_layerzero_prover.rs` - LayerZeroProver admin, outbound commit/send, inbound executor flow, receive-types discovery, `get_proof` (direct and through the aggregator) and Portal `close_proof` cleanup (against `mock-layerzero-endpoint`)
 - `layerzero_prover_batch_limits.rs` - Pins the outbound and inbound batch ceilings
 - `layerzero_prover_real.rs` - Ignored test (needs `LZ_ENDPOINT_SO`) checking the hand-mirrored endpoint CPIs against LayerZero's dumped deployed binary
+- `*_cctp_prover.rs`, `cctp_prover_batch_limits.rs` - CCTPProver admin, outbound `prove`, inbound delivery and the batch and peer-set ceilings (against Circle's dumped `message_transmitter_v2`)
 
 #### Test Patterns:
 ```rust
@@ -480,7 +506,7 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`):
+The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`, `cctp-prover`):
 
 ```toml
 [features]
@@ -530,6 +556,7 @@ hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
+cctp-prover = "..."
 portal = "..."
 proof-helper = "..."
 
@@ -540,6 +567,7 @@ hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
+cctp-prover = "..."
 portal = "..."
 proof-helper = "..."
 # localnet-only test programs excluded
@@ -551,6 +579,7 @@ hyper-prover = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
+cctp-prover = "..."
 portal = "..."
 proof-helper = "..."
 # localnet-only test programs excluded
@@ -581,7 +610,7 @@ dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.js
 
 plus `program-ids.json`, recording each program's `address`, `seed`, `salt` and `dependencies` (the released programs whose IDs it compiles in, plus the aggregator's members; see [Program IDs](#program-ids)).
 
-`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover` and `layerzero_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
+`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover`, `layerzero_prover` and `cctp_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 
@@ -635,10 +664,11 @@ Runs on one cluster never overlap: a dispatch waits while another run on that cl
 | `hyper_senders` | Comma-separated EVM addresses (`0x` + 20 bytes) of the EVM HyperProver |
 | `polymer_emitters` | Comma-separated EVM addresses of the EVM PolymerProver |
 | `layerzero` | JSON, see below |
+| `cctp` | JSON, see below |
 | `hyper_reserve_lamports`, `layerzero_reserve_lamports` | Top-ups for each prover's `pda_payer`, default `0`. Only the shortfall is sent; a balance is never reduced. The plan fails unless the LayerZero reserve covers the endpoint and ULN accounts its paths still need (about 0.036 SOL per peer) and stays rent-exempt; the summary shows both |
 | `compute_unit_price` | Micro-lamports per compute unit, default `0` (none). Program deploys take it per compute unit; `apply` turns it into each v1 transaction's priority fee, price × 1.4M compute units. Part of the plan hash, and the funding estimate includes the priority fees it adds; deploy and `apply` take it from the plan |
 
-Inputs for a program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any input the program's own `init` would: more than 20 hyper senders or Polymer emitters, and a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses.
+Inputs for a program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any input the program's own `init` would: more than 20 hyper senders or Polymer emitters, a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses, and a CCTP peer set that `cctp_prover`'s `init` would refuse (see `cctp` below).
 
 `layerzero` lists one peer per EVM chain. `required_dvn_count` must equal `required_dvns`; `optional_dvn_count` `255` means no optional DVNs (`0` would fall back to LayerZero's defaults and is rejected). DVN lists must be strictly ascending by public key, or the plan is rejected:
 
@@ -684,6 +714,17 @@ Inputs for a program that is already live are not written, but are still hashed 
 
 The addresses above are placeholders; use the DVN and executor addresses LayerZero publishes for the Solana pathway to that peer.
 
+`cctp` lists one peer per EVM chain, 1 to 32 of them: its CCTP `domain` (0 is Ethereum), its EVM `chain_id`, and `sender`, the EVM `CCTPProver` address as `0x` + 20 bytes (left-padded to 32) or `0x` + 32 bytes. The plan rejects domain 5 (Solana's own), a zero or Solana `chain_id` (either cluster's), a zero `sender`, and a domain or `chain_id` another peer already uses. `init` carries every peer in one v1 transaction (32 peers fit; past about 19 they would not fit a v0 one):
+
+```json
+{
+  "peers": [
+    { "domain": 0, "chain_id": 1, "sender": "0x1111111111111111111111111111111111111111" },
+    { "domain": 6, "chain_id": 8453, "sender": "0x1111111111111111111111111111111111111111" }
+  ]
+}
+```
+
 **1. Plan.** Dispatch the workflow with the inputs. The `plan` job checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary, followed by the deployer's address, balance and estimated cost. Nothing is written on chain. A deployer short of SOL fails the job after printing the plan, and the approval never appears; fund it and dispatch again. Its balance is not part of the hash.
 
 **2. Review the summary** of the `plan` job. Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify). Statuses:
@@ -701,7 +742,7 @@ The hash covers the release, the binaries, the cluster's genesis hash, the deplo
 **3. Approve** the `deploy` job, or reject it to stop. Once approved it plans again and fails without writing if the hash differs from the approved plan's (the chain changed while it waited); otherwise it:
 
 1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
-2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, taken from the release), then LayerZero (`init` with every peer, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
+2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `cctp_prover` (`init` with every peer), `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover`, taken from the release), then LayerZero (`init` with every peer, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
 3. reads every config back and compares it with the inputs; any difference fails the run with every program still upgradeable;
 4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record, and fails unless the rebuild matches the deployed bytecode;
 5. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
@@ -712,7 +753,7 @@ Every program stays upgradeable after the run, so the provers can be tested end 
 
 After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separated list (for example `portal,hyper_prover,polymer_prover`), review its plan, then approve the `finalize` job. It runs `--final` on each selected upgradeable program, each after the programs it depends on, and skips programs already final or closed. The summary shows the on-chain configs that become permanent. The plan refuses a program that:
 
-- is not deployed, was closed, or is not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`);
+- is not deployed, was closed, or is not initialized (`hyper_prover`, `polymer_prover`, `aggregator_prover`, `layerzero_prover`, `cctp_prover`);
 - has no verification record uploaded by the deployer (the deploy run's verify step writes it);
 - depends on a program that would stay upgradeable: `aggregator_prover` before its members, and any prover before `portal`. Dependencies come from the release's `program-ids.json`;
 - is `layerzero_prover` without its full setup on chain (every peer's path and the frozen lookup table). Finalizing it also revokes the `pda_payer` delegate, so wait for the manual gate in [Administration and finalization](#administration-and-finalization).
@@ -776,7 +817,8 @@ solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deploy
 |---|---|---|
 | `hyper_prover` | `whitelisted_senders`: the EVM HyperProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
 | `polymer_prover` | `whitelisted_emitters`: the EVM PolymerProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
-| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
+| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
+| `cctp_prover` | `peers`: at most 32 `{domain, chain_id, sender}`, one per EVM chain: its CCTP domain, its chain ID and its EVM `CCTPProver` address left-padded to 32 bytes; past about 19 peers send it as a v1 transaction | deployer, as payer and upgrade authority |
 | `layerzero_prover` | `init` with every peer (one v1 transaction), then `init_path` and `set_path_config` per peer, a frozen lookup table of `required_alt_addresses`, and `set_alt`; see [Administration and finalization](#administration-and-finalization) | deployer, as payer and upgrade authority |
 
 Every config is permanent. Read each one back and compare it with what you sent:

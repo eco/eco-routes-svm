@@ -549,7 +549,7 @@ struct CanonicalProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{AGGREGATOR_PROVER, POLYMER_PROVER};
+    use crate::plan::{AGGREGATOR_PROVER, CCTP_PROVER, POLYMER_PROVER};
     use crate::testing::{self, address, full_setup};
 
     fn deployer() -> Pubkey {
@@ -660,11 +660,11 @@ mod tests {
         let alone = build(Operation::Finalize, AGGREGATOR_PROVER, |_| {});
         let with_members = build(
             Operation::Finalize,
-            "aggregator_prover,hyper_prover,polymer_prover,layerzero_prover",
+            "aggregator_prover,hyper_prover,polymer_prover,layerzero_prover,cctp_prover",
             |_| {},
         );
         let members_final = build(Operation::Finalize, AGGREGATOR_PROVER, |observed| {
-            [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER]
+            [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER, CCTP_PROVER]
                 .into_iter()
                 .for_each(|member| set_status(observed, member, Status::Live));
         });
@@ -694,6 +694,26 @@ mod tests {
             uninitialized,
             Err(Error::NotInitialized { program }) if program == HYPER_PROVER
         ));
+    }
+
+    #[test]
+    fn finalize_refuses_cctp_prover_before_its_init_alone_or_with_all() {
+        let uninitialized = |selected| {
+            build(Operation::Finalize, selected, |observed| {
+                observed.live_configs.cctp_peers = None;
+            })
+        };
+
+        ["cctp_prover", "all"].into_iter().for_each(|selected| {
+            assert!(
+                matches!(
+                    uninitialized(selected),
+                    Err(Error::NotInitialized { program }) if program == CCTP_PROVER
+                ),
+                "{selected}"
+            );
+        });
+        assert!(build(Operation::Finalize, "cctp_prover", |_| {}).is_ok());
     }
 
     #[test]

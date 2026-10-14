@@ -24,8 +24,8 @@ const SIGNATURE_FEE_LAMPORTS: u64 = 5_000;
 const DEPLOY_WRITE_BYTES: usize = 900;
 const DEPLOY_COMPUTE_UNIT_LIMIT: u64 = 10_000;
 const DEPLOY_SETUP_TRANSACTIONS: u64 = 2;
-/// Two reserve transfers and three prover inits; LayerZero's are `layerzero::setup_transactions`.
-const APPLY_FIXED_TRANSACTIONS: u64 = 5;
+/// Two reserve transfers and four prover inits; LayerZero's are `layerzero::setup_transactions`.
+const APPLY_FIXED_TRANSACTIONS: u64 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -321,8 +321,8 @@ mod tests {
 
     const DEPLOYER: Pubkey = Pubkey::new_from_array([7; 32]);
     const RESERVE_LAMPORTS: u64 = 5_000_000;
-    /// `testing::plan` has one LayerZero peer: 5 + 5 `apply` transactions, one signature each.
-    const UNPRICED_APPLY_FEES: u64 = 10 * 5_000;
+    /// `testing::plan` has one LayerZero peer: 6 + 5 `apply` transactions, one signature each.
+    const UNPRICED_APPLY_FEES: u64 = 11 * 5_000;
     const FIXED: u64 = UNPRICED_APPLY_FEES + ALLOWANCE_LAMPORTS;
 
     fn funded(lamports: u64) -> RecordingChain {
@@ -371,11 +371,11 @@ mod tests {
 
         assert_eq!(
             funding.required(),
-            Sol(4 * (rent(45 + 1_000) + rent(36))
+            Sol(5 * (rent(45 + 1_000) + rent(36))
                 + rent(45 + 3_000)
                 + rent(36)
                 + rent(37 + 3_000)
-                + 4 * (2 * 5_000 + 2 * 10_000)
+                + 5 * (2 * 5_000 + 2 * 10_000)
                 + (4 * 5_000 + 2 * 10_000)
                 + FIXED)
         );
@@ -441,9 +441,9 @@ mod tests {
 
         let priced = fees(1_000_000);
 
-        // Five 1,000-byte programs: 2 writes and 2 setup transactions each, at 10,000 units.
-        let deploy_units = 5 * 4 * 10_000;
-        let apply_units = 10 * 1_400_000;
+        // Six 1,000-byte programs: 2 writes and 2 setup transactions each, at 10,000 units.
+        let deploy_units = 6 * 4 * 10_000;
+        let apply_units = 11 * 1_400_000;
         assert_eq!(priced, Sol(unpriced.0 + deploy_units + apply_units));
         assert_eq!(fees(u64::MAX), Sol(u64::MAX));
     }

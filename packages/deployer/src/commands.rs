@@ -148,6 +148,7 @@ pub fn plan(
         hyper_senders: inputs.hyper_senders.clone(),
         polymer_emitters: inputs.polymer_emitters.clone(),
         layerzero: inputs.layerzero.clone(),
+        cctp: inputs.cctp.clone(),
         hyper_reserve_lamports: inputs.hyper_reserve_lamports.clone(),
         layerzero_reserve_lamports: inputs.layerzero_reserve_lamports.clone(),
         compute_unit_price: inputs.compute_unit_price.clone(),
@@ -459,7 +460,8 @@ mod tests {
     use super::*;
     use crate::cli::{ActionKind, ChainArgs, InputArgs, ReadArgs};
     use crate::plan::{
-        Action, AGGREGATOR_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER, POLYMER_PROVER,
+        Action, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER, LOCAL_PROVER,
+        POLYMER_PROVER,
     };
     use crate::selection::SelectionFile;
     use crate::testing::{
@@ -468,8 +470,9 @@ mod tests {
 
     const VERIFY_PROGRAM_ID: Pubkey =
         Pubkey::from_str_const("verifycLy8mB96wd9wqq3WDXQwM4oU6r42Th37Db9fC");
-    const PROGRAMS: [&str; 5] = [
+    const PROGRAMS: [&str; 6] = [
         AGGREGATOR_PROVER,
+        CCTP_PROVER,
         HYPER_PROVER,
         LAYERZERO_PROVER,
         LOCAL_PROVER,
@@ -551,6 +554,9 @@ mod tests {
                     polymer_emitters: SENDER.into(),
                     layerzero: format!(
                         r#"{{"peers":[{{"eid":1,"address":"{SENDER}","chain_id":1,"path":{{"send_uln":{uln},"receive_uln":{uln},"executor":{{"max_message_size":10000,"executor":"{EXECUTOR}"}}}}}}]}}"#
+                    ),
+                    cctp: format!(
+                        r#"{{"peers":[{{"domain":0,"chain_id":1,"sender":"{SENDER}"}}]}}"#
                     ),
                     hyper_reserve_lamports: "1000000".into(),
                     layerzero_reserve_lamports: "100000000".into(),
@@ -859,6 +865,7 @@ mod tests {
             .for_each(|name| fs::remove_file(env.path(&format!("{name}.devnet.so"))).unwrap());
 
         let members_then_aggregator = [
+            CCTP_PROVER,
             HYPER_PROVER,
             LAYERZERO_PROVER,
             LOCAL_PROVER,
@@ -1024,6 +1031,7 @@ mod tests {
         assert_eq!(
             env.actions(ActionKind::Finalize),
             [
+                CCTP_PROVER,
                 HYPER_PROVER,
                 LAYERZERO_PROVER,
                 LOCAL_PROVER,
@@ -1091,7 +1099,8 @@ mod tests {
                 POLYMER_PROVER,
                 LOCAL_PROVER,
                 LAYERZERO_PROVER,
-                HYPER_PROVER
+                HYPER_PROVER,
+                CCTP_PROVER
             ]
         );
     }
