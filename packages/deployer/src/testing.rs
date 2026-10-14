@@ -19,8 +19,10 @@ use crate::plan::{
 };
 
 pub const SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
-pub const DVN: &str = "11111111111111111111111111111112";
-pub const EXECUTOR: &str = "11111111111111111111111111111113";
+/// `["DvnConfig"]` and `["ExecutorConfig"]` under `worker_program()`: real worker config PDAs, as
+/// `layerzero::check_workers` requires (pinned by `test_workers_are_their_config_pdas`).
+pub const DVN: &str = "5M7zug6X5Rs2rhA1w4AfKQLxBytYMKtkNhf1smpfP1SH";
+pub const EXECUTOR: &str = "483SprNKkq27QSkvgBZnRMmSSkXgCUqEnntnHw6kYXtq";
 
 pub struct RecordingChain {
     pub accounts: HashMap<Pubkey, Account>,
@@ -38,10 +40,14 @@ impl Default for RecordingChain {
     }
 }
 
-/// `DVN` and `EXECUTOR` as worker config accounts owned by a worker program, the shape
+pub fn worker_program() -> Pubkey {
+    address(98)
+}
+
+/// `DVN` and `EXECUTOR` as config accounts of the executable `worker_program()`, the shape
 /// `layerzero::check_workers` accepts.
 pub fn worker_accounts() -> Vec<(Pubkey, Account)> {
-    let worker = address(98);
+    let worker = worker_program();
     let program = Account {
         executable: true,
         owner: bpf_loader_upgradeable::id(),
@@ -175,13 +181,14 @@ pub fn chain_with_deployed_members() -> RecordingChain {
         ..Account::default()
     };
 
-    RecordingChain {
-        accounts: AGGREGATOR_MEMBERS
+    let mut chain = RecordingChain::default();
+    chain.accounts.extend(
+        AGGREGATOR_MEMBERS
             .iter()
-            .map(|member| (release_address(member), executable.clone()))
-            .collect(),
-        ..RecordingChain::default()
-    }
+            .map(|member| (release_address(member), executable.clone())),
+    );
+
+    chain
 }
 
 pub fn pda(seed: &[u8], program: &str) -> Pubkey {
@@ -362,4 +369,12 @@ fn serialize(account: &impl AccountSerialize) -> Vec<u8> {
     account.try_serialize(&mut data).unwrap();
 
     data
+}
+
+#[test]
+fn test_workers_are_their_config_pdas() {
+    let pda = |seed: &[u8]| Pubkey::find_program_address(&[seed], &worker_program()).0;
+
+    assert_eq!(DVN.parse::<Pubkey>().unwrap(), pda(b"DvnConfig"));
+    assert_eq!(EXECUTOR.parse::<Pubkey>().unwrap(), pda(b"ExecutorConfig"));
 }

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use anchor_lang::{system_program, AccountDeserialize, InstructionData, ToAccountMetas};
 use common::litesvm_chain::{uln_account_data, LitesvmChain};
-use common::{Context, RELEASE_PROGRAMS};
+use common::{Context, DVN, EXECUTOR, RELEASE_PROGRAMS};
 use deployer::apply::{self, apply, Step};
 use deployer::classify::{ProgramState, Status};
 use deployer::config::{self, Configs};
@@ -29,9 +29,7 @@ use solana_sdk::sysvar::slot_hashes::SlotHashes;
 const HYPER_SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
 const OTHER_SENDER: &str = "0x1111111111111111111111111111111111111111";
 const POLYMER_EMITTER: &str = "0x2222222222222222222222222222222222222222";
-const DVN: &str = "11111111111111111111111111111112";
 const OTHER_DVN: &str = "11111111111111111111111111111114";
-const EXECUTOR: &str = "11111111111111111111111111111113";
 const HYPER_RESERVE: u64 = 1_000_000;
 const LAYERZERO_RESERVE: u64 = 1_000_000_000;
 const SLOT_HASHES_SPAN: u64 = 512;
@@ -879,4 +877,12 @@ fn apply_initializes_a_path_whose_nonce_address_was_prefunded() {
 
     assert!(sent(&report).contains(&(LAYERZERO_PROVER, "init_path", true)));
     readback(&env.chain(), &plan).unwrap();
+}
+
+#[test]
+fn workers_are_their_config_pdas() {
+    let pda = |seed: &[u8]| Pubkey::find_program_address(&[seed], &layerzero::ENDPOINT_ID).0;
+
+    assert_eq!(DVN.parse::<Pubkey>().unwrap(), pda(b"DvnConfig"));
+    assert_eq!(EXECUTOR.parse::<Pubkey>().unwrap(), pda(b"ExecutorConfig"));
 }

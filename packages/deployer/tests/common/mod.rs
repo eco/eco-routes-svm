@@ -17,9 +17,11 @@ use solana_sdk::transaction::Transaction;
 pub mod litesvm_chain;
 
 const PAYER_LAMPORTS: u64 = 10_000_000_000;
-/// The DVN and executor the tests' LayerZero inputs name.
-const WORKER_DVN: &str = "11111111111111111111111111111112";
-const WORKER_EXECUTOR: &str = "11111111111111111111111111111113";
+/// The DVN and executor the tests' LayerZero inputs name: `["DvnConfig"]` and
+/// `["ExecutorConfig"]` under the loaded mock endpoint, standing in for a worker program
+/// (pinned by `workers_are_their_config_pdas` in `tests/apply.rs`).
+pub const DVN: &str = "Bc7cLTjNNRvb3qN8UYotu4iZTMB2EFSE7zMQv2rzfV5M";
+pub const EXECUTOR: &str = "FE4JCqdi1a4ErcVdXxRQmmrHJgoYNtKgXdDH6j2HF2Eh";
 const AGGREGATOR_PROVER_BIN: &[u8] =
     include_bytes!("../../../../target/deploy/aggregator_prover.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/hyper_prover.so");
@@ -112,13 +114,11 @@ impl Context {
             data: vec![0; 8],
             ..Account::default()
         };
-        [WORKER_DVN, WORKER_EXECUTOR]
-            .into_iter()
-            .for_each(|address| {
-                self.svm
-                    .set_account(address.parse().unwrap(), config.clone())
-                    .unwrap();
-            });
+        [DVN, EXECUTOR].into_iter().for_each(|address| {
+            self.svm
+                .set_account(address.parse().unwrap(), config.clone())
+                .unwrap();
+        });
     }
 
     fn init_endpoint(&mut self) {

@@ -1,6 +1,10 @@
+use std::collections::BTreeSet;
+
 use anchor_lang::{system_program, InstructionData, ToAccountMetas};
 use layerzero_prover::instructions::{required_alt_addresses, InitArgs, PathConfig};
-use layerzero_prover::layerzero::{self, ENDPOINT_ID, LZ_RECEIVE_TYPES_SEED, ULN_ID};
+use layerzero_prover::layerzero::{
+    self, ExecutorConfig, UlnConfig, ENDPOINT_ID, LZ_RECEIVE_TYPES_SEED, ULN_ID,
+};
 use layerzero_prover::state::{Peer, Store, PDA_PAYER_SEED};
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table, freeze_lookup_table,
@@ -9,9 +13,6 @@ use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature};
 use solana_sdk::signer::Signer;
-use solana_sdk_ids::{
-    bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable, loader_v4, native_loader,
-};
 
 use crate::chain::{self, Chain};
 use crate::config::{self, Configs};
@@ -44,9 +45,8 @@ pub enum Error {
     },
     #[error("{LAYERZERO_PROVER} store {address} does not exist after init")]
     StoreMissing { address: Pubkey },
-    #[error("{LAYERZERO_PROVER}: eid {eid} {role} {address} {reason}; ULN302 names every worker by its config account (the executor's is PDA [\"ExecutorConfig\"] under its program), never by its program ID")]
+    #[error("{LAYERZERO_PROVER}: {role} {address} {reason}; ULN302 names each worker by its config PDA under the worker's program ([\"ExecutorConfig\"] for the executor, [\"DvnConfig\"] for a DVN), never by its program ID")]
     NotAWorkerConfig {
-        eid: u32,
         role: &'static str,
         address: Pubkey,
         reason: &'static str,
@@ -92,52 +92,107 @@ pub fn check_transaction_sizes(program: &Pubkey, peers: &[LayerZeroPeer]) -> Res
         })
 }
 
-/// Rejects an executor or DVN that is not a worker's config account: one that is missing, is a
-/// program, or is not owned by a program (a wallet, or a loader's program data). ULN302 stores
-/// whatever `set_path_config` gives it, and a program ID there makes every send and quote fail.
-pub fn check_workers(chain: &impl Chain, peers: &[LayerZeroPeer]) -> Result<(), Error> {
-    peers.iter().try_for_each(|peer| {
-        let path = &peer.path;
-        let dvns = [&path.send_uln, &path.receive_uln]
-            .into_iter()
-            .flat_map(|uln| uln.required_dvns.iter().chain(&uln.optional_dvns))
-            .map(|dvn| ("DVN", dvn));
+pub const EXECUTOR_ROLE: &str = "executor";
+pub const DVN_ROLE: &str = "DVN";
+/// The seeds LayerZero's workers pin their config account to (`quote.rs` of the executor and
+/// the DVN at LayerZero-v2@9c741e7f); ULN302 hands that account to its owner's `quote`.
+const EXECUTOR_CONFIG_SEED: &[u8] = b"ExecutorConfig";
+const DVN_CONFIG_SEED: &[u8] = b"DvnConfig";
 
-        std::iter::once(("executor", &path.executor.executor))
-            .chain(dvns)
-            .try_for_each(|(role, address)| check_worker(chain, peer.eid, role, address))
-    })
+/// Rejects a worker in a path `apply` will write: those of input peers with no ULN config on
+/// chain yet. A path already configured is whatever the chain holds (`verify_configs` makes the
+/// inputs equal it), and once `layerzero_prover` is final nothing can change it, so checking it
+/// here would only block every later plan of the release; finalize checks the live paths.
+pub fn check_workers(chain: &impl Chain, plan: &Plan) -> Result<(), Error> {
+    let configured: Vec<u32> = plan
+        .live_configs
+        .layerzero_paths
+        .iter()
+        .filter(|path| path.send.is_some() || path.receive.is_some())
+        .map(|path| path.eid)
+        .collect();
+    let workers = plan
+        .inputs
+        .layerzero_peers
+        .iter()
+        .filter(|peer| !configured.contains(&peer.eid))
+        .flat_map(|peer| {
+            let PathConfig {
+                send_uln,
+                receive_uln,
+                executor,
+            } = &peer.path;
+
+            workers(executor, [send_uln, receive_uln])
+        });
+
+    check_addresses(chain, workers)
 }
 
-fn check_worker(
+/// Rejects a worker in a live path, before finalize locks it in.
+pub fn check_live_workers(chain: &impl Chain, paths: &[Path]) -> Result<(), Error> {
+    let workers = paths.iter().flat_map(|path| {
+        let send = path.send.as_ref();
+        let ulns = send
+            .map(|send| &send.uln)
+            .into_iter()
+            .chain(path.receive.as_ref().map(|receive| &receive.uln));
+
+        send.map(|send| workers(&send.executor, ulns))
+            .into_iter()
+            .flatten()
+    });
+
+    check_addresses(chain, workers)
+}
+
+/// The executor and every DVN, required and optional, of `ulns`.
+fn workers<'a>(
+    executor: &ExecutorConfig,
+    ulns: impl IntoIterator<Item = &'a UlnConfig>,
+) -> Vec<(&'static str, Pubkey)> {
+    let dvns = ulns
+        .into_iter()
+        .flat_map(|uln| uln.required_dvns.iter().chain(&uln.optional_dvns))
+        .map(|dvn| (DVN_ROLE, *dvn));
+
+    std::iter::once((EXECUTOR_ROLE, executor.executor))
+        .chain(dvns)
+        .collect()
+}
+
+/// Checks each distinct worker once: the same DVNs repeat across peers and both ULN configs.
+fn check_addresses(
     chain: &impl Chain,
-    eid: u32,
-    role: &'static str,
-    address: &Pubkey,
+    workers: impl IntoIterator<Item = (&'static str, Pubkey)>,
 ) -> Result<(), Error> {
-    let not_a_program = [
-        system_program::ID,
-        bpf_loader::id(),
-        bpf_loader_deprecated::id(),
-        bpf_loader_upgradeable::id(),
-        loader_v4::id(),
-        native_loader::id(),
-    ];
+    workers
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .try_for_each(|(role, address)| check_worker(chain, role, &address))
+}
+
+/// A worker config is an account at its role's PDA under an executable program, its owner.
+fn check_worker(chain: &impl Chain, role: &'static str, address: &Pubkey) -> Result<(), Error> {
+    let seed = match role {
+        EXECUTOR_ROLE => EXECUTOR_CONFIG_SEED,
+        _ => DVN_CONFIG_SEED,
+    };
     let reason = match chain.account(address)? {
         None => Some("does not exist"),
         Some(account) if account.executable => Some("is a program"),
-        Some(account) if not_a_program.contains(&account.owner) => {
-            Some("is not owned by a worker program")
+        Some(account) if Pubkey::find_program_address(&[seed], &account.owner).0 != *address => {
+            Some("is not its owner's config PDA for that role")
         }
         Some(account) => match chain.account(&account.owner)? {
             Some(owner) if owner.executable => None,
-            _ => Some("is not owned by a worker program"),
+            _ => Some("is not owned by a program"),
         },
     };
 
     reason.map_or(Ok(()), |reason| {
         Err(Error::NotAWorkerConfig {
-            eid,
             role,
             address: *address,
             reason,
@@ -425,7 +480,8 @@ mod tests {
     use super::*;
     use crate::inputs::MAX_DVNS;
     use crate::testing::{
-        address, full_setup, plan, uln_account_data, FullSetup, RecordingChain, DVN, EXECUTOR,
+        full_setup, plan, release_address, uln_account_data, worker_program, FullSetup,
+        RecordingChain, DVN, EXECUTOR,
     };
 
     /// The fewest required DVNs, with no optional ones, whose `set_path_config` exceeds a
@@ -590,40 +646,45 @@ mod tests {
         );
     }
 
-    /// A peer whose path names the fixture's `DVN` and `EXECUTOR`.
-    fn worker_peer() -> LayerZeroPeer {
-        let dvn = DVN.parse().unwrap();
-        let uln = UlnConfig {
+    fn uln(dvns: Vec<Pubkey>) -> UlnConfig {
+        UlnConfig {
             confirmations: 15,
-            required_dvn_count: 1,
+            required_dvn_count: dvns.len() as u8,
             optional_dvn_count: u8::MAX,
             optional_dvn_threshold: 0,
-            required_dvns: vec![dvn],
+            required_dvns: dvns,
             optional_dvns: vec![],
-        };
+        }
+    }
 
-        LayerZeroPeer {
-            eid: 30184,
-            address: "0xAbCdEf0123456789aBcDeF0123456789abcdef01"
-                .parse()
-                .unwrap(),
-            chain_id: 30184,
-            path: PathConfig {
-                send_uln: uln.clone(),
-                receive_uln: uln,
-                executor: ExecutorConfig {
-                    max_message_size: 10_000,
-                    executor: EXECUTOR.parse().unwrap(),
-                },
+    /// The fixture's executor and DVN, or the ones given.
+    fn path_with(executor: Pubkey, dvn: Pubkey) -> PathConfig {
+        PathConfig {
+            send_uln: uln(vec![dvn]),
+            receive_uln: uln(vec![dvn]),
+            executor: ExecutorConfig {
+                max_message_size: 10_000,
+                executor,
             },
         }
+    }
+
+    fn fixture_path() -> PathConfig {
+        path_with(EXECUTOR.parse().unwrap(), DVN.parse().unwrap())
+    }
+
+    fn check(chain: &RecordingChain, path: &PathConfig) -> Result<(), Error> {
+        check_addresses(
+            chain,
+            workers(&path.executor, [&path.send_uln, &path.receive_uln]),
+        )
     }
 
     fn rejected(result: Result<(), Error>, expected_role: &str, expected: &str) {
         assert!(
             matches!(
                 &result,
-                Err(Error::NotAWorkerConfig { eid: 30184, role, reason, .. })
+                Err(Error::NotAWorkerConfig { role, reason, .. })
                     if *role == expected_role && *reason == expected
             ),
             "{result:?}"
@@ -631,37 +692,131 @@ mod tests {
     }
 
     #[test]
-    fn worker_config_accounts_are_accepted() {
-        let chain = RecordingChain::default();
-
-        check_workers(&chain, &[worker_peer()]).unwrap();
+    fn worker_config_pdas_are_accepted() {
+        check(&RecordingChain::default(), &fixture_path()).unwrap();
     }
 
     #[test]
     fn an_executor_program_id_is_rejected() {
-        let chain = RecordingChain::default();
-        let mut peer = worker_peer();
         // What the mainnet path held: the worker's program, not its config account.
-        peer.path.executor.executor = address(98);
+        let path = path_with(worker_program(), DVN.parse().unwrap());
 
-        rejected(check_workers(&chain, &[peer]), "executor", "is a program");
+        rejected(
+            check(&RecordingChain::default(), &path),
+            EXECUTOR_ROLE,
+            "is a program",
+        );
+    }
+
+    /// Each role has its own seed, so a DVN config named as the executor (or the reverse)
+    /// fails every quote just like a program ID does.
+    #[test]
+    fn swapped_roles_are_rejected() {
+        let chain = RecordingChain::default();
+
+        rejected(
+            check(
+                &chain,
+                &path_with(DVN.parse().unwrap(), DVN.parse().unwrap()),
+            ),
+            EXECUTOR_ROLE,
+            "is not its owner's config PDA for that role",
+        );
+        rejected(
+            check(
+                &chain,
+                &path_with(EXECUTOR.parse().unwrap(), EXECUTOR.parse().unwrap()),
+            ),
+            DVN_ROLE,
+            "is not its owner's config PDA for that role",
+        );
     }
 
     #[test]
-    fn a_missing_or_unowned_dvn_is_rejected() {
+    fn a_missing_wallet_or_unowned_dvn_is_rejected() {
         let mut chain = RecordingChain::default();
         let wallet = Pubkey::new_unique();
         chain.accounts.insert(wallet, Account::default());
+        // The right PDA, but under an account that is not a program.
+        let data_account = Pubkey::new_unique();
+        let under_data = Pubkey::find_program_address(&[DVN_CONFIG_SEED], &data_account).0;
+        chain.accounts.insert(data_account, Account::default());
+        chain.accounts.insert(
+            under_data,
+            Account {
+                owner: data_account,
+                ..Account::default()
+            },
+        );
+
         [
             (Pubkey::new_unique(), "does not exist"),
-            (wallet, "is not owned by a worker program"),
+            (wallet, "is not its owner's config PDA for that role"),
+            (under_data, "is not owned by a program"),
         ]
         .into_iter()
         .for_each(|(dvn, reason)| {
-            let mut peer = worker_peer();
-            peer.path.receive_uln.optional_dvns = vec![dvn];
+            let path = path_with(EXECUTOR.parse().unwrap(), dvn);
 
-            rejected(check_workers(&chain, &[peer]), "DVN", reason);
+            rejected(check(&chain, &path), DVN_ROLE, reason);
         });
+    }
+
+    /// The same DVN repeats across both ULN configs and every peer; each distinct worker is read
+    /// once (and its owner once).
+    #[test]
+    fn each_distinct_worker_is_checked_once() {
+        let path = fixture_path();
+        let workers: BTreeSet<_> = (0..3)
+            .flat_map(|_| workers(&path.executor, [&path.send_uln, &path.receive_uln]))
+            .collect();
+
+        assert_eq!(
+            workers.into_iter().collect::<Vec<_>>(),
+            [
+                (DVN_ROLE, DVN.parse().unwrap()),
+                (EXECUTOR_ROLE, EXECUTOR.parse().unwrap())
+            ]
+        );
+    }
+
+    /// A configured path is whatever the chain holds and, once the program is final, can never
+    /// change: checking its workers would only block every later plan.
+    #[test]
+    fn check_workers_skips_paths_already_configured() {
+        let mut plan = plan(5_000_000);
+        let mut chain = RecordingChain::default();
+        chain.accounts.remove(&DVN.parse().unwrap());
+
+        rejected(check_workers(&chain, &plan), DVN_ROLE, "does not exist");
+        let peer = &plan.inputs.layerzero_peers[0];
+        plan.live_configs.layerzero_paths = vec![Path::expected(
+            &release_address(LAYERZERO_PROVER),
+            &peer.into(),
+            &peer.path,
+        )];
+        check_workers(&chain, &plan).unwrap();
+    }
+
+    /// Finalize checks what it is about to lock in: the live paths.
+    #[test]
+    fn check_live_workers_reads_the_paths_on_chain() {
+        let plan = plan(5_000_000);
+        let peer = &plan.inputs.layerzero_peers[0];
+        let program = release_address(LAYERZERO_PROVER);
+        let live = Path::expected(&program, &peer.into(), &peer.path);
+        let wrong = Path::expected(
+            &program,
+            &peer.into(),
+            &path_with(worker_program(), DVN.parse().unwrap()),
+        );
+        let chain = RecordingChain::default();
+
+        check_live_workers(&chain, &[live]).unwrap();
+        rejected(
+            check_live_workers(&chain, &[wrong]),
+            EXECUTOR_ROLE,
+            "is a program",
+        );
     }
 }

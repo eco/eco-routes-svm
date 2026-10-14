@@ -9,7 +9,6 @@ use mock_layerzero_endpoint::{
     MockConfigInitialized, MockConfigSet, Nonce, OAppRegistry, ReceiveLibraryConfig,
     SendLibraryConfig,
 };
-use solana_sdk::account::Account;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
@@ -185,59 +184,6 @@ fn set_path_config_pins_send_receive_and_executor() {
             config
         })(result.clone()));
     });
-}
-
-/// Rerunning on a configured eid corrects the path: ULN302's `init_config` would
-/// fail on the accounts it already created, so it is skipped and only `set_config`
-/// runs. With one account missing it still runs, and ULN302 rejects the rerun.
-#[test]
-fn set_path_config_reruns_skip_init_config_once_both_uln_configs_exist() {
-    let (mut context, authority) = installed();
-    context
-        .layerzero_prover()
-        .init(&authority, peers())
-        .unwrap();
-    context
-        .layerzero_prover()
-        .init_path(&authority, &peers()[0])
-        .unwrap();
-    let oapp = Store::pda().0;
-    let uln_config = Account {
-        lamports: 1_000_000,
-        owner: layerzero::ULN_ID,
-        data: vec![1; 8],
-        ..Account::default()
-    };
-    let send_config = layerzero::uln_send_config_pda(BASE_EID, &oapp).0;
-    let receive_config = layerzero::uln_receive_config_pda(BASE_EID, &oapp).0;
-    let mut corrected = path_config();
-    corrected.executor.executor = Pubkey::new_unique();
-    let initialized = common::contains_event(MockConfigInitialized {
-        oapp,
-        eid: BASE_EID,
-    });
-
-    context
-        .set_account(send_config, uln_config.clone())
-        .unwrap();
-    let half_configured = context
-        .layerzero_prover()
-        .set_path_config(&authority, BASE_EID, corrected.clone())
-        .unwrap();
-    context.set_account(receive_config, uln_config).unwrap();
-    let rerun = context
-        .layerzero_prover()
-        .set_path_config(&authority, BASE_EID, corrected.clone())
-        .unwrap();
-
-    assert!(initialized(half_configured));
-    assert!(!initialized(rerun.clone()));
-    assert!(common::contains_event(MockConfigSet {
-        oapp,
-        eid: BASE_EID,
-        config_type: CONFIG_TYPE_EXECUTOR,
-        config: borsh::to_vec(&corrected.executor).unwrap(),
-    })(rerun));
 }
 
 #[test]

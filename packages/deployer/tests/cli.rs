@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use common::litesvm_chain::LitesvmChain;
-use common::{Context, RELEASE_PROGRAMS};
+use common::{Context, DVN, EXECUTOR, RELEASE_PROGRAMS};
 use deployer::cli::{ActionKind, ActionsArgs, ApplyArgs, ChainArgs, InputArgs, PlanArgs, ReadArgs};
 use deployer::commands::{self, Error};
 use deployer::plan::{
@@ -22,8 +22,6 @@ use solana_sdk::sysvar::slot_hashes::SlotHashes;
 use tempfile::TempDir;
 
 const SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
-const DVN: &str = "11111111111111111111111111111112";
-const EXECUTOR: &str = "11111111111111111111111111111113";
 const SLOT_HASHES_SPAN: u64 = 512;
 
 fn programs() -> [(&'static str, Pubkey); 5] {

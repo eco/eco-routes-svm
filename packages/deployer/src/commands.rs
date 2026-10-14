@@ -281,17 +281,18 @@ fn build(
         })
         .collect::<Result<BTreeMap<_, _>, Error>>()?;
     let live_configs = config::read(chain, release)?;
-    let inputs = Inputs::parse(inputs.clone())?;
-    layerzero::check_workers(chain, &inputs.layerzero_peers).map_err(plan::Error::from)?;
-
-    Ok(Plan::build(
+    let built = Plan::build(
         release.clone(),
         chain.genesis_hash()?,
         *deployer,
         states,
         live_configs,
-        inputs,
-    )?)
+        Inputs::parse(inputs.clone())?,
+    )?;
+    // After `Plan::build`, so a wrong cluster is reported as that, not as a missing worker.
+    layerzero::check_workers(chain, &built).map_err(plan::Error::from)?;
+
+    Ok(built)
 }
 
 /// A program planned `New` that is now `Partial` (deployed from the release binary with this
@@ -517,7 +518,7 @@ mod tests {
             }
         }
 
-        /// A chain holding nothing but the deployer's balance.
+        /// A chain holding the deployer's balance and the fixture's LayerZero worker accounts.
         fn chain(&self) -> RecordingChain {
             let mut chain = RecordingChain::default();
             chain.accounts.insert(
