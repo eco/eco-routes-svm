@@ -344,8 +344,10 @@ impl Selection {
 
         format!(
             "Closing returns each program's rent to the deployer and burns its address: it can \
-             never be deployed again. Lamports held by the program's own accounts stay locked \
-             for good, including LayerZero's endpoint and ULN account rent and these reserves:\n\n\
+             never be deployed again. Its canonical IDL account and IDL scratch buffer close \
+             first (`deployer close-idl`), so their rent comes back too. Lamports held by the \
+             program's own accounts stay locked for good, including LayerZero's endpoint and ULN \
+             account rent and these reserves:\n\n\
              {stranded}"
         )
     }

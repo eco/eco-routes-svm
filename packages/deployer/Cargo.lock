@@ -1358,6 +1358,7 @@ dependencies = [
  "polymer-prover",
  "serde",
  "serde_json",
+ "solana-account-decoder-client-types",
  "solana-address-lookup-table-interface",
  "solana-cluster-type",
  "solana-commitment-config",

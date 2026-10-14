@@ -37,6 +37,10 @@ pub enum Command {
     /// Upload each upgradeable release program's `<program>.<cluster>.json` as its canonical
     /// IDL, resuming a half-written one, and read it back; leaves final programs as they are.
     Idl(IdlArgs),
+    /// Close the canonical IDL and scratch buffer of every program a close plan closes,
+    /// returning their rent; run before the programs themselves are closed.
+    #[command(name = "close-idl")]
+    CloseIdl(CloseIdlArgs),
 }
 
 /// The RPC and the deployer's address, for the plan commands: they only read the chain, so they
@@ -144,6 +148,19 @@ pub struct IdlArgs {
     #[arg(long)]
     pub plan: PathBuf,
     /// Directory of the release `<program>.<cluster>.json` IDLs.
+    #[arg(long)]
+    pub assets: PathBuf,
+    #[command(flatten)]
+    pub chain: ChainArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct CloseIdlArgs {
+    /// The close plan: which programs close comes from it.
+    #[arg(long)]
+    pub plan: PathBuf,
+    /// Directory of the release `<program>.<cluster>.so` binaries, to confirm each program is
+    /// still the deployer's to sign for.
     #[arg(long)]
     pub assets: PathBuf,
     #[command(flatten)]

@@ -135,10 +135,12 @@ finalize() {
   done
 }
 
-# Burns each address for good; its rent returns to the deployer.
+# Burns each address for good; its rent returns to the deployer. Each program's IDL accounts
+# close first: only its upgrade authority can close them, and only while the program exists.
 close() {
   local recipient
   recipient=$(solana-keygen pubkey "$KEYPAIR")
+  deployer close-idl --plan "$PLAN" --assets "$ASSETS" --deployer-keypair "$KEYPAIR"
   deployer actions --plan "$PLAN" --action close | while read -r program; do
     local address
     address=$(program_address "$program")

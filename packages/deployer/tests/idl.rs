@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use common::litesvm_chain::LitesvmChain;
 use common::Context;
-use deployer::idl::{self, Error, Outcome, Step, PROGRAM_METADATA_ID, WRITE_CHUNK};
+use deployer::idl::{self, Error, Outcome, Step, Target, PROGRAM_METADATA_ID, WRITE_CHUNK};
 use deployer::Chain;
+use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
@@ -86,6 +87,12 @@ impl Env {
         idl::matches(account.as_ref(), &PROGRAM, idl)
     }
 
+    fn canonical(&self) -> solana_sdk::account::Account {
+        self.context
+            .get_account(&idl::canonical_address(&PROGRAM))
+            .unwrap()
+    }
+
     fn balance(&self) -> u64 {
         self.context.get_balance(&self.deployer.pubkey()).unwrap()
     }
@@ -128,7 +135,7 @@ fn an_absent_idl_is_uploaded_then_a_rerun_sends_nothing() {
     let (outcome, steps) = env.upload(&idl).unwrap();
 
     assert_eq!(outcome, Outcome::Uploaded);
-    assert_eq!(steps.first(), Some(&Step::Allocate));
+    assert_eq!(steps.first(), Some(&Step::Allocate(Target::Canonical)));
     assert_eq!(steps.last(), Some(&Step::Initialize));
     assert_eq!(steps.len(), chunks + 2, "{steps:?}");
     assert!(env.holds(&idl));
@@ -161,9 +168,10 @@ fn a_half_written_buffer_is_resumed_not_restarted() {
     let rent = env
         .context
         .minimum_balance_for_rent_exemption(96 + compressed.len());
-    env.send(Step::Allocate, &idl, rent);
+    env.send(Step::Allocate(Target::Canonical), &idl, rent);
     env.send(
         Step::Write {
+            target: Target::Canonical,
             start: 0,
             end: WRITE_CHUNK,
         },
@@ -177,11 +185,15 @@ fn a_half_written_buffer_is_resumed_not_restarted() {
     assert_eq!(
         steps.first(),
         Some(&Step::Write {
+            target: Target::Canonical,
             start: WRITE_CHUNK,
             end: 2 * WRITE_CHUNK
         })
     );
-    assert!(!steps.contains(&Step::Allocate), "{steps:?}");
+    assert!(
+        !steps.contains(&Step::Allocate(Target::Canonical)),
+        "{steps:?}"
+    );
     assert!(env.holds(&idl));
 }
 
@@ -191,22 +203,28 @@ fn an_underfunded_buffer_is_topped_up_while_resuming() {
     let idl = large_idl(2);
     // Funded only for its header, as a tool that grows the rent chunk by chunk leaves it.
     let header_rent = env.context.minimum_balance_for_rent_exemption(96);
-    env.send(Step::Allocate, &idl, header_rent);
+    env.send(Step::Allocate(Target::Canonical), &idl, header_rent);
 
     let (outcome, steps) = env.upload(&idl).unwrap();
 
     assert_eq!(outcome, Outcome::Uploaded);
-    assert!(!steps.contains(&Step::Allocate), "{steps:?}");
+    assert!(
+        !steps.contains(&Step::Allocate(Target::Canonical)),
+        "{steps:?}"
+    );
     assert!(env.holds(&idl));
 }
 
+/// The canonical account is never closed to replace it: the new IDL is written to the scratch
+/// buffer and copied over, so the account always holds a whole IDL, and the buffer's rent comes
+/// back.
 #[test]
-fn an_idl_of_another_release_is_closed_and_replaced() {
+fn an_idl_of_another_release_is_replaced_through_the_scratch_buffer() {
     let mut env = Env::new();
     env.upload(&small_idl("1.0.0")).unwrap();
-    // The allocate below would otherwise repeat the first upload's signature.
-    env.context.expire_blockhash();
     let new = small_idl("1.1.0");
+    let canonical_rent = env.canonical().lamports;
+    let before = env.balance();
 
     let (outcome, steps) = env.upload(&new).unwrap();
 
@@ -214,17 +232,117 @@ fn an_idl_of_another_release_is_closed_and_replaced() {
     assert_eq!(
         steps,
         [
-            Step::Close,
-            Step::Allocate,
+            Step::Allocate(Target::Scratch),
             Step::Write {
+                target: Target::Scratch,
                 start: 0,
                 end: idl::compress(&new).len()
             },
-            Step::Initialize
+            Step::SetData,
+            Step::Close(Target::Scratch),
         ]
     );
     assert!(env.holds(&new));
     assert!(!env.holds(&small_idl("1.0.0")));
+    assert!(env
+        .context
+        .get_account(&Target::Scratch.address(&PROGRAM))
+        .is_none());
+    // Only fees and the canonical account's growth: the scratch rent came back.
+    let grown = env.canonical().lamports - canonical_rent;
+    assert!(
+        before - env.balance() - grown < 100_000,
+        "{}",
+        before - env.balance()
+    );
+}
+
+/// One instruction can grow an account by at most 10 KiB, so a much larger IDL is extended
+/// into place before `set_data`.
+#[test]
+fn a_much_larger_replacement_is_extended_before_it_is_copied() {
+    let mut env = Env::new();
+    env.upload(&small_idl("1.0.0")).unwrap();
+    let large = large_idl(4);
+    assert!(idl::compress(&large).len() > 10_240);
+
+    let (_, steps) = env.upload(&large).unwrap();
+
+    assert!(
+        steps.iter().any(|step| matches!(step, Step::Extend { .. })),
+        "{steps:?}"
+    );
+    assert_eq!(steps.last(), Some(&Step::Close(Target::Scratch)));
+    assert!(env.holds(&large));
+}
+
+/// A delegated writer would keep the IDL writable after finalize: the upload removes it, and
+/// until then the IDL does not count as uploaded.
+#[test]
+fn a_delegated_authority_is_removed() {
+    let mut env = Env::new();
+    let idl = small_idl("1.0.0");
+    env.upload(&idl).unwrap();
+    let delegate = Pubkey::new_unique();
+    let set_authority = Instruction {
+        program_id: PROGRAM_METADATA_ID,
+        accounts: vec![
+            AccountMeta::new(idl::canonical_address(&PROGRAM), false),
+            AccountMeta::new_readonly(env.deployer.pubkey(), true),
+            AccountMeta::new_readonly(PROGRAM, false),
+            AccountMeta::new_readonly(env.programdata(), false),
+        ],
+        data: [&[2u8, 1][..], delegate.as_ref()].concat(),
+    };
+    LitesvmChain::new(&mut env.context)
+        .send(&[set_authority], &[&env.deployer])
+        .unwrap();
+    assert!(!env.holds(&idl));
+
+    let (outcome, steps) = env.upload(&idl).unwrap();
+
+    assert_eq!(outcome, Outcome::Uploaded);
+    assert_eq!(steps, [Step::RemoveAuthority]);
+    assert!(env.holds(&idl));
+}
+
+/// Closing a program first closes its IDL accounts, while the upgrade authority can still sign
+/// for them, and returns their rent.
+#[test]
+fn close_returns_the_rent_of_both_idl_accounts() {
+    let mut env = Env::new();
+    env.upload(&small_idl("1.0.0")).unwrap();
+    // A replacement that stopped after allocating the scratch buffer.
+    let new = small_idl("1.1.0");
+    let rent = env
+        .context
+        .minimum_balance_for_rent_exemption(96 + idl::compress(&new).len());
+    env.send(Step::Allocate(Target::Scratch), &new, rent);
+    let held = env.canonical().lamports + rent;
+    let before = env.balance();
+    let programdata = env.programdata();
+    let mut steps = Vec::new();
+
+    let outcome = idl::close(
+        &mut LitesvmChain::new(&mut env.context),
+        "hyper_prover",
+        &PROGRAM,
+        &programdata,
+        &env.deployer,
+        Duration::ZERO,
+        &mut |step, _| steps.push(step),
+    )
+    .unwrap();
+
+    assert_eq!(outcome, Outcome::Uploaded);
+    assert_eq!(
+        steps,
+        [Step::Close(Target::Scratch), Step::Close(Target::Canonical)]
+    );
+    [Target::Canonical, Target::Scratch]
+        .iter()
+        .for_each(|target| assert!(env.context.get_account(&target.address(&PROGRAM)).is_none()));
+    assert!(env.balance() + 100_000 > before + held);
 }
 
 #[test]
@@ -234,9 +352,10 @@ fn a_buffer_holding_a_longer_idl_is_closed_and_rebuilt() {
     let rent = env
         .context
         .minimum_balance_for_rent_exemption(96 + idl::compress(&longer).len());
-    env.send(Step::Allocate, &longer, rent);
+    env.send(Step::Allocate(Target::Canonical), &longer, rent);
     env.send(
         Step::Write {
+            target: Target::Canonical,
             start: 0,
             end: idl::compress(&longer).len().min(2 * WRITE_CHUNK),
         },
@@ -247,7 +366,13 @@ fn a_buffer_holding_a_longer_idl_is_closed_and_rebuilt() {
 
     let (_, steps) = env.upload(&idl).unwrap();
 
-    assert_eq!(steps[..2], [Step::Close, Step::Allocate]);
+    assert_eq!(
+        steps[..2],
+        [
+            Step::Close(Target::Canonical),
+            Step::Allocate(Target::Canonical)
+        ]
+    );
     assert!(env.holds(&idl));
 }
 

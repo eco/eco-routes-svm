@@ -280,14 +280,21 @@ test("gate lets the approved job write only the approved plan", () => {
   assert.notEqual(planLogStep("gate", "abc", "no hash printed\n").status, 0);
 });
 
-test("close closes each planned program and returns its rent to the deployer", () => {
+// Runs `deploy-step.sh close` against stub `solana` and `deployer` binaries; the stub `deployer`
+// exits with `closeIdlStatus` on `close-idl`. Returns every call, in order.
+const closeStep = (closeIdlStatus) => {
   const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
   const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
   const calls = join(bin, "calls");
   const stub = (name, body) => writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
   stub("solana", `echo "solana $*" >> "${calls}"`);
   stub("solana-keygen", "echo DeployerPubkey");
-  stub("deployer", '[ "$*" = "actions --plan plan.json --action close" ] && echo hyper_prover');
+  stub(
+    "deployer",
+    `echo "deployer $*" >> "${calls}"
+[ "$1" = close-idl ] && exit ${closeIdlStatus}
+[ "$*" = "actions --plan plan.json --action close" ] && echo hyper_prover`,
+  );
   writeFileSync(join(bin, "program-ids.json"), '{"hyper_prover":{"address":"HyperAddress"}}');
 
   const { status, stderr } = spawnSync("bash", [script, "close"], {
@@ -301,14 +308,30 @@ test("close closes each planned program and returns its rent to the deployer", (
       PLAN: "plan.json",
     },
   });
+  const sent = readFileSync(calls, "utf8").replaceAll(bin, "ASSETS");
+  rmSync(bin, { recursive: true });
+
+  return { status, stderr, sent };
+};
+
+test("close closes each planned program's IDL accounts, then the program, returning the rent", () => {
+  const { status, stderr, sent } = closeStep(0);
 
   assert.equal(status, 0, stderr);
   assert.equal(
-    readFileSync(calls, "utf8"),
-    "solana program close -u http://rpc -k deployer.json --authority deployer.json " +
+    sent,
+    "deployer close-idl --plan plan.json --assets ASSETS --deployer-keypair deployer.json\n" +
+      "deployer actions --plan plan.json --action close\n" +
+      "solana program close -u http://rpc -k deployer.json --authority deployer.json " +
       "--recipient DeployerPubkey --bypass-warning HyperAddress\n",
   );
-  rmSync(bin, { recursive: true });
+});
+
+test("close closes no program when its IDL accounts could not be closed", () => {
+  const { status, sent } = closeStep(1);
+
+  assert.notEqual(status, 0);
+  assert.doesNotMatch(sent, /solana program close/);
 });
 
 test("verify fails when solana-verify reports a hash mismatch, which it exits 0 on", () => {

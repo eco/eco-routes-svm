@@ -9,7 +9,7 @@
 | local_prover | `Eechuq54TEzmBHXX7Ltbmpu6K5Vf3qgdsRdYmn41vJ9o` | partial | none |
 | polymer_prover | `EiY148Y53YHzKNn2YeDX4hfrZEhriuNTRqJCqA6cfdUW` | partial | none |
 
-Closing returns each program's rent to the deployer and burns its address: it can never be deployed again. Lamports held by the program's own accounts stay locked for good, including LayerZero's endpoint and ULN account rent and these reserves:
+Closing returns each program's rent to the deployer and burns its address: it can never be deployed again. Its canonical IDL account and IDL scratch buffer close first (`deployer close-idl`), so their rent comes back too. Lamports held by the program's own accounts stay locked for good, including LayerZero's endpoint and ULN account rent and these reserves:
 
 - hyper_prover `pda_payer`: 7 lamports
 - layerzero_prover `pda_payer`: 9 lamports

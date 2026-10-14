@@ -21,6 +21,7 @@ layerzero-prover = { path = "../../programs/layerzero-prover", features = ["no-e
 polymer-prover = { path = "../../programs/polymer-prover", features = ["no-entrypoint"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+solana-account-decoder-client-types = "4.2"
 solana-address-lookup-table-interface = { version = "3.1", features = ["bincode", "bytemuck"] }
 solana-cluster-type = "3.1"
 solana-commitment-config = "3.1"

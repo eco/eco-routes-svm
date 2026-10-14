@@ -3,6 +3,7 @@
 | | Amount |
 |---|---|
 | Program rent (locked once final) | 0.000000000 SOL |
+| Canonical IDL rent (a replacement's scratch buffer comes back) | 0.000000000 SOL |
 | Reserve top-ups | 0.010000000 SOL |
 | Transaction fees at 0 micro-lamports per compute unit | 0.000055000 SOL |
 | Account rent and unpriced fees allowance | 0.200000000 SOL |
