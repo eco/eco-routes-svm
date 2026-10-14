@@ -50,10 +50,10 @@ pub struct Funding {
     deployer: Pubkey,
     balance: Sol,
     /// Program and program-data rent of every program the run deploys; locked for good once
-    /// the program is final.
+    /// the program is final. It also covers each buffer: `solana program deploy` writes one at a
+    /// time, and loader-v3's `DeployWithMaxDataLen` drains it back to the payer before charging
+    /// the program data, which is larger. The balance never dips below the final spend.
     program_rent: Sol,
-    /// `solana program deploy` writes one buffer at a time and refunds it into the program data.
-    largest_buffer: Sol,
     reserve_top_ups: Sol,
     compute_unit_price: u64,
     /// Signature and priority fees of every deploy and `apply` transaction at `compute_unit_price`.
@@ -87,11 +87,6 @@ impl Funding {
                     + rent.minimum_balance(UpgradeableLoaderState::size_of_program())
             })
             .sum();
-        let largest_buffer = deployed_lengths
-            .iter()
-            .map(|length| rent.minimum_balance(UpgradeableLoaderState::size_of_buffer(*length)))
-            .max()
-            .unwrap_or(0);
         let reserve = |program, seed, requested_lamports| {
             let address = plan.release.programs[program].address;
             let reserve = Pubkey::find_program_address(&[seed], &address).0;
@@ -114,7 +109,6 @@ impl Funding {
             deployer: *deployer,
             balance: Sol(lamports(chain, deployer)?),
             program_rent: Sol(program_rent),
-            largest_buffer: Sol(largest_buffer),
             reserve_top_ups: Sol(hyper_top_up + layerzero_top_up),
             compute_unit_price: plan.inputs.compute_unit_price,
             transaction_fees: Sol(transaction_fees(plan, &deployed_lengths)),
@@ -152,7 +146,6 @@ impl Funding {
     fn required(&self) -> Sol {
         Sol([
             self.program_rent.0,
-            self.largest_buffer.0,
             self.reserve_top_ups.0,
             self.transaction_fees.0,
             ALLOWANCE_LAMPORTS,
@@ -249,7 +242,6 @@ impl fmt::Display for Funding {
             deployer,
             balance,
             program_rent,
-            largest_buffer,
             reserve_top_ups,
             compute_unit_price,
             transaction_fees,
@@ -286,7 +278,6 @@ impl fmt::Display for Funding {
             "### Deployer funding\n\n\
              | | Amount |\n|---|---|\n\
              | Program rent (locked once final) | {program_rent} |\n\
-             | Largest buffer (refunded) | {largest_buffer} |\n\
              | Reserve top-ups | {reserve_top_ups} |\n\
              | Transaction fees at {compute_unit_price} micro-lamports per compute unit | {transaction_fees} |\n\
              | Account rent and unpriced fees allowance | {} |\n\
@@ -359,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn deployed_programs_add_their_rent_and_the_largest_buffer() {
+    fn deployed_programs_add_only_their_rent() {
         let mut plan = testing::plan(0);
         plan.programs
             .values_mut()
@@ -374,11 +365,25 @@ mod tests {
             Sol(5 * (rent(45 + 1_000) + rent(36))
                 + rent(45 + 3_000)
                 + rent(36)
-                + rent(37 + 3_000)
                 + 5 * (2 * 5_000 + 2 * 10_000)
                 + (4 * 5_000 + 2 * 10_000)
                 + FIXED)
         );
+    }
+
+    /// Why `program_rent` needs no buffer term: before its deploy instruction drains it, a
+    /// program's buffer holds less than that program's own rent.
+    #[test]
+    fn a_buffer_never_costs_more_than_its_program() {
+        // The last length is the largest program data an account can hold (10 MiB).
+        for length in [0, 1, 1_000, 455_808, 10 * 1024 * 1024 - 45] {
+            assert!(
+                rent(UpgradeableLoaderState::size_of_buffer(length))
+                    < rent(UpgradeableLoaderState::size_of_programdata(length))
+                        + rent(UpgradeableLoaderState::size_of_program()),
+                "{length}"
+            );
+        }
     }
 
     #[test]
