@@ -7,8 +7,9 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
 
 use crate::chain::{self, Chain};
+use crate::classify::Status;
 use crate::plan::{Action, Plan, HYPER_PROVER, LAYERZERO_PROVER};
-use crate::{layerzero, layerzero_state, transaction};
+use crate::{idl, layerzero, layerzero_state, transaction};
 
 /// The configs', `Store`'s and lookup table's rent, `solana-verify`'s verification PDAs, and the
 /// unpriced verify and finalize transactions. Each is far below this for any input set that fits
@@ -50,13 +51,17 @@ pub struct Funding {
     deployer: Pubkey,
     balance: Sol,
     /// Program and program-data rent of every program the run deploys; locked for good once
-    /// the program is final.
+    /// the program is final. It also covers each buffer: `solana program deploy` writes one at a
+    /// time, and loader-v3's `DeployWithMaxDataLen` drains it back to the payer before charging
+    /// the program data, which is larger. The balance never dips below the final spend.
     program_rent: Sol,
-    /// `solana program deploy` writes one buffer at a time and refunds it into the program data.
-    largest_buffer: Sol,
+    /// Rent the canonical IDL accounts still lack, plus each replacement's scratch buffer, which
+    /// comes back once it is copied over.
+    idl_rent: Sol,
     reserve_top_ups: Sol,
     compute_unit_price: u64,
-    /// Signature and priority fees of every deploy and `apply` transaction at `compute_unit_price`.
+    /// Signature and priority fees of every deploy, `apply` and IDL transaction at
+    /// `compute_unit_price`.
     transaction_fees: Sol,
     /// The LayerZero reserve once topped up; it pays the endpoint and ULN accounts of every path.
     layerzero_reserve: Sol,
@@ -71,9 +76,22 @@ impl Funding {
         chain: &impl Chain,
         plan: &Plan,
         binaries: &BTreeMap<String, Vec<u8>>,
+        idls: &BTreeMap<String, Vec<u8>>,
         deployer: &Pubkey,
     ) -> Result<Self, Error> {
         let rent = Rent::default();
+        // A final program's IDL can no longer change, so the IDL step leaves it alone.
+        let (idl_rent, idl_transactions) = plan
+            .programs
+            .iter()
+            .filter(|(_, program)| program.state.status != Status::Live)
+            .filter_map(|(name, _)| Some((plan.release.programs[name].address, idls.get(name)?)))
+            .map(|(address, idl)| idl::cost(chain, &address, idl, &rent))
+            .try_fold((0u64, 0u64), |(lamports, transactions), cost| {
+                let (rent, sent) = cost?;
+
+                Ok::<_, chain::Error>((lamports.saturating_add(rent), transactions + sent))
+            })?;
         let deployed_lengths: Vec<usize> = plan
             .programs
             .iter()
@@ -87,11 +105,6 @@ impl Funding {
                     + rent.minimum_balance(UpgradeableLoaderState::size_of_program())
             })
             .sum();
-        let largest_buffer = deployed_lengths
-            .iter()
-            .map(|length| rent.minimum_balance(UpgradeableLoaderState::size_of_buffer(*length)))
-            .max()
-            .unwrap_or(0);
         let reserve = |program, seed, requested_lamports| {
             let address = plan.release.programs[program].address;
             let reserve = Pubkey::find_program_address(&[seed], &address).0;
@@ -114,10 +127,10 @@ impl Funding {
             deployer: *deployer,
             balance: Sol(lamports(chain, deployer)?),
             program_rent: Sol(program_rent),
-            largest_buffer: Sol(largest_buffer),
+            idl_rent: Sol(idl_rent),
             reserve_top_ups: Sol(hyper_top_up + layerzero_top_up),
             compute_unit_price: plan.inputs.compute_unit_price,
-            transaction_fees: Sol(transaction_fees(plan, &deployed_lengths)),
+            transaction_fees: Sol(transaction_fees(plan, &deployed_lengths, idl_transactions)),
             layerzero_reserve: Sol(layerzero_balance + layerzero_top_up),
             layerzero_path_rent: Sol(layerzero_path_rent(plan)),
         })
@@ -152,7 +165,7 @@ impl Funding {
     fn required(&self) -> Sol {
         Sol([
             self.program_rent.0,
-            self.largest_buffer.0,
+            self.idl_rent.0,
             self.reserve_top_ups.0,
             self.transaction_fees.0,
             ALLOWANCE_LAMPORTS,
@@ -176,7 +189,7 @@ fn top_up(balance: u64, requested_lamports: u64) -> u64 {
 }
 
 /// An upper bound: every count and compute-unit limit is the most the step can use.
-fn transaction_fees(plan: &Plan, deployed_lengths: &[usize]) -> u64 {
+fn transaction_fees(plan: &Plan, deployed_lengths: &[usize], idl_transactions: u64) -> u64 {
     let price = plan.inputs.compute_unit_price;
     let deploys = deployed_lengths.iter().map(|length| {
         let writes = length.div_ceil(DEPLOY_WRITE_BYTES) as u64;
@@ -185,8 +198,11 @@ fn transaction_fees(plan: &Plan, deployed_lengths: &[usize]) -> u64 {
             + fee(price, DEPLOY_COMPUTE_UNIT_LIMIT, 2) * DEPLOY_SETUP_TRANSACTIONS
     });
     let peers: Vec<Peer> = plan.inputs.layerzero_peers.iter().map(Into::into).collect();
-    let applies = APPLY_FIXED_TRANSACTIONS + layerzero::setup_transactions(&peers);
-    // What `transaction::signed` charges each `apply` transaction, with the deployer as sole signer.
+    // IDL transactions go through `transaction::signed` too.
+    let applies =
+        APPLY_FIXED_TRANSACTIONS + layerzero::setup_transactions(&peers) + idl_transactions;
+    // What `transaction::signed` charges each `apply` and IDL transaction, with the deployer as
+    // sole signer.
     let apply_fee = transaction::priority_fee(price).saturating_add(SIGNATURE_FEE_LAMPORTS);
 
     deploys
@@ -249,7 +265,7 @@ impl fmt::Display for Funding {
             deployer,
             balance,
             program_rent,
-            largest_buffer,
+            idl_rent,
             reserve_top_ups,
             compute_unit_price,
             transaction_fees,
@@ -286,7 +302,7 @@ impl fmt::Display for Funding {
             "### Deployer funding\n\n\
              | | Amount |\n|---|---|\n\
              | Program rent (locked once final) | {program_rent} |\n\
-             | Largest buffer (refunded) | {largest_buffer} |\n\
+             | Canonical IDL rent (a replacement's scratch buffer comes back) | {idl_rent} |\n\
              | Reserve top-ups | {reserve_top_ups} |\n\
              | Transaction fees at {compute_unit_price} micro-lamports per compute unit | {transaction_fees} |\n\
              | Account rent and unpriced fees allowance | {} |\n\
@@ -317,6 +333,7 @@ mod tests {
 
     use super::*;
     use crate::layerzero_state::Path;
+    use crate::plan::{AGGREGATOR_PROVER, CCTP_PROVER, LOCAL_PROVER, POLYMER_PROVER};
     use crate::testing::{self, pda, release_address, RecordingChain};
 
     const DEPLOYER: Pubkey = Pubkey::new_from_array([7; 32]);
@@ -324,6 +341,11 @@ mod tests {
     /// `testing::plan` has one LayerZero peer: 6 + 5 `apply` transactions, one signature each.
     const UNPRICED_APPLY_FEES: u64 = 11 * 5_000;
     const FIXED: u64 = UNPRICED_APPLY_FEES + ALLOWANCE_LAMPORTS;
+
+    /// No release IDLs: the IDL step adds nothing.
+    fn no_idls() -> BTreeMap<String, Vec<u8>> {
+        BTreeMap::new()
+    }
 
     fn funded(lamports: u64) -> RecordingChain {
         let mut chain = RecordingChain::default();
@@ -353,13 +375,53 @@ mod tests {
     fn partial_programs_cost_only_reserves_and_the_allowance() {
         let plan = testing::plan(RESERVE_LAMPORTS);
 
-        let funding = Funding::estimate(&funded(0), &plan, &binaries(&plan), &DEPLOYER).unwrap();
+        let funding =
+            Funding::estimate(&funded(0), &plan, &binaries(&plan), &no_idls(), &DEPLOYER).unwrap();
 
         assert_eq!(funding.required(), Sol(2 * RESERVE_LAMPORTS + FIXED));
     }
 
+    /// An absent canonical IDL needs its full rent and its allocate, writes and initialize; one
+    /// already equal costs nothing, and a final program's is left alone.
     #[test]
-    fn deployed_programs_add_their_rent_and_the_largest_buffer() {
+    fn the_idl_step_adds_the_rent_and_transactions_still_needed() {
+        let mut plan = testing::plan(RESERVE_LAMPORTS);
+        plan.programs.get_mut(LOCAL_PROVER).unwrap().state.status = Status::Live;
+        let idl = |name: &str| format!(r#"{{"name":"{name}"}}"#).into_bytes();
+        let idls: BTreeMap<String, Vec<u8>> = plan
+            .programs
+            .keys()
+            .map(|name| (name.clone(), idl(name)))
+            .collect();
+        let mut chain = funded(0);
+        let uploaded = plan.release.programs[POLYMER_PROVER].address;
+        chain.accounts.insert(
+            idl::canonical_address(&uploaded),
+            idl::uploaded_account(&uploaded, &idl(POLYMER_PROVER)),
+        );
+        let base = Funding::estimate(&funded(0), &plan, &binaries(&plan), &no_idls(), &DEPLOYER)
+            .unwrap()
+            .required();
+
+        let funding = Funding::estimate(&chain, &plan, &binaries(&plan), &idls, &DEPLOYER).unwrap();
+
+        // Four programs upload: every one but the final local prover and the matching polymer
+        // prover, each in one write.
+        let uploads: u64 = [
+            HYPER_PROVER,
+            AGGREGATOR_PROVER,
+            LAYERZERO_PROVER,
+            CCTP_PROVER,
+        ]
+        .iter()
+        .map(|name| rent(idl::HEADER_LEN + idl::compress(&idl(name)).len()))
+        .sum();
+        assert_eq!(funding.idl_rent, Sol(uploads));
+        assert_eq!(funding.required(), Sol(base.0 + uploads + 4 * 4 * 5_000));
+    }
+
+    #[test]
+    fn deployed_programs_add_only_their_rent() {
         let mut plan = testing::plan(0);
         plan.programs
             .values_mut()
@@ -367,18 +429,33 @@ mod tests {
         let mut binaries = binaries(&plan);
         binaries.insert(LAYERZERO_PROVER.into(), vec![0; 3_000]);
 
-        let funding = Funding::estimate(&funded(0), &plan, &binaries, &DEPLOYER).unwrap();
+        let funding =
+            Funding::estimate(&funded(0), &plan, &binaries, &no_idls(), &DEPLOYER).unwrap();
 
         assert_eq!(
             funding.required(),
             Sol(5 * (rent(45 + 1_000) + rent(36))
                 + rent(45 + 3_000)
                 + rent(36)
-                + rent(37 + 3_000)
                 + 5 * (2 * 5_000 + 2 * 10_000)
                 + (4 * 5_000 + 2 * 10_000)
                 + FIXED)
         );
+    }
+
+    /// Why `program_rent` needs no buffer term: before its deploy instruction drains it, a
+    /// program's buffer holds less than that program's own rent.
+    #[test]
+    fn a_buffer_never_costs_more_than_its_program() {
+        // The last length is the largest program data an account can hold (10 MiB).
+        for length in [0, 1, 1_000, 455_808, 10 * 1024 * 1024 - 45] {
+            assert!(
+                rent(UpgradeableLoaderState::size_of_buffer(length))
+                    < rent(UpgradeableLoaderState::size_of_programdata(length))
+                        + rent(UpgradeableLoaderState::size_of_program()),
+                "{length}"
+            );
+        }
     }
 
     #[test]
@@ -400,7 +477,8 @@ mod tests {
             },
         );
 
-        let funding = Funding::estimate(&chain, &plan, &binaries(&plan), &DEPLOYER).unwrap();
+        let funding =
+            Funding::estimate(&chain, &plan, &binaries(&plan), &no_idls(), &DEPLOYER).unwrap();
 
         assert_eq!(funding.required(), Sol(1 + FIXED));
     }
@@ -414,7 +492,14 @@ mod tests {
             .actions
             .clear();
         let estimate = |lamports| {
-            Funding::estimate(&funded(lamports), &plan, &binaries(&plan), &DEPLOYER).unwrap()
+            Funding::estimate(
+                &funded(lamports),
+                &plan,
+                &binaries(&plan),
+                &no_idls(),
+                &DEPLOYER,
+            )
+            .unwrap()
         };
 
         assert!(estimate(FIXED).require().is_ok());
@@ -433,7 +518,7 @@ mod tests {
             .for_each(|program| program.actions = vec![Action::Deploy]);
         let mut fees = |price| {
             plan.inputs.compute_unit_price = price;
-            Funding::estimate(&funded(0), &plan, &binaries(&plan), &DEPLOYER)
+            Funding::estimate(&funded(0), &plan, &binaries(&plan), &no_idls(), &DEPLOYER)
                 .unwrap()
                 .transaction_fees
         };
@@ -457,8 +542,9 @@ mod tests {
             .actions
             .clear();
         let chain = funded(FIXED);
-        let estimate =
-            |plan: &Plan| Funding::estimate(&chain, plan, &binaries(plan), &DEPLOYER).unwrap();
+        let estimate = |plan: &Plan| {
+            Funding::estimate(&chain, plan, &binaries(plan), &no_idls(), &DEPLOYER).unwrap()
+        };
         assert!(estimate(&plan).require().is_ok());
 
         plan.inputs.compute_unit_price = 1;
@@ -477,7 +563,14 @@ mod tests {
         let required = path_rent + rent(0);
         let estimate = |reserve_lamports| {
             let plan = testing::plan(reserve_lamports);
-            Funding::estimate(&funded(u64::MAX / 2), &plan, &binaries(&plan), &DEPLOYER).unwrap()
+            Funding::estimate(
+                &funded(u64::MAX / 2),
+                &plan,
+                &binaries(&plan),
+                &no_idls(),
+                &DEPLOYER,
+            )
+            .unwrap()
         };
 
         assert!(estimate(required).require().is_ok());
@@ -501,7 +594,7 @@ mod tests {
             ..expected.clone()
         }];
         let reserve_required = |plan: &Plan| {
-            Funding::estimate(&funded(0), plan, &binaries(plan), &DEPLOYER)
+            Funding::estimate(&funded(0), plan, &binaries(plan), &no_idls(), &DEPLOYER)
                 .unwrap()
                 .layerzero_reserve_required()
         };
@@ -518,7 +611,8 @@ mod tests {
     fn summary_names_the_deployer_and_the_shortfall() {
         let plan = testing::plan(RESERVE_LAMPORTS);
 
-        let funding = Funding::estimate(&funded(1), &plan, &binaries(&plan), &DEPLOYER).unwrap();
+        let funding =
+            Funding::estimate(&funded(1), &plan, &binaries(&plan), &no_idls(), &DEPLOYER).unwrap();
 
         goldie::assert!(funding.to_string());
     }

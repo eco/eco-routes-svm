@@ -1,7 +1,14 @@
+use std::str::FromStr;
+use std::thread;
+use std::time::Duration;
+
+use solana_account_decoder_client_types::{UiAccount, UiAccountEncoding};
 use solana_commitment_config::{CommitmentConfig, CommitmentLevel};
 use solana_rpc_client::rpc_client::RpcClient;
 use solana_rpc_client_api::client_error::{Error as ClientError, ErrorKind};
-use solana_rpc_client_api::config::RpcSendTransactionConfig;
+use solana_rpc_client_api::config::{RpcAccountInfoConfig, RpcSendTransactionConfig};
+use solana_rpc_client_api::custom_error::JSON_RPC_SERVER_ERROR_MIN_CONTEXT_SLOT_NOT_REACHED;
+use solana_rpc_client_api::request::RpcError;
 use solana_sdk::account::Account;
 use solana_sdk::hash::Hash;
 use solana_sdk::instruction::Instruction;
@@ -14,6 +21,10 @@ use crate::transaction;
 /// The validator rebroadcasts a transaction until it lands or its blockhash expires (about 60
 /// seconds); this many attempts cover a congested leader without flooding the endpoint.
 const SEND_MAX_RETRIES: usize = 10;
+/// A load-balanced endpoint can route a read to a node behind the last confirmed send; reads wait
+/// this long, this many times, for it to catch up.
+const CATCH_UP_ATTEMPTS: u32 = 20;
+const CATCH_UP_WAIT: Duration = Duration::from_millis(500);
 const SCHEMES: [&str; 4] = ["http://", "https://", "ws://", "wss://"];
 const REDACTED_URL: &str = "<rpc-url>";
 
@@ -22,6 +33,10 @@ pub struct RpcChain {
     url: String,
     /// Micro-lamports per compute unit, paid as each transaction's priority fee.
     compute_unit_price: u64,
+    /// The slot of the last transaction this chain confirmed. Every read asks for state at least
+    /// that recent, so a lagging node cannot show the state from before it: the IDL upload
+    /// would otherwise redo a step that already landed.
+    min_context_slot: u64,
 }
 
 impl RpcChain {
@@ -32,6 +47,7 @@ impl RpcChain {
             client,
             url,
             compute_unit_price: 0,
+            min_context_slot: 0,
         }
     }
 
@@ -51,6 +67,42 @@ impl RpcChain {
 
         redact_urls(&text.replace(&self.url, REDACTED_URL))
     }
+
+    /// The slot `signature` landed in, once a node reports it; `None` if none does in time,
+    /// which only leaves reads without the guard.
+    fn landed_slot(&self, signature: &Signature) -> Option<u64> {
+        (0..CATCH_UP_ATTEMPTS).find_map(|attempt| {
+            if attempt > 0 {
+                thread::sleep(CATCH_UP_WAIT);
+            }
+            self.client
+                .get_signature_statuses(&[*signature])
+                .ok()?
+                .value
+                .into_iter()
+                .next()
+                .flatten()
+                .map(|status| status.slot)
+        })
+    }
+}
+
+fn behind_min_context_slot(error: &ClientError) -> bool {
+    matches!(
+        &*error.kind,
+        ErrorKind::RpcError(RpcError::RpcResponseError { code, .. })
+            if *code == JSON_RPC_SERVER_ERROR_MIN_CONTEXT_SLOT_NOT_REACHED
+    )
+}
+
+fn to_account(account: UiAccount) -> Option<Account> {
+    Some(Account {
+        lamports: account.lamports,
+        data: account.data.decode()?,
+        owner: Pubkey::from_str(&account.owner).ok()?,
+        executable: account.executable,
+        rent_epoch: account.rent_epoch,
+    })
 }
 
 /// Client libraries normalize the URL they echo, so the configured string alone is not enough:
@@ -70,13 +122,37 @@ fn redact_urls(text: &str) -> String {
 
 impl Chain for RpcChain {
     fn account(&self, address: &Pubkey) -> Result<Option<Account>, chain::Error> {
-        self.client
-            .get_account_with_commitment(address, self.client.commitment())
-            .map(|response| response.value)
-            .map_err(|error| chain::Error::AccountFetchFailed {
-                address: *address,
-                reason: self.describe(error),
-            })
+        let config = RpcAccountInfoConfig {
+            encoding: Some(UiAccountEncoding::Base64),
+            commitment: Some(self.client.commitment()),
+            min_context_slot: Some(self.min_context_slot),
+            data_slice: None,
+        };
+        let failed = |reason| chain::Error::AccountFetchFailed {
+            address: *address,
+            reason,
+        };
+        let mut attempt = 0;
+
+        loop {
+            match self
+                .client
+                .get_ui_account_with_config(address, config.clone())
+            {
+                Ok(response) => {
+                    return response
+                        .value
+                        .map(|account| to_account(account).ok_or(()))
+                        .transpose()
+                        .map_err(|()| failed("undecodable base64 account".to_owned()));
+                }
+                Err(error) if behind_min_context_slot(&error) && attempt < CATCH_UP_ATTEMPTS => {
+                    attempt += 1;
+                    thread::sleep(CATCH_UP_WAIT);
+                }
+                Err(error) => return Err(failed(self.describe(error))),
+            }
+        }
     }
 
     fn send(
@@ -99,13 +175,19 @@ impl Chain for RpcChain {
             ..RpcSendTransactionConfig::default()
         };
 
-        self.client
+        let signature = self
+            .client
             .send_and_confirm_transaction_with_spinner_and_config(
                 &transaction,
                 CommitmentConfig::confirmed(),
                 config,
             )
-            .map_err(send_failed)
+            .map_err(send_failed)?;
+        if let Some(slot) = self.landed_slot(&signature) {
+            self.min_context_slot = self.min_context_slot.max(slot);
+        }
+
+        Ok(signature)
     }
 
     /// Finalized, not confirmed: the lookup-table program takes a `recent_slot` only if it is in

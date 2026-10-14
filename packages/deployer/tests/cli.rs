@@ -147,10 +147,15 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
     programs()
         .iter()
         .zip(&deployed)
-        .for_each(|((name, _), [(_, programdata), _])| {
+        .for_each(|((name, program), [(_, programdata), _])| {
             fs::write(
                 directory.path().join(format!("{name}.devnet.so")),
                 release_binary(programdata),
+            )
+            .unwrap();
+            fs::write(
+                directory.path().join(format!("{name}.devnet.json")),
+                format!(r#"{{"address":"{program}","metadata":{{"name":"{name}"}}}}"#),
             )
             .unwrap();
         });

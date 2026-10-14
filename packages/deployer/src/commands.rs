@@ -3,6 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
@@ -12,8 +13,9 @@ use solana_sdk::signer::Signer;
 use crate::apply::{self, Step};
 use crate::chain::{self, Chain};
 use crate::classify::{self, classify, ProgramState, Status};
-use crate::cli::{ActionsArgs, ApplyArgs, Command, PlanArgs, SelectionArgs};
+use crate::cli::{ActionsArgs, ApplyArgs, CloseIdlArgs, Command, PlanArgs, SelectionArgs};
 use crate::funding::Funding;
+use crate::idl::{self, Outcome};
 use crate::inputs::{self, Inputs, RawInputs};
 use crate::plan::{
     self, Action, Cluster, Plan, PlanDocument, PlanFile, PlanHash, PlannedProgramFile,
@@ -22,6 +24,10 @@ use crate::plan::{
 use crate::rpc::RpcChain;
 use crate::selection::{self, Operation, Programs, Selection};
 use crate::{config, funding, readback};
+
+/// Wait before rereading the IDL accounts after a failed transaction, times the number of
+/// failures in a row.
+const IDL_RETRY_BACKOFF: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -35,6 +41,8 @@ pub enum Error {
     Config(#[from] config::Error),
     #[error(transparent)]
     Funding(#[from] funding::Error),
+    #[error(transparent)]
+    Idl(#[from] idl::Error),
     #[error(transparent)]
     Inputs(#[from] inputs::Error),
     #[error(transparent)]
@@ -54,6 +62,19 @@ pub enum Error {
         path: PathBuf,
         expected: String,
         actual: String,
+    },
+    #[error("{program}: {path} is for {actual:?}, not {expected}")]
+    IdlAddress {
+        program: String,
+        path: PathBuf,
+        expected: Pubkey,
+        actual: Option<String>,
+    },
+    #[error("{program}: {address} is {status}, not a release program the deployer can still upgrade, so it cannot write its IDL accounts")]
+    IdlNotWritable {
+        program: String,
+        address: Pubkey,
+        status: String,
     },
     #[error("{program}: {value:?} in program-ids.json is not an address")]
     InvalidAddress { program: String, value: String },
@@ -122,6 +143,28 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
             plan_selection(&chain, Operation::Close, args, &args.chain.deployer, out)
         }
         Command::Actions(args) => actions(args, out),
+        Command::Idl(args) => {
+            let deployer = read_keypair(&args.chain.deployer_keypair)?;
+            let PlanFile { document, .. } = read_json(&args.plan)?;
+            let price = Inputs::parse(document.inputs)?.compute_unit_price;
+            let mut chain =
+                RpcChain::new(args.chain.rpc_url.clone()).with_compute_unit_price(price);
+
+            idl(
+                &mut chain,
+                &document.release,
+                &args.assets,
+                &deployer,
+                IDL_RETRY_BACKOFF,
+                out,
+            )
+        }
+        Command::CloseIdl(args) => {
+            let deployer = read_keypair(&args.chain.deployer_keypair)?;
+            let mut chain = RpcChain::new(args.chain.rpc_url.clone());
+
+            close_idl(&mut chain, args, &deployer, IDL_RETRY_BACKOFF, out)
+        }
     }
 }
 
@@ -158,7 +201,8 @@ pub fn plan(
         inputs: raw.clone(),
     };
     let plan = build(chain, &document, &binaries, deployer, &BTreeMap::new())?;
-    let funding = Funding::estimate(chain, &plan, &binaries, deployer)?;
+    let idls = read_idls(&plan.release, assets)?;
+    let funding = Funding::estimate(chain, &plan, &binaries, &idls, deployer)?;
 
     write_json(plan_path, &plan.file(raw))?;
     summary
@@ -211,7 +255,8 @@ pub fn plan_selection(
     } = args;
     let (release, binaries) = release(version, *cluster, program_ids, assets)?;
     let selected: Programs = programs.parse()?;
-    let observed = selection::observe(chain, &release, &binaries, deployer)?;
+    let idls = read_idls(&release, assets)?;
+    let observed = selection::observe(chain, &release, &binaries, &idls, deployer)?;
     let selection = Selection::build(operation, &selected, release, *deployer, observed)?;
 
     write_json(plan_path, &selection.file(programs.clone()))?;
@@ -243,6 +288,190 @@ pub fn actions(args: &ActionsArgs, out: &mut impl Write) -> Result<(), Error> {
                 .is_some_and(|program| program.actions.contains(&action))
         })
         .try_for_each(|name| writeln!(out, "{name}").map_err(|source| Error::Output { source }))
+}
+
+/// Uploads each release program's IDL from `assets` as its canonical metadata, dependencies
+/// first. Which programs it writes to comes from the chain: those still upgradeable by the
+/// deployer with the release bytecode (`Partial`). A final one (`Live`) can no longer change its
+/// IDL, so it is reported and left alone; anything else is refused. Stops at the first failure;
+/// a rerun skips what already matches and resumes a half-written upload.
+pub fn idl(
+    chain: &mut impl Chain,
+    release: &Release,
+    assets: &Path,
+    deployer: &Keypair,
+    backoff: Duration,
+    out: &mut impl Write,
+) -> Result<(), Error> {
+    release.dependency_order().into_iter().try_for_each(|name| {
+        let address = release.programs[name].address;
+        let path = idl_path(assets, name, release.cluster);
+        let idl = read_idl(&path, name, &address)?;
+        let canonical = idl::canonical_address(&address);
+
+        match upgradeable(chain, release, assets, name, deployer)? {
+            false => {
+                let state = match idl::matches(chain.account(&canonical)?.as_ref(), &address, &idl)
+                {
+                    true => "matches the release",
+                    false => "differs from the release and can no longer change",
+                };
+                line(
+                    out,
+                    format!("{name} idl final, left as is: {canonical} {state}"),
+                )
+            }
+            true => {
+                let mut printed = Ok(());
+                let outcome = idl::upload(
+                    chain,
+                    name,
+                    &address,
+                    &programdata_of(&address),
+                    deployer,
+                    &idl,
+                    backoff,
+                    &mut |step, signature| {
+                        printed = mem::replace(&mut printed, Ok(()))
+                            .and_then(|()| line(out, format!("{name} idl {step} {signature}")));
+                    },
+                );
+                printed?;
+                let outcome = match outcome? {
+                    Outcome::Unchanged => "unchanged",
+                    Outcome::Uploaded => "uploaded",
+                };
+                line(
+                    out,
+                    format!(
+                        "{name} idl {outcome}: {canonical} holds {} ({} bytes)",
+                        path.display(),
+                        idl.len()
+                    ),
+                )
+            }
+        }
+    })
+}
+
+/// Closes the IDL accounts of every program the close plan closes, dependents first, returning
+/// their rent to the deployer. It runs before `solana program close`: once a program's data is
+/// gone nobody can authorize closing them, and their rent is locked for good.
+pub fn close_idl(
+    chain: &mut impl Chain,
+    args: &CloseIdlArgs,
+    deployer: &Keypair,
+    backoff: Duration,
+    out: &mut impl Write,
+) -> Result<(), Error> {
+    let ActionsFile { release, programs } = read_json(&args.plan)?;
+
+    release
+        .dependency_order()
+        .into_iter()
+        .rev()
+        .filter(|name| {
+            programs
+                .get(*name)
+                .is_some_and(|program| program.actions.contains(&Action::Close))
+        })
+        .try_for_each(|name| {
+            let address = release.programs[name].address;
+            if !upgradeable(chain, &release, &args.assets, name, deployer)? {
+                return line(out, format!("{name} idl left: the program is final"));
+            }
+            let [canonical, scratch] = idl::held_lamports(chain, &address)?;
+            let mut printed = Ok(());
+            let outcome = idl::close(
+                chain,
+                name,
+                &address,
+                &programdata_of(&address),
+                deployer,
+                backoff,
+                &mut |step, signature| {
+                    printed = mem::replace(&mut printed, Ok(()))
+                        .and_then(|()| line(out, format!("{name} idl {step} {signature}")));
+                },
+            );
+            printed?;
+
+            line(
+                out,
+                match outcome? {
+                    Outcome::Unchanged => format!("{name} idl: nothing to close"),
+                    Outcome::Uploaded => format!(
+                        "{name} idl closed: {} lamports back to the deployer",
+                        canonical + scratch
+                    ),
+                },
+            )
+        })
+}
+
+/// Whether the deployer can still upgrade `name`: deployed from the release bytecode with the
+/// deployer as its authority. `false` for a final one; any other state is refused.
+fn upgradeable(
+    chain: &impl Chain,
+    release: &Release,
+    assets: &Path,
+    name: &str,
+    deployer: &Keypair,
+) -> Result<bool, Error> {
+    let address = release.programs[name].address;
+    let binary = read(&asset_path(assets, name, release.cluster))?;
+
+    match classify(chain, &address, &binary, &deployer.pubkey())?.status {
+        Status::Partial => Ok(true),
+        Status::Live => Ok(false),
+        status => Err(Error::IdlNotWritable {
+            program: name.into(),
+            address,
+            status: match status {
+                Status::Foreign { reason } => format!("foreign ({reason})"),
+                other => PlannedStatus::from(&other).to_string(),
+            },
+        }),
+    }
+}
+
+fn programdata_of(program: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[program.as_ref()],
+        &solana_sdk_ids::bpf_loader_upgradeable::id(),
+    )
+    .0
+}
+
+fn line(out: &mut impl Write, text: String) -> Result<(), Error> {
+    writeln!(out, "{text}")
+        .and_then(|()| out.flush())
+        .map_err(|source| Error::Output { source })
+}
+
+/// The release IDL for `program`, refused unless it names `address`: the canonical account
+/// would otherwise serve another program's interface.
+fn read_idl(path: &Path, program: &str, address: &Pubkey) -> Result<Vec<u8>, Error> {
+    #[derive(Deserialize)]
+    struct Named {
+        address: Option<String>,
+    }
+
+    let idl = read(path)?;
+    let Named { address: named } = serde_json::from_slice(&idl).map_err(|source| Error::Json {
+        path: path.into(),
+        source,
+    })?;
+
+    match named.as_deref() == Some(address.to_string().as_str()) {
+        true => Ok(idl),
+        false => Err(Error::IdlAddress {
+            program: program.into(),
+            path: path.into(),
+            expected: *address,
+            actual: named,
+        }),
+    }
 }
 
 fn rebuild(
@@ -387,6 +616,23 @@ fn asset_path(assets: &Path, program: &str, cluster: Cluster) -> PathBuf {
     assets.join(format!("{program}.{cluster}.so"))
 }
 
+fn idl_path(assets: &Path, program: &str, cluster: Cluster) -> PathBuf {
+    assets.join(format!("{program}.{cluster}.json"))
+}
+
+fn read_idls(release: &Release, assets: &Path) -> Result<BTreeMap<String, Vec<u8>>, Error> {
+    release
+        .programs
+        .keys()
+        .map(|name| {
+            Ok((
+                name.clone(),
+                read(&idl_path(assets, name, release.cluster))?,
+            ))
+        })
+        .collect()
+}
+
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     solana_sha256_hasher::hash(bytes).to_bytes()
 }
@@ -510,6 +756,11 @@ mod tests {
                     binary(name),
                 )
                 .unwrap();
+                fs::write(
+                    directory.path().join(format!("{name}.devnet.json")),
+                    release_idl(name),
+                )
+                .unwrap();
             });
 
             Self {
@@ -589,11 +840,16 @@ mod tests {
         }
 
         /// Every program deployed by this deployer, initialized, its LayerZero setup complete,
-        /// and verified unless named in `unverified`.
+        /// its IDL uploaded, and verified unless named in `unverified`.
         fn tested_chain(&self, unverified: &[&str]) -> RecordingChain {
             let mut chain = full_setup(&testing::plan(5_000_000)).chain;
             PROGRAMS.iter().for_each(|name| {
                 self.deploy(&mut chain, name);
+                let program = release_address(name);
+                chain.accounts.insert(
+                    idl::canonical_address(&program),
+                    idl::uploaded_account(&program, &release_idl(name)),
+                );
                 if unverified.contains(name) {
                     return;
                 }
@@ -709,6 +965,45 @@ mod tests {
 
     fn binary(name: &str) -> Vec<u8> {
         format!("{name} bytecode").into_bytes()
+    }
+
+    fn release_idl(name: &str) -> Vec<u8> {
+        format!(
+            r#"{{"address":"{}","metadata":{{"name":"{name}","version":"0.0.1"}}}}"#,
+            release_address(name)
+        )
+        .into_bytes()
+    }
+
+    impl Env {
+        /// Runs `idl` for the release in `plan.json` against `chain` and returns what it printed.
+        fn idl(&self, chain: &mut RecordingChain) -> Result<String, Error> {
+            let ActionsFile { release, .. } = read_json(&self.path("plan.json"))?;
+            let mut out = Vec::new();
+            idl(
+                chain,
+                &release,
+                self.directory.path(),
+                &self.deployer,
+                Duration::ZERO,
+                &mut out,
+            )?;
+
+            Ok(String::from_utf8(out).unwrap())
+        }
+
+        /// Runs `close-idl` for the close plan in `plan.json` and returns what it printed.
+        fn close_idl(&self, chain: &mut RecordingChain) -> Result<String, Error> {
+            let args = CloseIdlArgs {
+                plan: self.path("plan.json"),
+                assets: self.directory.path().into(),
+                chain: chain_args(),
+            };
+            let mut out = Vec::new();
+            close_idl(chain, &args, &self.deployer, Duration::ZERO, &mut out)?;
+
+            Ok(String::from_utf8(out).unwrap())
+        }
     }
 
     fn chain_args() -> ChainArgs {
@@ -1060,6 +1355,164 @@ mod tests {
             "{error:?}"
         );
         assert!(!env.path("plan.json").exists());
+    }
+
+    #[test]
+    fn plan_finalize_refuses_a_program_whose_canonical_idl_differs() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        let program = release_address(POLYMER_PROVER);
+        chain.accounts.insert(
+            idl::canonical_address(&program),
+            idl::uploaded_account(&program, br#"{"address":"older"}"#),
+        );
+
+        let error = env
+            .plan_selection(&chain, Operation::Finalize, POLYMER_PROVER)
+            .unwrap_err();
+
+        assert!(
+            matches!(&error, Error::Selection(selection::Error::IdlNotUploaded { program }) if program == POLYMER_PROVER),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn idl_sends_nothing_when_every_canonical_idl_already_matches() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+
+        let printed = env.idl(&mut chain).unwrap();
+
+        assert!(chain.sent.is_empty(), "{:?}", chain.sent);
+        let unchanged: Vec<&str> = printed
+            .lines()
+            .map(|line| line.split(' ').next().unwrap())
+            .collect();
+        assert_eq!(
+            unchanged,
+            [
+                CCTP_PROVER,
+                HYPER_PROVER,
+                LAYERZERO_PROVER,
+                LOCAL_PROVER,
+                POLYMER_PROVER,
+                AGGREGATOR_PROVER
+            ]
+        );
+        assert!(
+            printed
+                .lines()
+                .all(|line| line.contains(" idl unchanged: ")),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn idl_reports_a_final_program_and_leaves_it_alone() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        env.deploy_as(&mut chain, HYPER_PROVER, &binary(HYPER_PROVER), None);
+        chain
+            .accounts
+            .remove(&idl::canonical_address(&release_address(HYPER_PROVER)));
+
+        let printed = env.idl(&mut chain).unwrap();
+
+        assert!(chain.sent.is_empty(), "{:?}", chain.sent);
+        assert!(
+            printed.contains("hyper_prover idl final, left as is: ")
+                && printed.contains("differs from the release and can no longer change"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn idl_refuses_another_authority_and_an_idl_for_another_address() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        let other = Pubkey::new_unique();
+        env.deploy_as(&mut chain, HYPER_PROVER, &binary(HYPER_PROVER), Some(other));
+
+        let foreign = env.idl(&mut chain).unwrap_err();
+        env.deploy(&mut chain, HYPER_PROVER);
+        fs::write(
+            env.path("hyper_prover.devnet.json"),
+            release_idl(LOCAL_PROVER),
+        )
+        .unwrap();
+        let misnamed = env.idl(&mut chain).unwrap_err();
+
+        assert!(
+            matches!(&foreign, Error::IdlNotWritable { program, status, .. } if program == HYPER_PROVER && status.contains(&other.to_string())),
+            "{foreign:?}"
+        );
+        assert!(
+            matches!(&misnamed, Error::IdlAddress { program, .. } if program == HYPER_PROVER),
+            "{misnamed:?}"
+        );
+        assert!(chain.sent.is_empty(), "{:?}", chain.sent);
+    }
+
+    /// Bytecode other than the release's is not the deployer's to describe, even under its
+    /// authority.
+    #[test]
+    fn idl_refuses_a_program_with_other_bytecode() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        env.deploy_as(
+            &mut chain,
+            HYPER_PROVER,
+            b"other bytecode",
+            Some(env.deployer.pubkey()),
+        );
+
+        let error = env.idl(&mut chain).unwrap_err();
+
+        assert!(
+            matches!(&error, Error::IdlNotWritable { program, status, .. } if program == HYPER_PROVER && status.contains("hash differs")),
+            "{error:?}"
+        );
+        assert!(chain.sent.is_empty(), "{:?}", chain.sent);
+    }
+
+    /// `close-idl` touches only the programs the close plan closes; the closes themselves run
+    /// against the metadata program in `tests/idl.rs`.
+    #[test]
+    fn close_idl_touches_only_the_programs_the_plan_closes() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.plan_selection(&chain, Operation::Close, HYPER_PROVER)
+            .unwrap();
+        chain
+            .accounts
+            .remove(&idl::canonical_address(&release_address(HYPER_PROVER)));
+
+        let printed = env.close_idl(&mut chain).unwrap();
+
+        assert!(chain.sent.is_empty(), "{:?}", chain.sent);
+        assert_eq!(printed, "hyper_prover idl: nothing to close\n");
+    }
+
+    #[test]
+    fn close_idl_leaves_a_final_program_alone() {
+        let env = Env::new();
+        let mut chain = env.tested_chain(&[]);
+        env.plan_selection(&chain, Operation::Close, HYPER_PROVER)
+            .unwrap();
+        env.deploy_as(&mut chain, HYPER_PROVER, &binary(HYPER_PROVER), None);
+
+        let printed = env.close_idl(&mut chain).unwrap();
+
+        assert!(chain.sent.is_empty(), "{:?}", chain.sent);
+        assert!(
+            printed.contains("hyper_prover idl left: the program is final"),
+            "{printed}"
+        );
     }
 
     #[test]

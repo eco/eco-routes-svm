@@ -64,6 +64,9 @@ impl Chain for LitesvmChain<'_> {
             .iter()
             .filter(|instruction| is_set_path_config(instruction))
             .for_each(|instruction| self.stage_uln_configs(instruction));
+        // On a cluster the next send fetches a newer blockhash once this one confirmed, so two
+        // identical steps in a row are two transactions, not a duplicate.
+        self.context.expire_blockhash();
 
         Ok(signature)
     }

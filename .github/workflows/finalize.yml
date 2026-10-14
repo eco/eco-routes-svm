@@ -1,7 +1,8 @@
 name: Finalize
 
 # Makes tested programs of a deployed release immutable. Refuses a program that is not deployed,
-# initialized and verified, or one whose dependencies would stay upgradeable.
+# initialized and verified, one whose canonical IDL is not the release's, or one whose
+# dependencies would stay upgradeable.
 # One dispatch, two jobs: `plan` reads the chain and writes the plan to its summary without
 # approval; `finalize` waits for the release environment's approval, re-plans, and writes only if
 # that plan's hash equals the approved one.
