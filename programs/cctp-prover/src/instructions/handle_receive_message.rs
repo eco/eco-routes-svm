@@ -53,7 +53,7 @@ pub fn handle_receive_message<'info>(
     require_keys_neq!(
         ctx.accounts.payer.key(),
         ctx.accounts.authority_pda.key(),
-        CctpProverError::InvalidRentRecipient
+        CctpProverError::InvalidPayer
     );
     let peer = *ctx
         .accounts

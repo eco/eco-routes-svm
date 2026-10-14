@@ -85,6 +85,14 @@ impl CctpProver<'_> {
         install_transmitter(self, &[TestAttester::new(TEST_ATTESTER_SECRET)], 1);
     }
 
+    /// Installs the program and inits it with [`peers`], which `prove` needs
+    /// to bind the destination.
+    pub fn install_with_peers(&mut self) {
+        let authority = Keypair::new();
+        self.install(authority.pubkey());
+        self.init(&authority, peers()).unwrap();
+    }
+
     /// Simulates `solana program set-upgrade-authority --final`.
     pub fn finalize(&mut self) {
         self.set_upgrade_authority(&cctp_prover::ID, None);
@@ -221,6 +229,7 @@ pub fn install_transmitter(context: &mut Context, attesters: &[TestAttester], th
 /// `prove`'s accounts after the Portal dispatcher (which Portal prepends).
 pub fn prove_accounts(payer: &Pubkey, message_sent_event_data: &Pubkey) -> Vec<AccountMeta> {
     vec![
+        AccountMeta::new_readonly(Config::pda().0, false),
         AccountMeta::new_readonly(cctp_prover::state::sender_authority_pda().0, false),
         AccountMeta::new(*payer, true),
         AccountMeta::new(cctp::message_transmitter_pda().0, false),
@@ -236,6 +245,34 @@ pub fn evm_recipient(byte: u8) -> Vec<u8> {
     let mut recipient = [0u8; 32];
     recipient[12..].fill(byte);
     recipient.to_vec()
+}
+
+/// Circle's `Message::format_message` with the Iris-written fields (nonce,
+/// executed finality) filled in, as an attested message carries them.
+#[allow(clippy::too_many_arguments)]
+pub fn format_message(
+    source_domain: u32,
+    destination_domain: u32,
+    nonce: [u8; 32],
+    sender: &Pubkey,
+    recipient: &Pubkey,
+    min_finality_threshold: u32,
+    finality_threshold_executed: u32,
+    message_body: &[u8],
+) -> Vec<u8> {
+    cctp::MESSAGE_VERSION
+        .to_be_bytes()
+        .into_iter()
+        .chain(source_domain.to_be_bytes())
+        .chain(destination_domain.to_be_bytes())
+        .chain(nonce)
+        .chain(sender.to_bytes())
+        .chain(recipient.to_bytes())
+        .chain([0u8; 32])
+        .chain(min_finality_threshold.to_be_bytes())
+        .chain(finality_threshold_executed.to_be_bytes())
+        .chain(message_body.iter().copied())
+        .collect()
 }
 
 pub struct Inbound {
@@ -280,7 +317,7 @@ impl CctpProver<'_> {
         finality: u32,
         proof_data: ProofData,
     ) -> Inbound {
-        let message = cctp::format_message(
+        let message = format_message(
             source_domain,
             SOLANA_DOMAIN,
             rand::random(),

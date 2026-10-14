@@ -10,13 +10,13 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
-use crate::common::cctp_prover_context::{evm_recipient, prove_accounts, BASE_DOMAIN};
+use crate::common::cctp_prover_context::{evm_recipient, prove_accounts, BASE_DOMAIN, OP_DOMAIN};
 
 pub mod common;
 
 fn setup(n: usize) -> (common::Context, Vec<common::FulfilledIntent>) {
     let mut context = common::Context::default();
-    context.cctp_prover().install(Pubkey::new_unique());
+    context.cctp_prover().install_with_peers();
     let intents = context.fulfill_rand_intents(n, cctp_prover::ID);
     (context, intents)
 }
@@ -40,14 +40,14 @@ fn prove_sends_fast_message_to_evm_prover() {
             hashes.clone(),
             BASE_DOMAIN as u64,
             markers(&intents),
-            evm_recipient(0xcc),
+            evm_recipient(0xba),
             &event,
         )
         .unwrap();
 
     let account = context.get_account(&event.pubkey()).unwrap();
     assert_eq!(account.owner, cctp::MESSAGE_TRANSMITTER_V2_ID);
-    let sent = MessageSentAccount::try_from_data(&account.data).unwrap();
+    let sent = MessageSentAccount::try_from(account.data.as_slice()).unwrap();
     assert_eq!(sent.rent_payer, context.payer.pubkey());
     let m = &sent.message;
     assert_eq!(m[4..8], SOLANA_DOMAIN.to_be_bytes());
@@ -59,7 +59,7 @@ fn prove_sends_fast_message_to_evm_prover() {
     );
     assert_eq!(
         m[cctp::RECIPIENT_INDEX..cctp::DESTINATION_CALLER_INDEX],
-        evm_recipient(0xcc)[..]
+        evm_recipient(0xba)[..]
     );
     assert_eq!(
         m[cctp::DESTINATION_CALLER_INDEX..cctp::MIN_FINALITY_THRESHOLD_INDEX],
@@ -100,9 +100,14 @@ fn prove_sends_to_ethereum_domain_zero() {
         )
         .unwrap();
 
-    let sent =
-        MessageSentAccount::try_from_data(&context.get_account(&event.pubkey()).unwrap().data)
-            .unwrap();
+    let sent = MessageSentAccount::try_from(
+        context
+            .get_account(&event.pubkey())
+            .unwrap()
+            .data
+            .as_slice(),
+    )
+    .unwrap();
     assert_eq!(sent.message[8..12], 0u32.to_be_bytes());
 }
 
@@ -114,7 +119,7 @@ fn prove_rejects_bad_domains() {
             vec![intents[0].intent_hash],
             domain,
             markers(&intents),
-            evm_recipient(0xcc),
+            evm_recipient(0xba),
             &Keypair::new(),
         );
         assert!(result.is_err_and(common::is_error(CctpProverError::InvalidDomainId)));
@@ -152,10 +157,11 @@ fn prove_rejects_direct_caller() {
                 [9; 32].into(),
             )],
         ),
-        evm_recipient(0xcc),
+        evm_recipient(0xba),
     );
     let mut accounts = cctp_prover::accounts::Prove {
         portal_dispatcher: impostor.pubkey(),
+        config: cctp_prover::state::Config::pda().0,
         sender_authority: cctp_prover::state::sender_authority_pda().0,
         payer,
         message_transmitter: cctp::message_transmitter_pda().0,
@@ -186,7 +192,7 @@ fn prove_rejects_batch_over_max_intents() {
         hashes,
         BASE_DOMAIN as u64,
         markers(&intents),
-        evm_recipient(0xcc),
+        evm_recipient(0xba),
         &Keypair::new(),
     );
 
@@ -209,7 +215,7 @@ fn prove_rejects_foreign_transmitter_program() {
             vec![intents[0].intent_hash],
             BASE_DOMAIN as u64,
             markers(&intents),
-            evm_recipient(0xcc),
+            evm_recipient(0xba),
             &event,
             accounts,
         );
@@ -224,19 +230,76 @@ fn prove_rejects_wrong_sender_authority() {
     let event = Keypair::new();
     let mut accounts = prove_accounts(&context.payer.pubkey(), &event.pubkey());
     assert_eq!(
-        accounts[0].pubkey,
+        accounts[1].pubkey,
         cctp_prover::state::sender_authority_pda().0
     );
+    accounts[1].pubkey = Pubkey::new_unique();
+
+    let result = context.portal().prove_intent_via_cctp_prover_with_accounts(
+        vec![intents[0].intent_hash],
+        BASE_DOMAIN as u64,
+        markers(&intents),
+        evm_recipient(0xba),
+        &event,
+        accounts,
+    );
+
+    assert!(result.is_err_and(common::is_error(CctpProverError::InvalidSenderAuthority)));
+}
+
+/// A message to a domain with no configured peer would be attested and never
+/// delivered.
+#[test]
+fn prove_rejects_unconfigured_domain() {
+    let (mut context, intents) = setup(1);
+
+    let result = context.portal().prove_intent_via_cctp_prover(
+        vec![intents[0].intent_hash],
+        OP_DOMAIN as u64,
+        markers(&intents),
+        evm_recipient(0xba),
+        &Keypair::new(),
+    );
+
+    assert!(result.is_err_and(common::is_error(CctpProverError::UnknownDomain)));
+}
+
+/// The recipient must be the destination peer's `CCTPProver`; Ethereum's
+/// prover on the Base domain is as wrong as an unknown address.
+#[test]
+fn prove_rejects_recipient_other_than_the_peer() {
+    for recipient in [evm_recipient(0xcc), evm_recipient(0xee)] {
+        let (mut context, intents) = setup(1);
+
+        let result = context.portal().prove_intent_via_cctp_prover(
+            vec![intents[0].intent_hash],
+            BASE_DOMAIN as u64,
+            markers(&intents),
+            recipient,
+            &Keypair::new(),
+        );
+
+        assert!(result.is_err_and(common::is_error(CctpProverError::InvalidData)));
+    }
+}
+
+/// `prove` reads the peer set from `Config`; any other account is refused.
+#[test]
+fn prove_rejects_wrong_config() {
+    let (mut context, intents) = setup(1);
+    let event = Keypair::new();
+    let mut accounts = prove_accounts(&context.payer.pubkey(), &event.pubkey());
+    assert_eq!(accounts[0].pubkey, cctp_prover::state::Config::pda().0);
     accounts[0].pubkey = Pubkey::new_unique();
 
     let result = context.portal().prove_intent_via_cctp_prover_with_accounts(
         vec![intents[0].intent_hash],
         BASE_DOMAIN as u64,
         markers(&intents),
-        evm_recipient(0xcc),
+        evm_recipient(0xba),
         &event,
         accounts,
     );
 
-    assert!(result.is_err_and(common::is_error(CctpProverError::InvalidSenderAuthority)));
+    assert!(result.is_err());
 }

@@ -4,7 +4,7 @@
 //! Outbound: `[ComputeBudget, portal::prove]`, signed by the payer and the
 //! fresh event keypair, with one lookup table holding every non-signer,
 //! non-invoked account that exists before the transaction (FulfillMarkers,
-//! cctp-prover's dispatcher/sender authority/program, the transmitter state
+//! cctp-prover's dispatcher/config/sender authority/program, the transmitter state
 //! and program, the system program).
 //!
 //! Inbound: `[ComputeBudget, receive_message]` with one lookup table holding
@@ -37,8 +37,9 @@ use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
 use crate::common::cctp_prover_context::{
-    attest, build_init_instruction, evm_peer, evm_sender, install_transmitter, peers, proof_pdas,
-    prove_accounts, TestAttester, BASE_CHAIN_ID, BASE_DOMAIN, COMPUTE_UNIT_LIMIT,
+    attest, build_init_instruction, evm_peer, evm_sender, format_message, install_transmitter,
+    peers, proof_pdas, prove_accounts, TestAttester, BASE_CHAIN_ID, BASE_DOMAIN,
+    COMPUTE_UNIT_LIMIT,
 };
 
 pub mod common;
@@ -101,7 +102,7 @@ fn prove_instruction(payer: &Pubkey, event: &Pubkey, hashes: &[Bytes32]) -> Inst
                 prover: cctp_prover::ID,
                 source_chain_domain_id: BASE_DOMAIN as u64,
                 intent_hashes: hashes.to_vec(),
-                data: common::cctp_prover_context::evm_recipient(0xcc),
+                data: common::cctp_prover_context::evm_recipient(0xba),
             },
         }
         .data(),
@@ -138,7 +139,7 @@ fn inbound_instructions(payer: &Pubkey, n: usize) -> Vec<Instruction> {
             .map(|i| IntentHashClaimant::new([i as u8 + 1; 32].into(), [7; 32].into()))
             .collect(),
     );
-    let message = cctp::format_message(
+    let message = format_message(
         BASE_DOMAIN,
         cctp::SOLANA_DOMAIN,
         [9; 32],
@@ -237,7 +238,7 @@ fn max_inbound_batch_executes_under_compute_limit() {
             .map(|i| IntentHashClaimant::new([i as u8 + 1; 32].into(), [7; 32].into()))
             .collect(),
     );
-    let message = cctp::format_message(
+    let message = format_message(
         BASE_DOMAIN,
         cctp::SOLANA_DOMAIN,
         [8; 32],
@@ -298,14 +299,14 @@ fn max_peers_init_needs_v1() {
 /// `fulfill` itself, so they stay static (conservative: an already-existing
 /// executor ATA could move into the table).
 ///
-/// Measured: 946 bytes and 20 account locks, so the solver can fulfill and
+/// Measured: 948 bytes and 21 account locks, so the solver can fulfill and
 /// prove one intent in a single v0 transaction. Using the solver as the payer
 /// (payer == solver) drops one signature and one static key, shrinking it
 /// further.
 #[test]
 fn atomic_fulfill_and_prove_one_intent_fits_v0() {
     let mut ctx = common::Context::default();
-    ctx.cctp_prover().install(Pubkey::new_unique());
+    ctx.cctp_prover().install_with_peers();
     let (_, mut route, _) = ctx.rand_intent();
     route.native_amount = 0;
     route.tokens.truncate(1);
@@ -429,7 +430,7 @@ fn atomic_fulfill_and_prove_one_intent_fits_v0() {
 #[test]
 fn max_outbound_batch_executes_under_compute_limit() {
     let mut context = common::Context::default();
-    context.cctp_prover().install(Pubkey::new_unique());
+    context.cctp_prover().install_with_peers();
     let intents = context.fulfill_rand_intents(MAX_INTENTS_PER_PROVE, cctp_prover::ID);
 
     let result = context
@@ -441,7 +442,7 @@ fn max_outbound_batch_executes_under_compute_limit() {
                 .iter()
                 .map(|intent| FulfillMarker::pda(&intent.intent_hash).0)
                 .collect(),
-            common::cctp_prover_context::evm_recipient(0xcc),
+            common::cctp_prover_context::evm_recipient(0xba),
             &Keypair::new(),
         )
         .unwrap();

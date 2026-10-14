@@ -32,4 +32,5 @@ pub enum CctpProverError {
     ChainIdMismatch,
     InvalidProof,
     IntentAlreadyProven,
+    InvalidPayer,
 }

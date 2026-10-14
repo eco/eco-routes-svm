@@ -8,7 +8,7 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::system_program;
 
 use crate::instructions::CctpProverError;
-use crate::state::{sender_authority_pda, Config};
+use crate::state::Config;
 
 /// Identical on mainnet and devnet, so no `mainnet` feature gate.
 pub const MESSAGE_TRANSMITTER_V2_ID: Pubkey =
@@ -89,10 +89,15 @@ pub struct MessageSentAccount {
     pub message: Vec<u8>,
 }
 
-impl MessageSentAccount {
-    pub fn try_from_data(data: &[u8]) -> Option<Self> {
-        let body = data.strip_prefix(&MESSAGE_SENT_ACCOUNT_DISCRIMINATOR)?;
-        Self::deserialize(&mut &body[..]).ok()
+impl TryFrom<&[u8]> for MessageSentAccount {
+    type Error = ErrorCode;
+
+    fn try_from(data: &[u8]) -> std::result::Result<Self, Self::Error> {
+        let body = data
+            .strip_prefix(&MESSAGE_SENT_ACCOUNT_DISCRIMINATOR)
+            .ok_or(ErrorCode::AccountDiscriminatorMismatch)?;
+
+        Self::deserialize(&mut &body[..]).map_err(|_| ErrorCode::AccountDidNotDeserialize)
     }
 }
 
@@ -131,35 +136,6 @@ pub fn nonce(message: &[u8]) -> Option<[u8; 32]> {
     message.get(NONCE_INDEX..SENDER_INDEX)?.try_into().ok()
 }
 
-/// Circle's `Message::format_message` with the Iris-written fields (nonce,
-/// executed finality) filled in, as an attested message carries them. Used by
-/// tests to build inbound messages.
-#[allow(clippy::too_many_arguments)]
-pub fn format_message(
-    source_domain: u32,
-    destination_domain: u32,
-    nonce: [u8; 32],
-    sender: &Pubkey,
-    recipient: &Pubkey,
-    min_finality_threshold: u32,
-    finality_threshold_executed: u32,
-    message_body: &[u8],
-) -> Vec<u8> {
-    MESSAGE_VERSION
-        .to_be_bytes()
-        .into_iter()
-        .chain(source_domain.to_be_bytes())
-        .chain(destination_domain.to_be_bytes())
-        .chain(nonce)
-        .chain(sender.to_bytes())
-        .chain(recipient.to_bytes())
-        .chain([0u8; 32])
-        .chain(min_finality_threshold.to_be_bytes())
-        .chain(finality_threshold_executed.to_be_bytes())
-        .chain(message_body.iter().copied())
-        .collect()
-}
-
 fn instruction_data(discriminator: [u8; 8], params: &impl AnchorSerialize) -> Result<Vec<u8>> {
     Ok(discriminator
         .into_iter()
@@ -171,6 +147,8 @@ fn instruction_data(discriminator: [u8; 8], params: &impl AnchorSerialize) -> Re
 /// `message_sent_event_data` keypair account, our `sender_authority` signs.
 pub fn send_message_instruction(
     payer: &Pubkey,
+    sender_authority: &Pubkey,
+    message_transmitter: &Pubkey,
     message_sent_event_data: &Pubkey,
     params: &SendMessageParams,
 ) -> Result<Instruction> {
@@ -178,8 +156,8 @@ pub fn send_message_instruction(
         program_id: MESSAGE_TRANSMITTER_V2_ID,
         accounts: vec![
             AccountMeta::new(*payer, true),
-            AccountMeta::new_readonly(sender_authority_pda().0, true),
-            AccountMeta::new(message_transmitter_pda().0, false),
+            AccountMeta::new_readonly(*sender_authority, true),
+            AccountMeta::new(*message_transmitter, false),
             AccountMeta::new(*message_sent_event_data, true),
             AccountMeta::new_readonly(crate::ID, false),
             AccountMeta::new_readonly(system_program::ID, false),
@@ -333,63 +311,15 @@ mod tests {
         ]);
     }
 
-    #[test]
-    fn format_message_lays_out_circle_header() {
-        let sender = Pubkey::new_from_array([1; 32]);
-        let recipient = Pubkey::new_from_array([2; 32]);
-        let message = format_message(
-            6,
-            SOLANA_DOMAIN,
-            [9; 32],
-            &sender,
-            &recipient,
-            1000,
-            2000,
-            &[0xab, 0xcd],
-        );
-
-        assert_eq!(message.len(), MESSAGE_BODY_INDEX + 2);
-        assert_eq!(message[0..4], MESSAGE_VERSION.to_be_bytes());
-        assert_eq!(message[4..8], 6u32.to_be_bytes());
-        assert_eq!(message[8..12], SOLANA_DOMAIN.to_be_bytes());
-        assert_eq!(nonce(&message), Some([9; 32]));
-        assert_eq!(message[SENDER_INDEX..RECIPIENT_INDEX], sender.to_bytes());
-        assert_eq!(
-            message[RECIPIENT_INDEX..DESTINATION_CALLER_INDEX],
-            recipient.to_bytes()
-        );
-        assert_eq!(
-            message[DESTINATION_CALLER_INDEX..MIN_FINALITY_THRESHOLD_INDEX],
-            [0; 32]
-        );
-        assert_eq!(
-            message[MIN_FINALITY_THRESHOLD_INDEX..FINALITY_THRESHOLD_EXECUTED_INDEX],
-            1000u32.to_be_bytes()
-        );
-        assert_eq!(
-            message[FINALITY_THRESHOLD_EXECUTED_INDEX..MESSAGE_BODY_INDEX],
-            2000u32.to_be_bytes()
-        );
-        assert_eq!(message[MESSAGE_BODY_INDEX..], [0xab, 0xcd]);
-        assert_eq!(nonce(&message[..NONCE_INDEX + 31]), None);
-    }
-
     /// `receive_message` head accounts in Circle's `ReceiveMessageContext`
     /// order (+ `#[event_cpi]`), then the tail Circle forwards to our handler
     /// in `HandleReceiveMessage` order (+ our `#[event_cpi]`), then proofs.
     #[test]
     fn receive_message_instruction_orders_accounts() {
         let payer = Pubkey::new_unique();
-        let message = format_message(
-            6,
-            SOLANA_DOMAIN,
-            [3; 32],
-            &payer,
-            &crate::ID,
-            1000,
-            1000,
-            &[],
-        );
+        // Only the nonce matters here: it seeds `used_nonce`.
+        let mut message = vec![0; MESSAGE_BODY_INDEX];
+        message[NONCE_INDEX..SENDER_INDEX].copy_from_slice(&[3; 32]);
         let proofs = [Pubkey::new_unique(), Pubkey::new_unique()];
         let ix = receive_message_instruction(&payer, message, vec![0; 65], &proofs).unwrap();
 
@@ -456,10 +386,10 @@ mod tests {
         data.extend_from_slice(&(message.len() as u32).to_le_bytes());
         data.extend_from_slice(&message);
 
-        let parsed = MessageSentAccount::try_from_data(&data).unwrap();
+        let parsed = MessageSentAccount::try_from(data.as_slice()).unwrap();
         assert_eq!(parsed.rent_payer, Pubkey::new_from_array([4; 32]));
         assert_eq!(parsed.created_at, 77);
         assert_eq!(parsed.message, message);
-        assert!(MessageSentAccount::try_from_data(&data[1..]).is_none());
+        assert!(MessageSentAccount::try_from(&data[1..]).is_err());
     }
 }

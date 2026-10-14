@@ -11,8 +11,8 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 use crate::common::cctp_prover_context::{
-    evm_sender, peers, proof_pdas, receive_instruction, Inbound, BASE_CHAIN_ID, BASE_DOMAIN,
-    ETHEREUM_CHAIN_ID, ETHEREUM_DOMAIN, OP_DOMAIN, TAIL_PAYER_INDEX,
+    evm_sender, format_message, peers, proof_pdas, receive_instruction, Inbound, BASE_CHAIN_ID,
+    BASE_DOMAIN, ETHEREUM_CHAIN_ID, ETHEREUM_DOMAIN, OP_DOMAIN, TAIL_PAYER_INDEX,
 };
 
 pub mod common;
@@ -328,7 +328,7 @@ fn authority_pda_as_payer_is_rejected() {
 
     assert!(result.is_err_and(common::is_program_error(
         cctp_prover::ID,
-        CctpProverError::InvalidRentRecipient
+        CctpProverError::InvalidPayer
     )));
     assert_eq!(context.balance(&authority), common::sol_amount(1.0));
     assert!(recorded(&context, 29).is_none());
@@ -480,4 +480,49 @@ fn direct_handler_call_is_rejected() {
         CctpProverError::InvalidTransmitterAuthority
     )));
     assert!(recorded(&context, 25).is_none());
+}
+
+/// The test helper builds what Circle's `Message::format_message` lays out.
+#[test]
+fn format_message_lays_out_circle_header() {
+    let sender = Pubkey::new_from_array([1; 32]);
+    let recipient = Pubkey::new_from_array([2; 32]);
+    let message = format_message(
+        6,
+        cctp::SOLANA_DOMAIN,
+        [9; 32],
+        &sender,
+        &recipient,
+        1000,
+        2000,
+        &[0xab, 0xcd],
+    );
+
+    assert_eq!(message.len(), cctp::MESSAGE_BODY_INDEX + 2);
+    assert_eq!(message[0..4], cctp::MESSAGE_VERSION.to_be_bytes());
+    assert_eq!(message[4..8], 6u32.to_be_bytes());
+    assert_eq!(message[8..12], cctp::SOLANA_DOMAIN.to_be_bytes());
+    assert_eq!(cctp::nonce(&message), Some([9; 32]));
+    assert_eq!(
+        message[cctp::SENDER_INDEX..cctp::RECIPIENT_INDEX],
+        sender.to_bytes()
+    );
+    assert_eq!(
+        message[cctp::RECIPIENT_INDEX..cctp::DESTINATION_CALLER_INDEX],
+        recipient.to_bytes()
+    );
+    assert_eq!(
+        message[cctp::DESTINATION_CALLER_INDEX..cctp::MIN_FINALITY_THRESHOLD_INDEX],
+        [0; 32]
+    );
+    assert_eq!(
+        message[cctp::MIN_FINALITY_THRESHOLD_INDEX..cctp::FINALITY_THRESHOLD_EXECUTED_INDEX],
+        1000u32.to_be_bytes()
+    );
+    assert_eq!(
+        message[cctp::FINALITY_THRESHOLD_EXECUTED_INDEX..cctp::MESSAGE_BODY_INDEX],
+        2000u32.to_be_bytes()
+    );
+    assert_eq!(message[cctp::MESSAGE_BODY_INDEX..], [0xab, 0xcd]);
+    assert_eq!(cctp::nonce(&message[..cctp::NONCE_INDEX + 31]), None);
 }

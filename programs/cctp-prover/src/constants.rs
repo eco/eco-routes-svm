@@ -1,8 +1,8 @@
 /// Largest batch `prove` accepts: `[ComputeBudget, portal::prove]` fits one
 /// 1232-byte v0 transaction (payer + event keypair signatures) with the
 /// FulfillMarkers and static accounts in one lookup table. Measured: 23
-/// intents take 1227 bytes (24 take 1261) and 33 of 64 account locks, and
-/// execute in about 225k CU. The 5 bytes of headroom are thin: one extra
+/// intents take 1229 bytes (24 take 1263) and 34 of 64 account locks, and
+/// execute in about 230k CU. The 3 bytes of headroom are thin: one extra
 /// instruction, such as a ~12-byte compute-unit-price, drops the ceiling to
 /// 22, and the ceiling assumes exactly one lookup table holding the
 /// FulfillMarkers. Pinned by

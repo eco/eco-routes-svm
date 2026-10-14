@@ -5,14 +5,14 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 
 use crate::common::cctp_prover_context::{
-    attest, evm_sender, install_transmitter, peers, TestAttester, BASE_CHAIN_ID, BASE_DOMAIN,
-    TEST_ATTESTER_SECRET,
+    attest, evm_sender, format_message, install_transmitter, peers, TestAttester, BASE_CHAIN_ID,
+    BASE_DOMAIN, TEST_ATTESTER_SECRET,
 };
 
 pub mod common;
 
 fn message_to_cctp_prover(nonce: [u8; 32]) -> Vec<u8> {
-    cctp::format_message(
+    format_message(
         BASE_DOMAIN,
         SOLANA_DOMAIN,
         nonce,
