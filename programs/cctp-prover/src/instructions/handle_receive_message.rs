@@ -42,7 +42,11 @@ pub struct HandleReceiveMessage<'info> {
 }
 
 /// `finality_threshold_executed` is not checked: always fast (spec D2) means
-/// 1000 and 2000 are both accepted from every configured peer.
+/// 1000 and 2000 are both accepted from every configured peer. That is an
+/// accepted risk, not an oversight: a source-chain reorg after a 1000
+/// attestation leaves a permanent `Proof` for a fill that no longer exists.
+/// Circle backs fast USDC burns with its Fast Transfer Allowance, but not
+/// generic messages; it leaves their finality to the recipient.
 pub fn handle_receive_message<'info>(
     ctx: Context<'info, HandleReceiveMessage<'info>>,
     params: HandleReceiveMessageParams,
