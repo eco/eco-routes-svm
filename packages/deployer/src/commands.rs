@@ -1155,8 +1155,8 @@ mod tests {
         assert!(
             matches!(
                 error,
-                Error::Plan(plan::Error::LayerZero(layerzero::Error::NotAWorkerConfig {
-                    role: "executor",
+                Error::Plan(plan::Error::LayerZero(layerzero::Error::WorkerIsProgram {
+                    role: layerzero::Role::Executor,
                     ..
                 }))
             ),
