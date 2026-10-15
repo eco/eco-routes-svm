@@ -34,8 +34,8 @@ pub fn init(
         data: intent_chainer::instruction::InitOrderBuffer {
             args: InitOrderBufferArgs {
                 seed,
-                order_commitment: commitment,
-                order_len: len.try_into().unwrap(),
+                template_hash: commitment,
+                template_len: len.try_into().unwrap(),
                 bytes: bytes.to_vec(),
             },
         }
@@ -88,11 +88,16 @@ pub fn close(authority: Pubkey, buffer: Pubkey) -> Instruction {
 }
 
 /// The IDL account order is [read-only buffer, existing Chain accounts].
-pub fn execute(mut chain: Instruction, buffer: Pubkey, publish: bool) -> Instruction {
+pub fn execute(
+    mut chain: Instruction,
+    buffer: Pubkey,
+    order: intent_chainer::types::Order,
+    publish: bool,
+) -> Instruction {
     chain
         .accounts
         .insert(0, AccountMeta::new_readonly(buffer, false));
-    chain.data = intent_chainer::instruction::ChainFromAccount { publish }.data();
+    chain.data = intent_chainer::instruction::ChainFromAccount { order, publish }.data();
     chain
 }
 

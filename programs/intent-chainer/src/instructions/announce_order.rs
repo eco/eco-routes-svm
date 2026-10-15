@@ -51,7 +51,6 @@ pub(crate) fn emit_template_announcement(
     template: TemplateProgram,
     template_hash: Bytes32,
 ) -> Result<()> {
-
     let mut data = Vec::with_capacity(
         8 + TemplateAnnounced::DISCRIMINATOR.len() + 32 + crate::types::borsh_len(&template)?,
     );

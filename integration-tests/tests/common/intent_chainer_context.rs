@@ -38,9 +38,13 @@ impl Context {
 
 /// A chained pair ready to drive: intent2's committed order plus the addresses it
 /// resolves to for one particular measured amount.
+#[derive(Clone)]
 pub struct ChainedIntent {
     pub order: Order,
-    pub order_commitment: Bytes32,
+    /// The template `order.template_hash` commits to. Carried here because every
+    /// call that executes this order has to present both halves.
+    pub template: TemplateProgram,
+    pub params_hash: Bytes32,
     pub escrow_authority: Pubkey,
     pub escrow_ata: Pubkey,
     /// Intent2's typed route for the amount this was resolved at. Only meaningful
@@ -68,20 +72,21 @@ impl IntentChainer<'_> {
         prover: Pubkey,
         scale: u128,
         min_amount_in: u64,
-    ) -> Order {
+    ) -> (Order, TemplateProgram) {
         let creator = self.creator.pubkey();
         let deadline = self.now() + 3600;
         let token_program = self.token_program;
         let (segments, items) = self.cut_svm_route(base_mint, recipient_ata, token_program);
 
-        Order {
+        let template = TemplateProgram {
+            vaults: vec![],
+            route: Template { segments, items },
+        };
+        let order = Order {
             portal: portal::ID,
             base_mint,
             destination: CHAIN_ID,
-            template: TemplateProgram {
-                vaults: vec![],
-                route: Template { segments, items },
-            },
+            template_hash: template.hash().unwrap(),
             reward: Reward {
                 deadline,
                 creator,
@@ -97,7 +102,8 @@ impl IntentChainer<'_> {
             scale,
             min_amount_in,
             require_publish: false,
-        }
+        };
+        (order, template)
     }
 
     /// Encodes intent2's route with [`SENTINEL`] in both amount positions and
@@ -195,12 +201,19 @@ impl IntentChainer<'_> {
     pub fn resolve(
         &mut self,
         order: &Order,
+        template: &TemplateProgram,
         amount_in: u64,
         recipient_ata: Pubkey,
     ) -> ChainedIntent {
         let token_program = self.token_program;
-        let order_commitment = order.hash();
-        let (escrow_authority, _) = escrow_authority_pda(&order_commitment);
+        // Re-bind: a test that edits the template gets a consistent pair back,
+        // rather than having to restate the commitment at every call site.
+        let order = &Order {
+            template_hash: template.hash().unwrap(),
+            ..order.clone()
+        };
+        let params_hash = order.params_hash().unwrap();
+        let (escrow_authority, _) = escrow_authority_pda(&order.template_hash, &params_hash);
         let escrow_ata = get_associated_token_address_with_program_id(
             &escrow_authority,
             &order.base_mint,
@@ -209,7 +222,7 @@ impl IntentChainer<'_> {
 
         let amount_out =
             intent_chainer::types::scale_amount(amount_in as u128, order.scale).unwrap();
-        let route_bytes = order.build_route(amount_in).unwrap();
+        let route_bytes = order.build_route(template, amount_in).unwrap();
         let route: Route = borsh::from_slice(&route_bytes).expect("SVM route must deserialize");
         let _ = recipient_ata;
 
@@ -225,7 +238,8 @@ impl IntentChainer<'_> {
 
         ChainedIntent {
             order: order.clone(),
-            order_commitment,
+            template: template.clone(),
+            params_hash,
             escrow_authority,
             escrow_ata,
             route,
@@ -336,10 +350,10 @@ impl IntentChainer<'_> {
     /// but custody must still follow the order's own commitment, or the test would
     /// fail on `InvalidEscrowAuthority` instead of the check it is pinning.
     pub fn rebind_escrow(&mut self, chained: &mut ChainedIntent) {
-        let commitment = chained.order.hash();
-        let (authority, _) = escrow_authority_pda(&commitment);
+        let params_hash = chained.order.params_hash().unwrap();
+        let (authority, _) = escrow_authority_pda(&chained.order.template_hash, &params_hash);
 
-        chained.order_commitment = commitment;
+        chained.params_hash = params_hash;
         chained.escrow_authority = authority;
         chained.escrow_ata = get_associated_token_address_with_program_id(
             &authority,
@@ -445,6 +459,7 @@ impl IntentChainer<'_> {
     ) -> TransactionResult {
         let args = intent_chainer::instructions::ChainArgs {
             order: chained.order.clone(),
+            template: chained.template.clone(),
             publish,
         };
         let accounts = intent_chainer::accounts::Chain {
@@ -481,7 +496,7 @@ impl IntentChainer<'_> {
         base_mint: Pubkey,
         prover: Pubkey,
         target_len: usize,
-    ) -> Order {
+    ) -> (Order, TemplateProgram) {
         let creator = self.creator.pubkey();
         let deadline = self.now() + 3600;
         let token_program = self.token_program;
@@ -509,14 +524,15 @@ impl IntentChainer<'_> {
         let bytes = borsh::to_vec(&route).unwrap();
         assert_eq!(bytes.len(), target_len, "route sizing must be exact");
 
-        Order {
+        let template = TemplateProgram {
+            vaults: vec![],
+            route: Template::literal(bytes),
+        };
+        let order = Order {
             portal: portal::ID,
             base_mint,
             destination: CHAIN_ID,
-            template: TemplateProgram {
-                vaults: vec![],
-                route: Template::literal(bytes),
-            },
+            template_hash: template.hash().unwrap(),
             reward: Reward {
                 deadline,
                 creator,
@@ -530,7 +546,8 @@ impl IntentChainer<'_> {
             scale: WAD,
             min_amount_in: 1,
             require_publish: false,
-        }
+        };
+        (order, template)
     }
 
     /// A route call on intent1 that forwards the executor's balance of `mint`
