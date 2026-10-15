@@ -52,10 +52,11 @@
 //!   rejects that with `ReentrancyNotAllowed` — the same rule that makes
 //!   `flash-fulfiller` a separate program.
 //!
-//! Transport is a separate constraint: the complete Order and its instruction
-//! framing can exceed a 1232-byte transaction. Large orders use chunked upload,
-//! seal/announcement, and `chain_from_account` with a read-only Order buffer, not
-//! just staging of later fulfillment calldata. Buffer rent is reclaimed separately.
+//! Transport is a separate constraint: the template, the order's parameters and
+//! their instruction framing can exceed a 1232-byte transaction. Large templates
+//! use chunked upload, seal/announcement, and `chain_from_account` with a
+//! read-only template buffer, not just staging of later fulfillment calldata.
+//! Buffer rent is reclaimed separately.
 //! Staging does not remove the local-account or reentrancy constraints above.
 //!
 //! So `chain` is its own permissionless transaction. The caller reads the escrow
@@ -70,12 +71,12 @@
 //! fulfillment and the `chain` call, and `chain` has no signer to gate. A single
 //! shared custody account would therefore let whoever calls first sweep the
 //! balance into an order of their own authorship. The fix is
-//! [`state::escrow_authority_pda`]: custody is seeded by
-//! `keccak(borsh(order))`, so intent1 delivers into an address that encodes
-//! exactly one order, that route is hash-committed, and no other order can derive
-//! it. This restores the EVM's "intent1's hash authorizes the order" property
-//! transitively, and it is a security boundary — read the doc comment there before
-//! touching the seeds.
+//! [`state::escrow_authority_pda`]: custody is seeded by both halves of the
+//! order's commitment, `sha256(borsh(template))` and `sha256(borsh(params))`, so
+//! intent1 delivers into an address that encodes exactly one order, that route is
+//! hash-committed, and no other order can derive it. This restores the EVM's
+//! "intent1's hash authorizes the order" property transitively, and it is a
+//! security boundary — read the doc comment there before touching the seeds.
 //!
 //! Templates use segments and typed amount/vault items. Remote recipients support
 //! EVM, TRON and Solana and are DATA only; local custody never follows a remote
@@ -121,10 +122,21 @@ use types::Order;
 pub mod intent_chainer {
     use super::*;
 
-    /// Records the complete nested preimage as a self-CPI event. Permissionless;
-    /// requires the event authority and this program, not a custody account.
+    /// Records an order's parameters and both commitment halves as a self-CPI
+    /// event. Permissionless; requires the event authority and this program, not a
+    /// custody account.
     pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> Result<()> {
         instructions::announce_order(ctx, args)
+    }
+
+    /// Validates a template and records its preimage as a self-CPI event, keyed by
+    /// its hash. The inline counterpart of `seal_order_buffer`; same accounts as
+    /// `announce_order`.
+    pub fn announce_template(
+        ctx: Context<AnnounceTemplate>,
+        args: AnnounceTemplateArgs,
+    ) -> Result<()> {
+        instructions::announce_template(ctx, args)
     }
 
     /// Measures the escrow's balance of one mint, resolves intent2's route and
@@ -152,7 +164,8 @@ pub mod intent_chainer {
         instructions::write_order_buffer(ctx, args)
     }
 
-    /// Validate the full preimage/commitment, emit OrderAnnounced, then seal it.
+    /// Validate the staged template against its commitment, emit TemplateAnnounced,
+    /// then seal it.
     pub fn seal_order_buffer(ctx: Context<SealOrderBuffer>) -> Result<()> {
         instructions::seal_order_buffer(ctx)
     }

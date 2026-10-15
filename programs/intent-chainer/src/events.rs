@@ -12,7 +12,6 @@ use eco_svm_std::Bytes32;
 pub struct IntentChained {
     /// Intent2's hash, computed from the spliced route and the resolved reward.
     pub intent_hash: Bytes32,
-    /// Commitment that seeded the escrow authority; identifies the order.
     /// Commitment to the template this order rendered.
     pub template_hash: Bytes32,
     /// Commitment to its parameters. With `template_hash` this derives the escrow
@@ -34,11 +33,12 @@ pub struct IntentChained {
     pub published: bool,
 }
 
-/// The complete order preimage, recorded as an Anchor self-CPI event.
+/// The complete parameter preimage, recorded as an Anchor self-CPI event.
 ///
-/// Carries the whole order, which is the point: the escrow authority is
-/// `keccak(borsh(order))`, so without the preimage a funded escrow has no
-/// derivation path and no sweep. See [`crate::instructions::announce_order`].
+/// Carries the whole order, which is the point: the escrow authority is seeded by
+/// `sha256(borsh(order))` and the template hash, so without both preimages a
+/// funded escrow has no derivation path and no sweep. The template half is
+/// [`TemplateAnnounced`]. See [`crate::instructions::announce_order`].
 #[event]
 #[derive(new)]
 pub struct OrderAnnounced {
@@ -55,6 +55,10 @@ pub struct OrderAnnounced {
     pub order: crate::types::Order,
 }
 
+/// The complete template preimage, recorded as an Anchor self-CPI event by
+/// [`crate::instructions::announce_template`] (inline) or `seal_order_buffer`
+/// (staged). Recovering a funded escrow needs this AND the order's
+/// [`OrderAnnounced`].
 #[event]
 #[derive(derive_new::new)]
 pub struct TemplateAnnounced {

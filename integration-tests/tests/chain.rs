@@ -10,19 +10,31 @@
 mod common;
 
 use anchor_lang::prelude::AccountMeta;
+use anchor_lang::{AnchorDeserialize, Discriminator};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
-use common::intent_chainer_context::IDENTITY_SCALE;
-use common::{contains_cpi_event, contains_event, is_error, Context};
+use common::intent_chainer_context::{
+    announce_order_instruction, announce_template_instruction, event_authority, ChainedIntent,
+    IDENTITY_SCALE,
+};
+use common::template_transport::{transaction_size, PACKET_BYTES};
+use common::{
+    contains_cpi_event, contains_event, is_error, order_buffer_context as staging, Context,
+};
 use eco_svm_std::prover::Proof;
 use eco_svm_std::CHAIN_ID;
-use intent_chainer::events::IntentChained;
-use intent_chainer::instructions::ChainerError;
+use intent_chainer::events::{IntentChained, OrderAnnounced, TemplateAnnounced};
+use intent_chainer::instructions::{ChainerError, MAX_ORDER_CHUNK_BYTES};
 use intent_chainer::state::vault_pda;
-use intent_chainer::types::{MAX_ROUTE_LEN, WAD};
+use intent_chainer::types::{
+    Amount, Derivation, EvmDerivation, Item, Template, TemplateProgram, Vault, MAX_ITEMS,
+    MAX_ORDER_BYTES, MAX_ROUTE_LEN, WAD,
+};
+use litesvm::types::TransactionMetadata;
 use portal::state::{
     dispatcher_pda, executor_pda, proof_closer_pda, FulfillMarker, WithdrawnMarker,
 };
 use portal::types::{intent_hash, TokenAmount};
+use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 
@@ -1830,11 +1842,13 @@ fn realistic_evm_routes_execute_through_packet_checked_staging() {
 // announce_order
 // ===========================================================================
 
-/// The escrow authority is `keccak(borsh(order))`, so an order whose preimage is
-/// lost strands its balance: there is no path from the address back to the order,
-/// and no sweep that does not need the order to derive its signer. `announce_order`
-/// is the on-chain record that closes that gap — the EVM contract gets the
-/// equivalent for free, because its order rides inside intent1's calldata.
+/// The escrow authority is seeded by `template_hash` and `params_hash`, so an order
+/// whose preimage is lost strands its balance: there is no path from the address
+/// back to the order, and no sweep that does not need the order to derive its
+/// signer. `announce_order` records the parameter half of that gap, and
+/// `announce_template` (or `seal_order_buffer`) the template half — the EVM
+/// contract gets the equivalent for free, because its order rides inside intent1's
+/// calldata.
 #[test]
 fn announce_order_puts_the_preimage_on_the_record() {
     let (mut ctx, base_mint, recipient_ata) = setup();
@@ -1879,12 +1893,11 @@ fn announce_order_is_permissionless_and_works_before_funding() {
     assert!(ctx.intent_chainer().announce_order(&order).is_ok());
 }
 
-/// A malformed order can never be consumed by `chain`, so it must not get a
-/// record either.
+/// A malformed template can never be consumed by `chain`, so it must not get a
+/// record either. `announce_order` records parameters only, so the template is
+/// rejected wherever it is actually presented — `chain`, `announce_template`, and
+/// `seal_order_buffer` on the staged path — and all three must agree on why.
 #[test]
-/// `announce_order` now records parameters only, so a malformed TEMPLATE is no
-/// longer its business — it is rejected where the template is actually presented,
-/// which is `chain` (and `seal_order_buffer` on the staged path).
 fn chain_rejects_a_template_announce_could_never_record() {
     let (mut ctx, base_mint, recipient_ata) = setup();
     let (order, mut template) = ctx.intent_chainer().svm_order(
@@ -1910,6 +1923,25 @@ fn chain_rejects_a_template_announce_could_never_record() {
         .intent_chainer()
         .chain(&malformed, false)
         .is_err_and(is_error(ChainerError::SegmentCountMismatch)));
+    assert!(ctx
+        .intent_chainer()
+        .announce_template(&malformed.template)
+        .is_err_and(is_error(ChainerError::SegmentCountMismatch)));
+
+    let payer = ctx.payer.insecure_clone();
+    let buffer = staging::upload(
+        &mut ctx,
+        &payer,
+        Pubkey::new_unique().to_bytes(),
+        malformed.order.template_hash,
+        &borsh::to_vec(&malformed.template).unwrap(),
+    );
+    assert!(
+        staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+            .0
+            .is_err_and(is_error(ChainerError::SegmentCountMismatch))
+    );
+    assert_eq!(ctx.token_balance(&chained.escrow_ata), DELIVERED);
 }
 
 /// The announcement must survive the log budget at the route cap — and
@@ -1965,6 +1997,366 @@ fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
     );
     // Measured at 4,530 of 10,000 when written — recorded so a future change that
     // eats the headroom is visible as a number, not just a pass.
+}
+
+// ===========================================================================
+// announce_template
+// ===========================================================================
+
+/// `sha256("global:announce_template")[..8]`, computed outside Anchor. The solver
+/// encodes this instruction by hand, so the discriminator is pinned as a literal
+/// rather than read back from the generated code it is meant to check.
+const ANNOUNCE_TEMPLATE_DISCRIMINATOR: [u8; 8] = [22, 202, 224, 167, 208, 241, 232, 50];
+
+/// Decodes the `TemplateAnnounced` record from inner instructions alone, as an
+/// indexer would — rather than comparing against a value the test already holds.
+fn decode_template_announced(meta: &TransactionMetadata) -> TemplateAnnounced {
+    meta.inner_instructions
+        .iter()
+        .flatten()
+        .find_map(|inner| {
+            let data = &inner.instruction.data;
+            (data.get(..8)? == anchor_lang::event::EVENT_IX_TAG_LE
+                && data.get(8..16)? == TemplateAnnounced::DISCRIMINATOR)
+                .then(|| TemplateAnnounced::try_from_slice(&data[16..]).unwrap())
+        })
+        .expect("TemplateAnnounced must be recorded as a self-CPI event")
+}
+
+/// Swaps in a template `resolve` cannot render, keeping the order committed to it
+/// and custody following that commitment.
+fn with_template(
+    ctx: &mut Context,
+    chained: &ChainedIntent,
+    template: TemplateProgram,
+) -> ChainedIntent {
+    let mut swapped = chained.clone();
+    swapped.order.template_hash = template.hash().unwrap();
+    swapped.template = template;
+    ctx.intent_chainer().rebind_escrow(&mut swapped);
+    swapped
+}
+
+/// Before `announce_template`, the only way to put a template on the record was
+/// `seal_order_buffer`, so an order small enough for the inline `chain` had no
+/// template record at all. The record must be keyed by exactly the hash `chain`
+/// checks: decode it, execute the order from it, and nothing else.
+#[test]
+fn announce_template_records_the_hash_chain_checks() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let (order, template) = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, &template, DELIVERED, recipient_ata);
+
+    let meta = ctx
+        .intent_chainer()
+        .announce_template(&template)
+        .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    let announced = decode_template_announced(&meta);
+    assert_eq!(announced.template_hash, order.template_hash);
+
+    // Execute inline from the recorded preimage, not the one the test built.
+    let recovered = ChainedIntent {
+        template: announced.template,
+        ..chained.clone()
+    };
+    ctx.intent_chainer().seed_escrow(&recovered, DELIVERED);
+    ctx.intent_chainer()
+        .chain(&recovered, false)
+        .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+}
+
+/// Announcing grants nothing, so it needs no signer beyond the fee payer, and it
+/// must work before the escrow is funded. The instruction is also built here from
+/// the documented ABI alone — discriminator, `borsh(TemplateProgram)`, and the two
+/// event accounts — since that is what the solver codes against.
+#[test]
+fn announce_template_needs_only_the_fee_payer_and_matches_the_documented_abi() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let (_order, template) = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+
+    let mut data = ANNOUNCE_TEMPLATE_DISCRIMINATOR.to_vec();
+    data.extend_from_slice(&borsh::to_vec(&template).unwrap());
+    let by_hand = Instruction {
+        program_id: intent_chainer::ID,
+        accounts: vec![
+            AccountMeta::new_readonly(event_authority(), false),
+            AccountMeta::new_readonly(intent_chainer::ID, false),
+        ],
+        data,
+    };
+    assert_eq!(by_hand, announce_template_instruction(&template));
+    assert_eq!(
+        intent_chainer::instruction::AnnounceTemplate::DISCRIMINATOR,
+        ANNOUNCE_TEMPLATE_DISCRIMINATOR
+    );
+
+    let meta = ctx
+        .send_template_instruction(by_hand)
+        .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    assert!(contains_cpi_event(TemplateAnnounced::new(
+        template.hash().unwrap(),
+        template.clone()
+    ))(meta));
+}
+
+/// "Oversized" in the sense that matters on chain: every encoded bound holds — the
+/// template is under 1 KiB — but vault references are two bytes on the wire and
+/// 32 rendered, so the rendering exceeds the aggregate cap. The inline record must
+/// refuse it exactly as `seal_order_buffer` and `chain` do.
+#[test]
+fn announce_template_refuses_an_over_rendered_template_as_seal_and_chain_do() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let (order, template) = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, &template, DELIVERED, recipient_ata);
+
+    let evm = Derivation::Evm(EvmDerivation {
+        portal: [1; 20],
+        prefix: 0xff,
+        implementation: [2; 20],
+        init_code_hash: [3; 32],
+    });
+    let references = Template {
+        segments: vec![vec![]; MAX_ITEMS + 1],
+        items: vec![Item::Vault(0); MAX_ITEMS],
+    };
+    let mut vaults = vec![Vault {
+        destination: 8453,
+        route: Template {
+            segments: vec![vec![], vec![]],
+            items: vec![Item::Amount(Amount::output(32, false))],
+        },
+        reward: Template::literal(vec![]),
+        derivation: evm.clone(),
+    }];
+    // 32 + 4 * 512 rendered bytes: the fourth referencing node crosses 2048.
+    vaults.extend((0..4).map(|_| Vault {
+        destination: 8453,
+        route: references.clone(),
+        reward: references.clone(),
+        derivation: evm.clone(),
+    }));
+    let over_rendered = TemplateProgram {
+        vaults,
+        route: Template::literal(vec![]),
+    };
+    assert!(borsh::to_vec(&over_rendered).unwrap().len() < 1024);
+    let malformed = with_template(&mut ctx, &chained, over_rendered);
+
+    assert!(ctx
+        .intent_chainer()
+        .announce_template(&malformed.template)
+        .is_err_and(is_error(ChainerError::RenderedBytesExceeded)));
+    assert!(ctx
+        .intent_chainer()
+        .chain(&malformed, false)
+        .is_err_and(is_error(ChainerError::RenderedBytesExceeded)));
+
+    let payer = ctx.payer.insecure_clone();
+    let buffer = staging::upload(
+        &mut ctx,
+        &payer,
+        Pubkey::new_unique().to_bytes(),
+        malformed.order.template_hash,
+        &borsh::to_vec(&malformed.template).unwrap(),
+    );
+    assert!(
+        staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+            .0
+            .is_err_and(is_error(ChainerError::RenderedBytesExceeded))
+    );
+}
+
+/// Over the encoded cap, every field bound holds but the whole does not. The
+/// template reader caps input at `MAX_ORDER_BYTES`, so `announce_template` refuses
+/// it before validation runs, as `chain` does; the staged path refuses the same
+/// bytes earlier still, at `init_order_buffer`, which never lets seal see them.
+/// Too large for a packet either way, so the announcement here arrives by CPI.
+#[test]
+fn announce_template_refuses_a_template_over_the_byte_cap() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    let (order, template) = ctx.intent_chainer().svm_order(
+        base_mint,
+        recipient_ata,
+        local_prover::ID,
+        IDENTITY_SCALE,
+        1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, &template, DELIVERED, recipient_ata);
+
+    let oversized = TemplateProgram {
+        vaults: vec![Vault {
+            destination: 8453,
+            route: Template::literal(vec![0xaa; 2000]),
+            reward: Template::literal(vec![0xbb; 200]),
+            derivation: Derivation::Evm(EvmDerivation {
+                portal: [1; 20],
+                prefix: 0xff,
+                implementation: [2; 20],
+                init_code_hash: [3; 32],
+            }),
+        }],
+        route: Template::literal(vec![0xcc; 2000]),
+    };
+    let bytes = borsh::to_vec(&oversized).unwrap();
+    assert!(bytes.len() > MAX_ORDER_BYTES);
+    let malformed = with_template(&mut ctx, &chained, oversized);
+
+    let did_not_deserialize =
+        || is_error(anchor_lang::error::ErrorCode::InstructionDidNotDeserialize);
+    assert!(ctx
+        .intent_chainer()
+        .announce_template(&malformed.template)
+        .is_err_and(did_not_deserialize()));
+    assert!(ctx
+        .intent_chainer()
+        .chain(&malformed, false)
+        .is_err_and(did_not_deserialize()));
+
+    let payer = ctx.payer.insecure_clone();
+    let (init, _) = staging::send(
+        &mut ctx,
+        &payer,
+        &[staging::init(
+            payer.pubkey(),
+            Pubkey::new_unique().to_bytes(),
+            malformed.order.template_hash,
+            bytes.len(),
+            &bytes[..MAX_ORDER_CHUNK_BYTES],
+        )],
+    );
+    assert!(init.is_err_and(is_error(ChainerError::OrderTooLarge)));
+}
+
+/// The inline path's whole prepare-and-execute sequence, sized on the wire.
+///
+/// The solver sends `[announce_template, announce_order]` as ONE transaction
+/// before funding intent1, then the inline `chain` once intent1 settles. Both must
+/// fit a packet for every template the inline `chain` itself can carry, or the
+/// inline path cannot put its template on the record.
+///
+/// Measured, not computed: the template grows a byte at a time until the signed
+/// inline `chain` no longer fits, in the same envelope the staged path is sized
+/// with (CU limit and CU price, legacy message, no ALT), and the announcements are
+/// measured at every size on the way. The largest size is then actually submitted.
+/// Run with `--nocapture` for the numbers.
+#[test]
+fn inline_announcements_fit_wherever_the_inline_chain_fits() {
+    let (mut ctx, base_mint, recipient_ata) = setup();
+    ctx.compute_limit = 1_400_000;
+    let payer = ctx.payer.insecure_clone();
+    let size = |ctx: &Context, instructions: &[Instruction]| {
+        transaction_size(&staging::transaction(ctx, &payer, instructions))
+    };
+
+    let mut largest = None;
+    for route_len in 200.. {
+        let (order, template) =
+            ctx.intent_chainer()
+                .large_route_order(base_mint, local_prover::ID, route_len);
+        let chained = ctx
+            .intent_chainer()
+            .resolve(&order, &template, DELIVERED, recipient_ata);
+        let chain = ctx.intent_chainer().chain_instruction(&chained, false);
+        if size(&ctx, &[chain]) > PACKET_BYTES {
+            break;
+        }
+        let pair = [
+            announce_template_instruction(&template),
+            announce_order_instruction(&order),
+        ];
+        let pair_size = size(&ctx, &pair);
+        assert!(
+            pair_size <= PACKET_BYTES,
+            "the inline chain fits a {}-byte template but its announcements take {pair_size} bytes",
+            borsh::to_vec(&template).unwrap().len()
+        );
+        largest = Some(chained);
+    }
+    let chained = largest.expect("the smallest template must fit the inline chain");
+    let (order, template) = (chained.order.clone(), chained.template.clone());
+    let template_len = borsh::to_vec(&template).unwrap().len();
+
+    let (paired, pair_size) = staging::send(
+        &mut ctx,
+        &payer,
+        &[
+            announce_template_instruction(&template),
+            announce_order_instruction(&order),
+        ],
+    );
+    let paired = paired.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    assert!(contains_cpi_event(TemplateAnnounced::new(
+        order.template_hash,
+        template.clone()
+    ))(paired.clone()));
+    assert!(contains_cpi_event(OrderAnnounced::new(
+        order.template_hash,
+        chained.params_hash,
+        chained.escrow_authority,
+        order.clone()
+    ))(paired.clone()));
+
+    let (alone, template_size) = staging::send(
+        &mut ctx,
+        &payer,
+        &[announce_template_instruction(&template)],
+    );
+    let alone = alone.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+
+    // Not asserted: the same pair plus idempotent escrow-ATA creation, which the
+    // staged path bundles with its seal. Recorded so a client can see the margin.
+    let create_ata = anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account_idempotent(
+        &payer.pubkey(), &chained.escrow_authority, &base_mint, &ctx.token_program,
+    );
+    let with_ata_size = size(
+        &ctx,
+        &[
+            announce_template_instruction(&template),
+            announce_order_instruction(&order),
+            create_ata,
+        ],
+    );
+
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+    let chain = ctx.intent_chainer().chain_instruction(&chained, false);
+    let (executed, chain_size) = staging::send(&mut ctx, &payer, &[chain]);
+    let executed = executed.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
+
+    println!(
+        "inline transport, largest inline-chain template ({template_len} bytes): \
+         chain={chain_size} CU={}; announce_template={template_size} CU={}; \
+         [announce_template, announce_order]={pair_size} CU={}; \
+         same pair + escrow ATA={with_ata_size} (not submitted)",
+        executed.compute_units_consumed,
+        alone.compute_units_consumed,
+        paired.compute_units_consumed,
+    );
 }
 
 // ===========================================================================

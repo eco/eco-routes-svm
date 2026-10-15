@@ -4,7 +4,7 @@ mod common;
 mod fixtures;
 
 use anchor_lang::prelude::AccountMeta;
-use anchor_lang::{AccountDeserialize, InstructionData, ToAccountMetas};
+use anchor_lang::{AccountDeserialize, Discriminator, InstructionData, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id as ata;
 use common::intent_chainer_context::{keccak, ChainedIntent};
 use common::{
@@ -383,6 +383,14 @@ fn all_cross_vm_fixtures_fund_only_the_local_vault_and_publish_exact_bytes() {
             c.escrow_authority,
             order.clone()
         ))(announcement));
+        let template_announcement = ctx
+            .intent_chainer()
+            .announce_template(&template)
+            .unwrap_or_else(|e| panic!("{}: {}", case["name"], e.err));
+        assert!(contains_cpi_event(TemplateAnnounced::new(
+            order.template_hash,
+            template.clone()
+        ))(template_announcement));
         let meta = ctx
             .intent_chainer()
             .chain(&c, false)
@@ -406,8 +414,9 @@ fn all_cross_vm_fixtures_fund_only_the_local_vault_and_publish_exact_bytes() {
             assert_eq!(ctx.get_account(&remote), before);
         }
         println!(
-            "{}: order={} root={} CU={} logs={}",
+            "{}: template={} order={} root={} CU={} logs={}",
             case["name"],
+            borsh::to_vec(&template).unwrap().len(),
             borsh::to_vec(&order).unwrap().len(),
             route.len(),
             meta.compute_units_consumed,
@@ -612,7 +621,7 @@ fn malformed_nested_wire_data_cannot_move_funded_escrow() {
 }
 
 #[test]
-fn invalid_nested_programs_are_rejected_by_seal_and_chain_before_transfer() {
+fn invalid_nested_programs_are_rejected_by_seal_announce_and_chain_before_transfer() {
     let cases = fixtures::nested();
     for invalid in 0..13 {
         let (mut ctx, order, mut template, input, route) = setup(&cases["cases"][0]);
@@ -666,11 +675,14 @@ fn invalid_nested_programs_are_rejected_by_seal_and_chain_before_transfer() {
         let c = resolve(&mut ctx, &order, &template, input, &route);
         ctx.intent_chainer().seed_escrow(&c, input);
         let chain_error = ctx.intent_chainer().chain(&c, false).unwrap_err();
+        let announce_error = ctx
+            .intent_chainer()
+            .announce_template(&template)
+            .unwrap_err();
 
-        // The template is now presented at execution, not at announcement, so the
-        // second gate to agree with is `seal_order_buffer` — the other place the
-        // preimage is validated — rather than `announce_order`, which records
-        // parameters only.
+        // Every place a template is presented validates it, and they must agree:
+        // `chain`, `announce_template` inline, and `seal_order_buffer` staged.
+        // `announce_order` records parameters only, so it is not one of them.
         let payer = ctx.payer.insecure_clone();
         let buffer = staging::upload(
             &mut ctx,
@@ -688,6 +700,11 @@ fn invalid_nested_programs_are_rejected_by_seal_and_chain_before_transfer() {
         };
         assert_eq!(
             code(&chain_error.err),
+            code(&seal_error.err),
+            "same validation gate, case {invalid}"
+        );
+        assert_eq!(
+            code(&announce_error.err),
             code(&seal_error.err),
             "same validation gate, case {invalid}"
         );
@@ -813,6 +830,16 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         c.escrow_authority,
         order.clone()
     ))(standalone));
+    // At the byte cap `announce_template` cannot be a packet, but a CPI caller can
+    // still send it, so it must hold under the stock heap like seal does.
+    let template_record = ctx
+        .intent_chainer()
+        .announce_template(&template)
+        .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    assert!(contains_cpi_event(TemplateAnnounced::new(
+        order.template_hash,
+        template.clone()
+    ))(template_record));
     // Intentionally exhaust normal logs BEFORE the large announcement. The CPI
     // event must remain byte-exact in recorded inner instruction data, not a
     // truncated log. The large half is the TEMPLATE now, so the announcement that
@@ -857,9 +884,17 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         template.hash().unwrap(),
         template.clone()
     ))(meta.clone()));
+    let event_bytes = meta
+        .inner_instructions
+        .iter()
+        .flatten()
+        .map(|inner| &inner.instruction.data)
+        .find(|data| data.get(8..16) == Some(TemplateAnnounced::DISCRIMINATOR))
+        .map_or(0, Vec::len);
     println!(
-        "max announcement: template={} CU={} logs={}",
+        "max announcement: template={} event={} CU={} logs={}",
         MAX_ORDER_BYTES,
+        event_bytes,
         meta.compute_units_consumed,
         meta.logs.iter().map(String::len).sum::<usize>()
     );
@@ -871,7 +906,7 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
     assert_eq!(ctx.token_balance(&c.vault_ata), 1);
     assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
     println!(
-        "max nested: nodes={} items/template={} aggregate={} order={} CU={} logs={}",
+        "max nested: nodes={} items/template={} aggregate={} template={} CU={} logs={}",
         MAX_VAULTS,
         MAX_ITEMS,
         MAX_RENDERED_BYTES,
@@ -1276,7 +1311,7 @@ fn native_staging_maximum_nested_orders_hold_under_stock_heap_and_publish_fully(
         assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
         assert_eq!(ctx.token_balance(&c.vault_ata), 1);
         println!(
-            "native maximum: Order={} root={} chain CU={}",
+            "native maximum: template={} root={} chain CU={}",
             bytes.len(),
             route.len(),
             result.compute_units_consumed

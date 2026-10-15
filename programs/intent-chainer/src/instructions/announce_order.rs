@@ -11,9 +11,17 @@ use crate::types::{Order, TemplateProgram};
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct AnnounceOrderArgs {
     /// The parameters to put on the record. The template this commits to is
-    /// announced separately — by `seal_order_buffer`, or by a prior announcement —
-    /// because one template serves many orders and is the large half.
+    /// announced separately — by [`announce_template`] when it travels inline, or
+    /// by `seal_order_buffer` when it is staged — because one template serves many
+    /// orders and is the large half.
     pub order: Order,
+}
+
+/// Args for [`announce_template`].
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct AnnounceTemplateArgs {
+    /// The template preimage to put on the record, keyed by its own hash.
+    pub template: TemplateProgram,
 }
 
 /// Self-CPI event accounts. No custody or new escrow account is introduced.
@@ -21,9 +29,17 @@ pub struct AnnounceOrderArgs {
 #[derive(Accounts)]
 pub struct AnnounceOrder {}
 
-/// Records the complete, statically validated preimage as a durable self-CPI
-/// event. Publish it before funding intent1 or retain the preimage elsewhere:
-/// the escrow address cannot be inverted to recover a lost template.
+/// The same self-CPI event accounts as [`AnnounceOrder`], and nothing else.
+#[event_cpi]
+#[derive(Accounts)]
+pub struct AnnounceTemplate {}
+
+/// Records an order's parameters, both commitment halves and the escrow
+/// authority they derive as a durable self-CPI event. This is half of the
+/// record: recovering a funded escrow also needs the template preimage, which
+/// [`announce_template`] or `seal_order_buffer` records. Publish both before
+/// funding intent1 or retain the preimages elsewhere: the escrow address cannot
+/// be inverted to recover either half.
 ///
 /// Permissionless and custody-free. An announcement does not prove that all
 /// future measurements fit the template, attest opaque remote route semantics,
@@ -44,6 +60,25 @@ pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> R
     OrderAnnounced::new(order.template_hash, params_hash, escrow_authority, order)
         .serialize(&mut data)?;
     emit_self_cpi(ctx.accounts.event_authority.to_account_info(), data)
+}
+
+/// Records a template preimage as a durable self-CPI event — the inline
+/// counterpart of `seal_order_buffer`'s announcement, for a template small enough
+/// to travel in one transaction.
+///
+/// Runs the same static validation seal does and keys the record by the same
+/// hash `chain` checks `Order::template_hash` against. Permissionless and
+/// custody-free: one record serves every order that commits to this template.
+pub fn announce_template(ctx: Context<AnnounceTemplate>, args: AnnounceTemplateArgs) -> Result<()> {
+    let AnnounceTemplateArgs { template } = args;
+
+    template.validate()?;
+    let template_hash = template.hash()?;
+    emit_template_announcement(
+        ctx.accounts.event_authority.to_account_info(),
+        template,
+        template_hash,
+    )
 }
 
 pub(crate) fn emit_template_announcement(
