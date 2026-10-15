@@ -1655,7 +1655,7 @@ dependencies = [
  "portal",
  "serde_json",
  "solana-keccak-hasher",
- "tiny-keccak",
+ "solana-sha256-hasher",
 ]
 
 [[package]]

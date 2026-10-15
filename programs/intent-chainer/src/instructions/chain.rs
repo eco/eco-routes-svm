@@ -6,20 +6,23 @@ use anchor_spl::associated_token::{self, get_associated_token_address_with_progr
 use anchor_spl::{token, token_2022};
 use eco_svm_std::Bytes32;
 use portal::types::{intent_hash, TokenTransferAccounts};
-use tiny_keccak::{Hasher, Keccak};
 
 use crate::events::IntentChained;
 use crate::instructions::ChainerError;
 use crate::state::{escrow_authority_pda, vault_pda, ESCROW_SEED};
-use crate::types::{scale_amount, AmountContext, Order};
+use crate::types::{scale_amount, AmountContext, Order, TemplateProgram};
 
 /// Args for [`chain_intent`].
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct ChainArgs {
-    /// The committed intent2 template, minus the amount. Hashed to derive the
-    /// escrow authority, so presenting a different order simply fails to derive
-    /// the account that holds the money.
+    /// The committed intent2 parameters, minus the amount. Hashed with
+    /// [`ChainArgs::template`] to derive the escrow authority, so presenting a
+    /// different order simply fails to derive the account that holds the money.
     pub order: Order,
+    /// The template preimage `order.template_hash` commits to. Carried only in the
+    /// transaction that executes this order: a parent referencing this order as a
+    /// child needs the two hashes, never these bytes.
+    pub template: TemplateProgram,
     /// Whether to also CPI `portal::publish` so intent2 appears in portal's own
     /// `IntentPublished` stream.
     ///
@@ -93,24 +96,28 @@ pub(crate) fn chain_order<'info>(
     args: ChainArgs,
     buffered_commitment: Option<Bytes32>,
 ) -> Result<()> {
-    let ChainArgs { order, publish } = args;
+    let ChainArgs {
+        order,
+        template,
+        publish,
+    } = args;
     // The caller may strengthen the author's choice, never weaken it.
     let publish = publish || order.require_publish;
 
-    validate_order(&order)?;
-    let order_commitment = order.hash();
+    validate_order(&order, &template)?;
+    let params_hash = order.params_hash()?;
     if let Some(expected) = buffered_commitment {
         require!(
-            order_commitment == expected,
+            params_hash == expected,
             ChainerError::OrderCommitmentMismatch
         );
     }
-    let escrow = validate_escrow(&ctx, &order, &order_commitment)?;
+    let escrow = validate_escrow(&ctx, &order, &params_hash)?;
 
     let amount_in = measure(&ctx, &order)?;
     let amount_out = scale_amount(amount_in as u128, order.scale)?;
 
-    let route = order.template.render(AmountContext {
+    let route = template.render(AmountContext {
         input: amount_in,
         output: amount_out,
     })?;
@@ -121,7 +128,7 @@ pub(crate) fn chain_order<'info>(
     let intent_hash = intent_hash(order.destination, &route_hash, &reward.hash());
     validate_destination(&ctx, &order, &intent_hash)?;
 
-    push(&ctx, &order_commitment, escrow, amount_in)?;
+    push(&ctx, &order, &params_hash, escrow, amount_in)?;
 
     if publish {
         publish_intent(&ctx, order.destination, route, reward)?;
@@ -129,7 +136,7 @@ pub(crate) fn chain_order<'info>(
 
     emit!(IntentChained::new(
         intent_hash,
-        order_commitment,
+        params_hash,
         ctx.accounts.vault.key(),
         order.base_mint,
         amount_in,
@@ -146,8 +153,14 @@ pub(crate) fn chain_order<'info>(
 }
 
 /// Rejects a malformed order before anything is measured or moved.
-pub(crate) fn validate_order(order: &Order) -> Result<()> {
-    order.validate_template()?;
+pub(crate) fn validate_order(order: &Order, template: &TemplateProgram) -> Result<()> {
+    order.validate_params()?;
+    // The template is supplied, not committed inline, so bind it before use.
+    require!(
+        template.hash()? == order.template_hash,
+        ChainerError::TemplateCommitmentMismatch
+    );
+    template.validate()?;
 
     require!(order.scale > 0, ChainerError::InvalidScale);
 
@@ -195,14 +208,14 @@ struct Escrow {
 /// Binds the accounts holding the money to the order that was presented.
 ///
 /// This is the whole authorization story: the escrow authority is
-/// `escrow_authority_pda(keccak(borsh(order)))`, so an order the caller invented
+/// `escrow_authority_pda(template_hash, params_hash)`, so an order the caller invented
 /// derives an authority that holds nothing, and the order intent1 committed to
 /// derives the one that does. No signer check is needed or useful — see
 /// [`crate::state::escrow_authority_pda`].
 fn validate_escrow(
     ctx: &Context<Chain>,
     order: &Order,
-    order_commitment: &Bytes32,
+    params_hash: &Bytes32,
 ) -> Result<Escrow> {
     // The portal is the order's, never the caller's. Everything downstream — the
     // vault the escrow sweeps into, the marker consulted for an already-settled
@@ -214,7 +227,7 @@ fn validate_escrow(
         ChainerError::InvalidPortalProgram
     );
 
-    let (expected_authority, bump) = escrow_authority_pda(order_commitment);
+    let (expected_authority, bump) = escrow_authority_pda(&order.template_hash, params_hash);
     require!(
         ctx.accounts.escrow_authority.key() == expected_authority,
         ChainerError::InvalidEscrowAuthority
@@ -286,7 +299,7 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
     // cheap fail-fast.
     //
     // Here `chain` is necessarily its own transaction, so the balance IS at rest,
-    // and it is at rest in `escrow_authority_pda(keccak(borsh(order)))` — bound to
+    // and it is at rest in `escrow_authority_pda(template_hash, params_hash)` — bound to
     // exactly one order. This instruction is that escrow's only exit: there is no
     // sweep, no recovery instruction, and no later call can clear a marker. A
     // refusal is therefore permanent for that balance, so any check able to reject
@@ -320,7 +333,8 @@ fn validate_destination(ctx: &Context<Chain>, order: &Order, intent_hash: &Bytes
 /// data-carrying PDA there), and its native leg drains a short funder outright.
 fn push<'info>(
     ctx: &Context<'info, Chain<'info>>,
-    order_commitment: &Bytes32,
+    order: &Order,
+    params_hash: &Bytes32,
     escrow: Escrow,
     amount_in: u64,
 ) -> Result<()> {
@@ -348,9 +362,14 @@ fn push<'info>(
     // builder; this snapshot measures only what the current transfer delivers.
     let balance_before = accounts.to_data()?.amount;
 
-    // The commitment is threaded in rather than recomputed: `Order::hash` keccaks
-    // the whole order, route segments included, and once per call is enough.
-    let signer_seeds = [ESCROW_SEED, order_commitment.as_ref(), &[escrow.bump]];
+    // Both halves of the commitment, in the same order `escrow_authority_pda`
+    // derives them. Threaded in rather than recomputed; once per call is enough.
+    let signer_seeds = [
+        ESCROW_SEED,
+        order.template_hash.as_ref(),
+        params_hash.as_ref(),
+        &[escrow.bump],
+    ];
 
     accounts.transfer_with_signer(
         &token_program,
@@ -422,11 +441,8 @@ fn transfer_accounts<'info>(
 }
 
 fn keccak(bytes: &[u8]) -> Bytes32 {
-    let mut hasher = Keccak::v256();
-    let mut hash = [0u8; 32];
-
-    hasher.update(bytes);
-    hasher.finalize(&mut hash);
-
-    hash.into()
+    // Keccak, not SHA-256: this feeds `portal::types::intent_hash`, which is the
+    // cross-chain ABI. The syscall, not tiny_keccak — the in-program hasher cost
+    // ~130 CU/byte and the bytes are already contiguous here.
+    solana_keccak_hasher::hashv(&[bytes]).to_bytes().into()
 }

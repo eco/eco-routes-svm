@@ -3,6 +3,7 @@ use std::io::{self, Read, Write};
 
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
+use eco_svm_std::Bytes32;
 
 use crate::instructions::ChainerError;
 use crate::types::{scale_amount, WAD};
@@ -261,7 +262,32 @@ pub struct AmountContext {
 }
 
 impl TemplateProgram {
+    /// Commitment to the whole template program, including every nested node.
+    ///
+    /// SHA-256 by syscall over one contiguous Borsh copy: the preimage can be
+    /// kilobytes, and the syscall is ~1 CU/byte against the ~130 CU/byte that
+    /// streaming it through in-program keccak cost. Only ever a PDA seed here.
+    pub fn hash(&self) -> Result<Bytes32> {
+        crate::types::commitment_of(self)
+    }
+
+    /// Client helper. The handler independently measures and builds this same
+    /// context on-chain before validating the caller's LOCAL accounts.
+    pub fn build_route(&self, scale: u128, amount_in: u64) -> Result<Vec<u8>> {
+        self.validate()?;
+        self.render(AmountContext {
+            input: amount_in,
+            output: scale_amount(amount_in as u128, scale)?,
+        })
+    }
+
     pub fn validate(&self) -> Result<usize> {
+        // The template is the large half of an order, so the byte cap lives here
+        // rather than on the parameters, which are small and fixed-shape.
+        require!(
+            crate::types::borsh_len(self)? <= MAX_ORDER_BYTES,
+            ChainerError::OrderTooLarge
+        );
         require!(self.vaults.len() <= MAX_VAULTS, ChainerError::TooManyVaults);
         let mut total = 0usize;
         for (i, node) in self.vaults.iter().enumerate() {

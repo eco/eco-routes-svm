@@ -7,15 +7,16 @@ pub const ESCROW_SEED: &[u8] = b"escrow";
 /// Transport only: never a token custody authority or an execution signer.
 pub const ORDER_BUFFER_SEED: &[u8] = b"order_buffer";
 
-/// Fixed Borsh header followed by exactly `order_len` raw Borsh Order bytes.
+/// Fixed Borsh header followed by exactly `template_len` raw Borsh template bytes.
+/// The template is the large half of an order; its parameters ride inline.
 /// Keeping the payload outside a Vec avoids copying it on account load/exit.
 #[account]
 pub struct OrderBuffer {
     pub authority: Pubkey,
     /// Fresh random per-trade client seed; not a shared buffer index.
     pub seed: [u8; 32],
-    pub order_commitment: Bytes32,
-    pub order_len: u32,
+    pub template_hash: Bytes32,
+    pub template_len: u32,
     pub written: u32,
     pub sealed: bool,
     pub bump: u8,
@@ -55,8 +56,18 @@ impl OrderBuffer {
 /// hash-committed, and the address encodes exactly one order. Funding it *is*
 /// approval of the order behind it, and no other order can derive it. Collapsing
 /// these seeds to anything the order does not determine reopens the sweep.
-pub fn escrow_authority_pda(order_commitment: &Bytes32) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[ESCROW_SEED, order_commitment.as_ref()], &crate::ID)
+///
+/// The commitment is split in two, and the split is what lets orders chain
+/// without stacking: a parent references a child by these 32-byte hashes alone,
+/// so the child's template bytes never enter the parent's preimage. Both halves
+/// are load-bearing — dropping either lets a caller vary the uncommitted half and
+/// derive the same escrow for a different order. Neither depends on the measured
+/// amount, which is why this address, unlike a vault, is knowable in advance.
+pub fn escrow_authority_pda(template_hash: &Bytes32, params_hash: &Bytes32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[ESCROW_SEED, template_hash.as_ref(), params_hash.as_ref()],
+        &crate::ID,
+    )
 }
 
 /// Intent2's vault, derived under the **order's** portal rather than a linked-in
@@ -76,14 +87,22 @@ mod tests {
 
     #[test]
     fn escrow_authority_pda_deterministic() {
-        goldie::assert_json!(escrow_authority_pda(&Bytes32::from([42u8; 32])));
+        goldie::assert_json!(escrow_authority_pda(
+            &Bytes32::from([42u8; 32]),
+            &Bytes32::from([43u8; 32])
+        ));
     }
 
+    /// Both seeds independently move custody. Neither may be dropped: a caller
+    /// free to vary the uncommitted half derives one escrow for two orders.
     #[test]
-    fn escrow_authority_pda_varies_by_commitment() {
-        let (a, _) = escrow_authority_pda(&Bytes32::from([1u8; 32]));
-        let (b, _) = escrow_authority_pda(&Bytes32::from([2u8; 32]));
+    fn escrow_authority_pda_varies_by_either_half() {
+        let (t, p) = (Bytes32::from([1u8; 32]), Bytes32::from([2u8; 32]));
+        let base = escrow_authority_pda(&t, &p).0;
 
-        assert_ne!(a, b);
+        assert_ne!(escrow_authority_pda(&Bytes32::from([9u8; 32]), &p).0, base);
+        assert_ne!(escrow_authority_pda(&t, &Bytes32::from([9u8; 32])).0, base);
+        // The halves are positional, never interchangeable.
+        assert_ne!(escrow_authority_pda(&p, &t).0, base);
     }
 }

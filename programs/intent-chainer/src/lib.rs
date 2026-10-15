@@ -89,7 +89,6 @@ declare_id!("EcoiBpweBgv8guGqQd5FwERWnWBM9Knmg3NwB3PCAPj6");
 
 pub mod events;
 pub mod instructions;
-mod keccak_writer;
 pub mod state;
 pub mod template;
 pub mod types;
@@ -116,6 +115,7 @@ fn log_heap_usage(stage: &str) {
 }
 
 use instructions::*;
+use types::Order;
 
 #[program]
 pub mod intent_chainer {
@@ -160,9 +160,10 @@ pub mod intent_chainer {
     /// Permissionless execution from a read-only sealed buffer. No authority signer.
     pub fn chain_from_account<'info>(
         ctx: Context<'info, ChainFromAccount<'info>>,
+        order: Order,
         publish: bool,
     ) -> Result<()> {
-        instructions::chain_from_account(ctx, publish)
+        instructions::chain_from_account(ctx, order, publish)
     }
 
     /// Separate authority-only rent reclamation, including abandoned buffers.
