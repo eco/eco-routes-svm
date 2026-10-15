@@ -313,6 +313,7 @@ fn chain_emits_the_resolved_intent() {
     );
     let expected = IntentChained::new(
         chained.intent_hash,
+        chained.order.template_hash,
         chained.params_hash,
         chained.vault,
         base_mint,

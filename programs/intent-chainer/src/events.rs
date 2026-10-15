@@ -13,7 +13,11 @@ pub struct IntentChained {
     /// Intent2's hash, computed from the spliced route and the resolved reward.
     pub intent_hash: Bytes32,
     /// Commitment that seeded the escrow authority; identifies the order.
-    pub order_commitment: Bytes32,
+    /// Commitment to the template this order rendered.
+    pub template_hash: Bytes32,
+    /// Commitment to its parameters. With `template_hash` this derives the escrow
+    /// authority, so an indexer needs no other source to follow the money.
+    pub params_hash: Bytes32,
     /// Intent2's vault, which now holds `amount_in`.
     pub vault: Pubkey,
     /// The measured mint.
@@ -69,13 +73,14 @@ impl IntentChained {
     /// Hand-written rather than `derive_new`: nine fields trips
     /// `clippy::too_many_arguments`, and the lint is worth silencing explicitly
     /// here rather than losing a field an indexer needs. Every one earns its
-    /// place — `order_commitment` correlates back to intent1's escrow address,
+    /// place — the two commitment halves together derive intent1's escrow address,
     /// `route_hash` lets a reconstruction be verified, and `published` tells a
     /// consumer whether to expect portal's `IntentPublished` too.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         intent_hash: Bytes32,
-        order_commitment: Bytes32,
+        template_hash: Bytes32,
+        params_hash: Bytes32,
         vault: Pubkey,
         base_mint: Pubkey,
         amount_in: u64,
@@ -86,7 +91,8 @@ impl IntentChained {
     ) -> Self {
         Self {
             intent_hash,
-            order_commitment,
+            template_hash,
+            params_hash,
             vault,
             base_mint,
             amount_in,

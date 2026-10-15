@@ -140,6 +140,7 @@ pub(crate) fn chain_order<'info>(
 
     emit!(IntentChained::new(
         intent_hash,
+        order.template_hash,
         params_hash,
         ctx.accounts.vault.key(),
         order.base_mint,
