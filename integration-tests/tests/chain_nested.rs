@@ -162,6 +162,7 @@ fn prefunded_vaults_accept_the_full_transfer_through_both_transports() {
             ))(meta.clone()));
             assert!(contains_event(IntentChained::new(
                 c.intent_hash,
+                c.order.template_hash,
                 c.params_hash,
                 c.vault,
                 mint,
@@ -281,6 +282,7 @@ fn transfer_fee_push_shortfall_rolls_back_even_with_prefunding_and_staging() {
             ))(err.meta.clone()));
             assert!(!contains_event(IntentChained::new(
                 c.intent_hash,
+                c.order.template_hash,
                 c.params_hash,
                 c.vault,
                 mint,
@@ -345,6 +347,7 @@ fn wide_initial_output_is_scaled_without_narrowing_on_sbf() {
     ));
     assert!(contains_event(IntentChained::new(
         c.intent_hash,
+        c.order.template_hash,
         c.params_hash,
         c.vault,
         order.base_mint,
@@ -387,6 +390,7 @@ fn all_cross_vm_fixtures_fund_only_the_local_vault_and_publish_exact_bytes() {
         assert!(contains_event(published(&c, route.clone()))(meta.clone()));
         assert!(contains_event(IntentChained::new(
             c.intent_hash,
+            c.order.template_hash,
             c.params_hash,
             c.vault,
             order.base_mint,
