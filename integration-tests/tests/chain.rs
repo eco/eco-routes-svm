@@ -59,7 +59,7 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
     let (mut ctx, base_mint, recipient_ata) = setup();
 
     // --- intent2's committed order -----------------------------------------
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -68,7 +68,7 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
 
     // --- intent1: deliver the "swap output" into the escrow -----------------
     // The escrow ATA must exist before intent1 runs; creating it is permissionless.
@@ -235,7 +235,7 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
 #[test]
 fn chain_funds_the_vault_without_portal_fund() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -244,7 +244,7 @@ fn chain_funds_the_vault_without_portal_fund() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
 
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
     let result = ctx.intent_chainer().chain(&chained, false);
@@ -265,7 +265,7 @@ fn chain_funds_the_vault_without_portal_fund() {
 #[test]
 fn chain_measures_the_balance_rather_than_trusting_the_order() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -277,7 +277,7 @@ fn chain_measures_the_balance_rather_than_trusting_the_order() {
     // resulting vault is wrong for the real balance, so the program must refuse.
     let mismatched = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&mismatched, DELIVERED + 1);
 
     let result = ctx.intent_chainer().chain(&mismatched, false);
@@ -293,7 +293,7 @@ fn chain_measures_the_balance_rather_than_trusting_the_order() {
 #[test]
 fn chain_emits_the_resolved_intent() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -302,14 +302,18 @@ fn chain_emits_the_resolved_intent() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    let route_hash =
-        common::intent_chainer_context::keccak(&chained.order.build_route(DELIVERED).unwrap());
+    let route_hash = common::intent_chainer_context::keccak(
+        &chained
+            .order
+            .build_route(&chained.template, DELIVERED)
+            .unwrap(),
+    );
     let expected = IntentChained::new(
         chained.intent_hash,
-        chained.order_commitment,
+        chained.params_hash,
         chained.vault,
         base_mint,
         DELIVERED,
@@ -331,12 +335,12 @@ fn chain_emits_the_resolved_intent() {
 fn chain_applies_a_proportional_spread() {
     let (mut ctx, base_mint, recipient_ata) = setup();
     let scale = WAD / 100 * 99; // 100 bps
-    let order =
+    let (order, template) =
         ctx.intent_chainer()
             .svm_order(base_mint, recipient_ata, local_prover::ID, scale, 1);
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, 1_000_000, recipient_ata);
+        .resolve(&order, &template, 1_000_000, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, 1_000_000);
 
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
@@ -366,7 +370,7 @@ fn chain_applies_a_proportional_spread() {
 #[test]
 fn chain_splices_both_solana_amount_positions() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -375,13 +379,16 @@ fn chain_splices_both_solana_amount_positions() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
 
     let token_program = ctx.token_program;
     let reference =
         ctx.intent_chainer()
             .svm_route(base_mint, recipient_ata, token_program, DELIVERED);
-    let spliced = chained.order.build_route(DELIVERED).unwrap();
+    let spliced = chained
+        .order
+        .build_route(&chained.template, DELIVERED)
+        .unwrap();
 
     assert_eq!(
         spliced,
@@ -413,7 +420,7 @@ fn chain_splices_both_solana_amount_positions() {
 fn a_foreign_order_cannot_reach_another_orders_escrow() {
     let (mut ctx, base_mint, recipient_ata) = setup();
 
-    let victim_order = ctx.intent_chainer().svm_order(
+    let (victim_order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -422,16 +429,16 @@ fn a_foreign_order_cannot_reach_another_orders_escrow() {
     );
     let victim = ctx
         .intent_chainer()
-        .resolve(&victim_order, DELIVERED, recipient_ata);
+        .resolve(&victim_order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&victim, DELIVERED);
 
     // The attacker authors an order paying its reward to themselves.
     let attacker = Pubkey::new_unique();
     let mut attacker_order = victim_order.clone();
     attacker_order.reward.creator = attacker;
-    let attacker_chained = ctx
-        .intent_chainer()
-        .resolve(&attacker_order, DELIVERED, recipient_ata);
+    let attacker_chained =
+        ctx.intent_chainer()
+            .resolve(&attacker_order, &template, DELIVERED, recipient_ata);
 
     assert_ne!(
         attacker_chained.escrow_authority, victim.escrow_authority,
@@ -462,7 +469,7 @@ fn a_foreign_order_cannot_reach_another_orders_escrow() {
 #[test]
 fn every_order_field_moves_the_escrow_address() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let base = ctx.intent_chainer().svm_order(
+    let (base, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -471,7 +478,7 @@ fn every_order_field_moves_the_escrow_address() {
     );
     let baseline = ctx
         .intent_chainer()
-        .resolve(&base, DELIVERED, recipient_ata);
+        .resolve(&base, &template, DELIVERED, recipient_ata);
 
     let mut scale = base.clone();
     scale.scale = WAD / 2;
@@ -485,9 +492,9 @@ fn every_order_field_moves_the_escrow_address() {
     [scale, floor, prover, destination]
         .into_iter()
         .for_each(|order| {
-            let resolved = ctx
-                .intent_chainer()
-                .resolve(&order, DELIVERED, recipient_ata);
+            let resolved =
+                ctx.intent_chainer()
+                    .resolve(&order, &template, DELIVERED, recipient_ata);
             assert_ne!(
                 resolved.escrow_authority, baseline.escrow_authority,
                 "changing an order field must move the escrow"
@@ -502,14 +509,16 @@ fn every_order_field_moves_the_escrow_address() {
 #[test]
 fn chain_rejects_an_empty_escrow() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
         IDENTITY_SCALE,
         1,
     );
-    let chained = ctx.intent_chainer().resolve(&order, 1, recipient_ata);
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, &template, 1, recipient_ata);
 
     ctx.intent_chainer().seed_escrow(&chained, 0);
 
@@ -524,7 +533,7 @@ fn chain_rejects_an_empty_escrow() {
 #[test]
 fn chain_rejects_an_amount_below_the_floor() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -533,7 +542,7 @@ fn chain_rejects_an_amount_below_the_floor() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx
@@ -546,7 +555,7 @@ fn chain_rejects_an_amount_below_the_floor() {
 #[test]
 fn chain_rejects_a_reward_leg_that_is_not_the_measured_mint() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let mut order = ctx.intent_chainer().svm_order(
+    let (mut order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -557,7 +566,7 @@ fn chain_rejects_a_reward_leg_that_is_not_the_measured_mint() {
 
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx
@@ -569,7 +578,7 @@ fn chain_rejects_a_reward_leg_that_is_not_the_measured_mint() {
 #[test]
 fn chain_rejects_a_reward_with_more_than_one_leg() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let mut order = ctx.intent_chainer().svm_order(
+    let (mut order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -583,7 +592,7 @@ fn chain_rejects_a_reward_with_more_than_one_leg() {
 
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx
@@ -598,7 +607,7 @@ fn chain_rejects_a_reward_with_more_than_one_leg() {
 #[test]
 fn chain_rejects_a_reward_amount_authored_nonzero() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let mut order = ctx.intent_chainer().svm_order(
+    let (mut order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -609,7 +618,7 @@ fn chain_rejects_a_reward_amount_authored_nonzero() {
 
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx
@@ -621,7 +630,7 @@ fn chain_rejects_a_reward_amount_authored_nonzero() {
 #[test]
 fn chain_rejects_a_native_reward() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let mut order = ctx.intent_chainer().svm_order(
+    let (mut order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -632,7 +641,7 @@ fn chain_rejects_a_native_reward() {
 
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx
@@ -647,7 +656,7 @@ fn chain_rejects_a_native_reward() {
 fn chain_late_transfer_preserves_portal_refund_deadline() {
     for offset in [-301, -300, -299, -60, -1, 0, 1, 3600] {
         let (mut ctx, base_mint, recipient_ata) = setup();
-        let mut order = ctx.intent_chainer().svm_order(
+        let (mut order, template) = ctx.intent_chainer().svm_order(
             base_mint,
             recipient_ata,
             local_prover::ID,
@@ -658,7 +667,7 @@ fn chain_late_transfer_preserves_portal_refund_deadline() {
         order.require_publish = true;
         let chained = ctx
             .intent_chainer()
-            .resolve(&order, DELIVERED, recipient_ata);
+            .resolve(&order, &template, DELIVERED, recipient_ata);
         ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
         let creator = order.reward.creator;
         ctx.airdrop_token_ata(&base_mint, &creator, 0);
@@ -728,7 +737,7 @@ fn chain_late_transfer_preserves_proven_claim() {
     ctx.airdrop_token_ata(&base_mint, &beneficiary, 0);
     let recipient_ata =
         get_associated_token_address_with_program_id(&beneficiary, &base_mint, &ctx.token_program);
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -737,7 +746,7 @@ fn chain_late_transfer_preserves_proven_claim() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let solver = ctx.solver.pubkey();
@@ -848,7 +857,7 @@ fn chain_late_transfer_preserves_proven_claim() {
 #[test]
 fn chain_rejects_a_zero_scale() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let mut order = ctx.intent_chainer().svm_order(
+    let (mut order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -865,6 +874,7 @@ fn chain_rejects_a_zero_scale() {
             valid.scale = IDENTITY_SCALE;
             valid
         },
+        &template,
         DELIVERED,
         recipient_ata,
     );
@@ -885,7 +895,7 @@ fn chain_rejects_a_zero_scale() {
 fn chain_rejects_an_amount_that_overflows_a_solana_slot() {
     let (mut ctx, base_mint, recipient_ata) = setup();
     // Upscale by 1e12 so a 1e12 measurement becomes 1e24 — far past a u64 slot.
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -901,11 +911,16 @@ fn chain_rejects_an_amount_that_overflows_a_solana_slot() {
             valid.scale = IDENTITY_SCALE;
             valid
         },
+        &template,
         1_000_000_000_000,
         recipient_ata,
     );
     chained.order = order;
-    let escrow_authority = intent_chainer::state::escrow_authority_pda(&chained.order.hash()).0;
+    let escrow_authority = intent_chainer::state::escrow_authority_pda(
+        &chained.order.template_hash,
+        &chained.order.params_hash().unwrap(),
+    )
+    .0;
     chained.escrow_authority = escrow_authority;
     chained.escrow_ata = get_associated_token_address_with_program_id(
         &escrow_authority,
@@ -941,7 +956,7 @@ fn chain_rejects_an_amount_that_overflows_a_solana_slot() {
 #[test]
 fn chain_pushes_into_a_settled_intent_and_the_creator_refunds_it() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -950,7 +965,7 @@ fn chain_pushes_into_a_settled_intent_and_the_creator_refunds_it() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let withdrawn_marker = WithdrawnMarker::pda(&chained.intent_hash).0;
@@ -989,7 +1004,7 @@ fn chain_pushes_into_a_settled_intent_and_the_creator_refunds_it() {
 #[test]
 fn chain_rejects_a_wrong_vault_ata() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -998,7 +1013,7 @@ fn chain_rejects_a_wrong_vault_ata() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let hijacked = get_associated_token_address_with_program_id(
@@ -1025,7 +1040,7 @@ fn chain_rejects_a_wrong_vault_ata() {
 #[test]
 fn chain_rejects_a_wrong_escrow_ata() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1034,7 +1049,7 @@ fn chain_rejects_a_wrong_escrow_ata() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let foreign = get_associated_token_address_with_program_id(
@@ -1060,7 +1075,7 @@ fn chain_rejects_a_wrong_escrow_ata() {
 #[test]
 fn chain_rejects_a_mint_that_is_not_the_orders() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1069,7 +1084,7 @@ fn chain_rejects_a_mint_that_is_not_the_orders() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let other_mint = Pubkey::new_unique();
@@ -1099,7 +1114,7 @@ fn chain_rejects_a_mint_that_is_not_the_orders() {
 #[test]
 fn chain_publishes_through_portal_when_asked() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1108,7 +1123,7 @@ fn chain_publishes_through_portal_when_asked() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let published = ctx.intent_chainer().chain(&chained, true).unwrap();
@@ -1129,7 +1144,7 @@ fn chain_publishes_through_portal_when_asked() {
         &base_mint,
         &ctx.token_program,
     );
-    let order2 = ctx.intent_chainer().svm_order(
+    let (order2, template2) = ctx.intent_chainer().svm_order(
         base_mint,
         other_recipient,
         local_prover::ID,
@@ -1138,7 +1153,7 @@ fn chain_publishes_through_portal_when_asked() {
     );
     let chained2 = ctx
         .intent_chainer()
-        .resolve(&order2, DELIVERED, other_recipient);
+        .resolve(&order2, &template2, DELIVERED, other_recipient);
     ctx.intent_chainer().seed_escrow(&chained2, DELIVERED);
 
     let unpublished = ctx.intent_chainer().chain(&chained2, false).unwrap();
@@ -1156,7 +1171,7 @@ fn chain_publishes_through_portal_when_asked() {
 #[test]
 fn published_route_matches_the_resolved_intent() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1165,12 +1180,15 @@ fn published_route_matches_the_resolved_intent() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx.intent_chainer().chain(&chained, true).is_ok());
 
-    let route = chained.order.build_route(DELIVERED).unwrap();
+    let route = chained
+        .order
+        .build_route(&chained.template, DELIVERED)
+        .unwrap();
     let expected = portal::events::IntentPublished::new(
         chained.intent_hash,
         CHAIN_ID,
@@ -1200,7 +1218,7 @@ fn published_route_matches_the_resolved_intent() {
 #[test]
 fn chain_cannot_publish_from_inside_a_route_call() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1209,12 +1227,13 @@ fn chain_cannot_publish_from_inside_a_route_call() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     // Intent1 whose single route call is `intent_chainer::chain` with publish on.
     let args = intent_chainer::instructions::ChainArgs {
         order: chained.order.clone(),
+        template: chained.template.clone(),
         publish: true,
     };
     let call_accounts = vec![
@@ -1321,7 +1340,7 @@ fn chain_works_with_token_2022() {
         &ctx.token_program,
     );
 
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1330,7 +1349,7 @@ fn chain_works_with_token_2022() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
@@ -1346,7 +1365,7 @@ fn chain_works_with_token_2022() {
 #[test]
 fn refilling_the_same_order_funds_the_same_child() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1355,7 +1374,7 @@ fn refilling_the_same_order_funds_the_same_child() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
 
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
@@ -1388,7 +1407,7 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
     ctx.airdrop_token_ata(&base_mint, &beneficiary, 0);
     let recipient_ata =
         get_associated_token_address_with_program_id(&beneficiary, &base_mint, &ctx.token_program);
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1397,7 +1416,7 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
     );
     let old = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&old, DELIVERED);
     ctx.intent_chainer().chain(&old, true).unwrap();
 
@@ -1475,16 +1494,17 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
         )
         .unwrap();
 
-    let mut fresh_order = order.clone();
+    let fresh_order = order.clone();
     let mut fresh_route = old.route.clone();
     fresh_route.salt = [0x83; 32].into();
     // Preserve every other rendered/hashed field, including the measured amount.
-    fresh_order.template.route =
+    let mut fresh_template = template.clone();
+    fresh_template.route =
         intent_chainer::types::Template::literal(borsh::to_vec(&fresh_route).unwrap());
-    let fresh = ctx
-        .intent_chainer()
-        .resolve(&fresh_order, DELIVERED, recipient_ata);
-    assert_ne!(fresh.order_commitment, old.order_commitment);
+    let fresh =
+        ctx.intent_chainer()
+            .resolve(&fresh_order, &fresh_template, DELIVERED, recipient_ata);
+    assert_ne!(fresh.params_hash, old.params_hash);
     assert_ne!(fresh.intent_hash, old.intent_hash);
     assert_ne!(fresh.vault, old.vault);
     assert_ne!(fresh.escrow_ata, old.escrow_ata);
@@ -1544,7 +1564,7 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
     // A guard against the chainer accidentally acquiring prover authority: it
     // must never sign portal's per-prover PDAs.
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1553,7 +1573,7 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let dispatcher = dispatcher_pda(&local_prover::ID).0;
@@ -1592,15 +1612,18 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
 #[test]
 fn published_event_survives_the_log_budget_at_max_route_len() {
     let (mut ctx, base_mint, _) = setup();
-    let order = ctx
-        .intent_chainer()
-        .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let (order, template) =
+        ctx.intent_chainer()
+            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, Pubkey::new_unique());
+        .resolve(&order, &template, DELIVERED, Pubkey::new_unique());
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    let route = chained.order.build_route(DELIVERED).unwrap();
+    let route = chained
+        .order
+        .build_route(&chained.template, DELIVERED)
+        .unwrap();
     assert_eq!(
         route.len(),
         MAX_ROUTE_LEN,
@@ -1647,19 +1670,22 @@ fn published_event_survives_the_log_budget_at_max_route_len() {
 #[test]
 fn a_route_past_the_ceiling_is_refused_not_silently_dropped() {
     let (mut ctx, base_mint, _) = setup();
-    let order =
+    let (_, over) =
         ctx.intent_chainer()
             .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN + 1);
-    let valid = ctx
-        .intent_chainer()
-        .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
-    let mut chained = ctx
-        .intent_chainer()
-        .resolve(&valid, DELIVERED, Pubkey::new_unique());
-    chained.order = order;
+    let (valid, template) =
+        ctx.intent_chainer()
+            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let mut chained =
+        ctx.intent_chainer()
+            .resolve(&valid, &template, DELIVERED, Pubkey::new_unique());
+    chained.order.template_hash = over.hash().unwrap();
+    chained.template = over;
     ctx.intent_chainer().rebind_escrow(&mut chained);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
+    // Still the parser, not the route cap: the template's own bound rejects the
+    // encoded input before any of it is allocated or hashed.
     assert!(ctx
         .intent_chainer()
         .chain(&chained, true)
@@ -1695,42 +1721,47 @@ fn a_route_past_the_ceiling_is_refused_not_silently_dropped() {
 fn intent1_hash_commits_to_the_order_through_the_escrow_address() {
     let (mut ctx, base_mint, recipient_ata) = setup();
 
-    let build_intent1_hash = |ctx: &mut Context, order: &intent_chainer::types::Order| {
-        let chained = ctx
-            .intent_chainer()
-            .resolve(order, DELIVERED, recipient_ata);
-        let (_, source_call, _) =
-            ctx.intent_chainer()
-                .deliver_to_escrow_call(base_mint, chained.escrow_ata, DELIVERED);
+    let build_intent1_hash =
+        |ctx: &mut Context,
+         order: &intent_chainer::types::Order,
+         template: &intent_chainer::types::TemplateProgram| {
+            let chained = ctx
+                .intent_chainer()
+                .resolve(order, template, DELIVERED, recipient_ata);
+            let (_, source_call, _) = ctx.intent_chainer().deliver_to_escrow_call(
+                base_mint,
+                chained.escrow_ata,
+                DELIVERED,
+            );
 
-        let (_, mut route1, mut reward1) = ctx.rand_intent();
-        route1.native_amount = 0;
-        route1.tokens.clear();
-        route1.calls = vec![source_call];
-        route1.salt = [3u8; 32].into();
-        route1.deadline = 2_000_000_000;
-        reward1.prover = local_prover::ID;
-        reward1.native_amount = 0;
-        reward1.tokens.clear();
-        reward1.deadline = 2_000_000_000;
+            let (_, mut route1, mut reward1) = ctx.rand_intent();
+            route1.native_amount = 0;
+            route1.tokens.clear();
+            route1.calls = vec![source_call];
+            route1.salt = [3u8; 32].into();
+            route1.deadline = 2_000_000_000;
+            reward1.prover = local_prover::ID;
+            reward1.native_amount = 0;
+            reward1.tokens.clear();
+            reward1.deadline = 2_000_000_000;
 
-        (
-            chained.escrow_ata,
-            intent_hash(CHAIN_ID, &route1.hash(), &reward1.hash()),
-        )
-    };
+            (
+                chained.escrow_ata,
+                intent_hash(CHAIN_ID, &route1.hash(), &reward1.hash()),
+            )
+        };
 
-    let base = ctx.intent_chainer().svm_order(
+    let (base, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
         IDENTITY_SCALE,
         1,
     );
-    let (escrow_a, hash_a) = build_intent1_hash(&mut ctx, &base);
+    let (escrow_a, hash_a) = build_intent1_hash(&mut ctx, &base, &template);
 
     // Same order twice: identical escrow, identical intent1 hash.
-    let (escrow_repeat, hash_repeat) = build_intent1_hash(&mut ctx, &base);
+    let (escrow_repeat, hash_repeat) = build_intent1_hash(&mut ctx, &base, &template);
     assert_eq!(escrow_a, escrow_repeat);
     assert_eq!(hash_a, hash_repeat, "the derivation must be deterministic");
 
@@ -1750,7 +1781,7 @@ fn intent1_hash_commits_to_the_order_through_the_escrow_address() {
     [creator, scale, floor, destination, portal_field]
         .into_iter()
         .for_each(|altered| {
-            let (escrow_b, hash_b) = build_intent1_hash(&mut ctx, &altered);
+            let (escrow_b, hash_b) = build_intent1_hash(&mut ctx, &altered, &template);
 
             assert_ne!(
                 escrow_b, escrow_a,
@@ -1775,12 +1806,12 @@ fn realistic_evm_routes_execute_through_packet_checked_staging() {
 
     for len in [640, REALISTIC_EVM_SWAP_ROUTE, 1600] {
         let (mut ctx, base_mint, _) = setup();
-        let order = ctx
-            .intent_chainer()
-            .large_route_order(base_mint, local_prover::ID, len);
-        let chained = ctx
-            .intent_chainer()
-            .resolve(&order, DELIVERED, Pubkey::new_unique());
+        let (order, template) =
+            ctx.intent_chainer()
+                .large_route_order(base_mint, local_prover::ID, len);
+        let chained =
+            ctx.intent_chainer()
+                .resolve(&order, &template, DELIVERED, Pubkey::new_unique());
         ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
         ctx.intent_chainer()
@@ -1806,7 +1837,7 @@ fn realistic_evm_routes_execute_through_packet_checked_staging() {
 #[test]
 fn announce_order_puts_the_preimage_on_the_record() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1815,10 +1846,11 @@ fn announce_order_puts_the_preimage_on_the_record() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
 
     let expected = intent_chainer::events::OrderAnnounced::new(
-        chained.order_commitment,
+        order.template_hash,
+        chained.params_hash,
         chained.escrow_authority,
         order.clone(),
     );
@@ -1835,7 +1867,7 @@ fn announce_order_puts_the_preimage_on_the_record() {
 #[test]
 fn announce_order_is_permissionless_and_works_before_funding() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, _template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1849,20 +1881,33 @@ fn announce_order_is_permissionless_and_works_before_funding() {
 /// A malformed order can never be consumed by `chain`, so it must not get a
 /// record either.
 #[test]
-fn announce_order_rejects_an_order_chain_could_never_consume() {
+/// `announce_order` now records parameters only, so a malformed TEMPLATE is no
+/// longer its business — it is rejected where the template is actually presented,
+/// which is `chain` (and `seal_order_buffer` on the staged path).
+fn chain_rejects_a_template_announce_could_never_record() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let mut order = ctx.intent_chainer().svm_order(
+    let (order, mut template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
         IDENTITY_SCALE,
         1,
     );
-    order.template.route.segments.push(vec![1, 2, 3]);
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, &template, DELIVERED, recipient_ata);
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+
+    template.route.segments.push(vec![1, 2, 3]);
+    let mut malformed = chained.clone();
+    // Commit to the malformed template, so validation gets past the binding check
+    // and reaches the shape check this test is actually about.
+    malformed.order.template_hash = template.hash().unwrap();
+    malformed.template = template;
 
     assert!(ctx
         .intent_chainer()
-        .announce_order(&order)
+        .chain(&malformed, false)
         .is_err_and(is_error(ChainerError::SegmentCountMismatch)));
 }
 
@@ -1879,11 +1924,12 @@ fn announce_order_rejects_an_order_chain_could_never_consume() {
 fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
     let (mut ctx, base_mint, _) = setup();
     ctx.compute_limit = 900_000;
-    let order = ctx
-        .intent_chainer()
-        .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
-    let commitment = order.hash();
-    let escrow_authority = intent_chainer::state::escrow_authority_pda(&commitment).0;
+    let (order, _template) =
+        ctx.intent_chainer()
+            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let params_hash = order.params_hash().unwrap();
+    let escrow_authority =
+        intent_chainer::state::escrow_authority_pda(&order.template_hash, &params_hash).0;
 
     // A realistic intent1: same-chain, one route call, published in the same
     // transaction as the announcement.
@@ -1893,8 +1939,12 @@ fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
         .intent_chainer()
         .portal_publish_instruction(CHAIN_ID, route1_bytes, reward1);
 
-    let announced =
-        intent_chainer::events::OrderAnnounced::new(commitment, escrow_authority, order.clone());
+    let announced = intent_chainer::events::OrderAnnounced::new(
+        order.template_hash,
+        params_hash,
+        escrow_authority,
+        order.clone(),
+    );
 
     let meta = ctx
         .intent_chainer()
@@ -1934,7 +1984,7 @@ fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
 #[test]
 fn chain_rejects_a_portal_that_is_not_the_orders() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let order = ctx.intent_chainer().svm_order(
+    let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1943,7 +1993,7 @@ fn chain_rejects_a_portal_that_is_not_the_orders() {
     );
     let chained = ctx
         .intent_chainer()
-        .resolve(&order, DELIVERED, recipient_ata);
+        .resolve(&order, &template, DELIVERED, recipient_ata);
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     // Any other executable program stands in for the attacker's own "portal".
@@ -1965,7 +2015,7 @@ fn chain_rejects_a_portal_that_is_not_the_orders() {
 #[test]
 fn changing_the_portal_moves_the_escrow_and_the_vault() {
     let (mut ctx, base_mint, recipient_ata) = setup();
-    let base = ctx.intent_chainer().svm_order(
+    let (base, template) = ctx.intent_chainer().svm_order(
         base_mint,
         recipient_ata,
         local_prover::ID,
@@ -1974,13 +2024,13 @@ fn changing_the_portal_moves_the_escrow_and_the_vault() {
     );
     let a = ctx
         .intent_chainer()
-        .resolve(&base, DELIVERED, recipient_ata);
+        .resolve(&base, &template, DELIVERED, recipient_ata);
 
     let mut other = base.clone();
     other.portal = local_prover::ID;
     let b = ctx
         .intent_chainer()
-        .resolve(&other, DELIVERED, recipient_ata);
+        .resolve(&other, &template, DELIVERED, recipient_ata);
 
     assert_ne!(a.escrow_authority, b.escrow_authority, "custody must move");
     assert_ne!(

@@ -83,6 +83,9 @@ pub enum ChainerError {
     OrderBufferIncomplete,
     /// Must decode exactly one canonical bounded Order, without trailing bytes.
     InvalidBufferedOrder,
+    /// Reserved legacy code, no longer emitted: a buffer attests a TEMPLATE, so
+    /// every commitment mismatch on that path is a [`Self::TemplateCommitmentMismatch`].
+    /// Keep subsequent error codes stable.
     OrderCommitmentMismatch,
     /// The supplied template does not hash to the order's committed `template_hash`.
     TemplateCommitmentMismatch,

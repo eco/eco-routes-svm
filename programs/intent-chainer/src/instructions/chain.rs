@@ -105,13 +105,17 @@ pub(crate) fn chain_order<'info>(
     let publish = publish || order.require_publish;
 
     validate_order(&order, &template)?;
-    let params_hash = order.params_hash()?;
+    // The buffer transports the TEMPLATE, so what it attests is the template
+    // commitment. Seal already bound its immutable bytes to this value; this
+    // check is what stops a sealed buffer being paired with an order that
+    // commits to a different template.
     if let Some(expected) = buffered_commitment {
         require!(
-            params_hash == expected,
-            ChainerError::OrderCommitmentMismatch
+            order.template_hash == expected,
+            ChainerError::TemplateCommitmentMismatch
         );
     }
+    let params_hash = order.params_hash()?;
     let escrow = validate_escrow(&ctx, &order, &params_hash)?;
 
     let amount_in = measure(&ctx, &order)?;
@@ -212,11 +216,7 @@ struct Escrow {
 /// derives an authority that holds nothing, and the order intent1 committed to
 /// derives the one that does. No signer check is needed or useful — see
 /// [`crate::state::escrow_authority_pda`].
-fn validate_escrow(
-    ctx: &Context<Chain>,
-    order: &Order,
-    params_hash: &Bytes32,
-) -> Result<Escrow> {
+fn validate_escrow(ctx: &Context<Chain>, order: &Order, params_hash: &Bytes32) -> Result<Escrow> {
     // The portal is the order's, never the caller's. Everything downstream — the
     // vault the escrow sweeps into, the marker consulted for an already-settled
     // hash, the program `publish` dispatches to — derives from it, so a

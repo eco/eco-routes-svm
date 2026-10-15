@@ -316,7 +316,9 @@ mod tests {
 
     #[test]
     fn build_route_with_no_items_is_the_single_segment() {
-        let built = template(vec![vec![1, 2, 3]], vec![]).build_route(WAD, 999).unwrap();
+        let built = template(vec![vec![1, 2, 3]], vec![])
+            .build_route(WAD, 999)
+            .unwrap();
 
         assert_eq!(built, vec![1, 2, 3]);
     }
@@ -697,7 +699,9 @@ mod cross_vm_tests {
             let scale: u128 = vector_field(vector, "scale").parse().unwrap();
 
             assert_eq!(
-                fixture_template(vector).build_route(scale, amount_in).unwrap(),
+                fixture_template(vector)
+                    .build_route(scale, amount_in)
+                    .unwrap(),
                 hex_to_bytes(vector_field(vector, "expected_route")),
                 "the SVM splice must reproduce the EVM chainer's route exactly"
             );

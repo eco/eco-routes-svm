@@ -389,8 +389,12 @@ impl AnchorDeserialize for Template {
     }
 }
 
+/// Cap encoded input while parsing, not just after allocating or hashing. The
+/// template is the untrusted large half, so the bound belongs here; vector
+/// lengths are separately bounded before allocation, below.
 impl AnchorDeserialize for TemplateProgram {
     fn deserialize_reader<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let reader = &mut reader.take(MAX_ORDER_BYTES as u64);
         Ok(Self {
             vaults: bounded_vec(reader, MAX_VAULTS)?,
             route: Template::deserialize_reader(reader)?,
