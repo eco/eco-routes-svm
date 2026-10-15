@@ -189,8 +189,9 @@ pub fn chain_from_account<'info>(
     let template = read_template(&ctx.accounts.order_buffer)?;
     // Delegate every custody/template/measurement/settlement check to the same
     // handler, not a CPI (and never forward the buffer authority). That handler
-    // recomputes Order.hash() and verifies the supplied escrow before any value
-    // moves. Seal has already bound the immutable bytes to the header commitment.
+    // checks `order.template_hash` against this template, recomputes both
+    // commitment halves and verifies the supplied escrow before any value moves.
+    // Seal has already bound the immutable bytes to the header's `template_hash`.
     chain_order(
         Context::new(
             ctx.program_id,

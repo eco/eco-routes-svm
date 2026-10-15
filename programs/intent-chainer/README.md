@@ -348,7 +348,8 @@ not an arbitrary log-heavy bundle. Its byte-exact visibility is tested at the ro
 
 ### Inline path
 
-When the whole order fits one packet, no buffer is needed:
+When the order's parameters and its template fit one `chain` packet together, no
+buffer is needed:
 
 ```text
 before funding intent1:  [announce_template, announce_order]   one transaction
