@@ -23,7 +23,7 @@ use crate::plan::{
 };
 use crate::rpc::RpcChain;
 use crate::selection::{self, Operation, Programs, Selection};
-use crate::{config, funding, readback};
+use crate::{config, funding, layerzero, readback};
 
 /// Wait before rereading the IDL accounts after a failed transaction, times the number of
 /// failures in a row.
@@ -511,15 +511,18 @@ fn build(
         })
         .collect::<Result<BTreeMap<_, _>, Error>>()?;
     let live_configs = config::read(chain, release)?;
-
-    Ok(Plan::build(
+    let built = Plan::build(
         release.clone(),
         chain.genesis_hash()?,
         *deployer,
         states,
         live_configs,
         Inputs::parse(inputs.clone())?,
-    )?)
+    )?;
+    // After `Plan::build`, so a wrong cluster is reported as that, not as a missing worker.
+    layerzero::check_workers(chain, &built).map_err(plan::Error::from)?;
+
+    Ok(built)
 }
 
 /// A program planned `New` that is now `Partial` (deployed from the release binary with this
@@ -769,7 +772,7 @@ mod tests {
             }
         }
 
-        /// A chain holding nothing but the deployer's balance.
+        /// A chain holding the deployer's balance and the fixture's LayerZero worker accounts.
         fn chain(&self) -> RecordingChain {
             let mut chain = RecordingChain::default();
             chain.accounts.insert(
@@ -1129,6 +1132,34 @@ mod tests {
 
         assert!(
             matches!(error, Error::Plan(plan::Error::ClusterMismatch { .. })),
+            "{error:?}"
+        );
+        assert!(!env.path("plan.json").exists());
+    }
+
+    #[test]
+    fn plan_fails_on_an_executor_program_id_and_writes_nothing() {
+        let env = Env::new();
+        let mut chain = env.chain();
+        let executor = EXECUTOR.parse().unwrap();
+        chain.accounts.get_mut(&executor).unwrap().executable = true;
+
+        let error = plan(
+            &chain,
+            &env.plan_args(),
+            &env.deployer.pubkey(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                Error::Plan(plan::Error::LayerZero(layerzero::Error::WorkerIsProgram {
+                    role: layerzero::Role::Executor,
+                    ..
+                }))
+            ),
             "{error:?}"
         );
         assert!(!env.path("plan.json").exists());

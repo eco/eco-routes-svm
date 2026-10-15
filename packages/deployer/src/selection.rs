@@ -14,7 +14,7 @@ use crate::plan::{
     self, Action, Cluster, PlanHash, PlannedProgram, PlannedProgramFile, PlannedStatus, Release,
     HYPER_PROVER, LAYERZERO_PROVER, PROGRAMS_WITH_INIT,
 };
-use crate::{idl, setup};
+use crate::{idl, layerzero, setup};
 
 /// OtterSec's verification program: `solana-verify verify-from-repo` records each verified build
 /// there, at a PDA of the uploader and the program.
@@ -53,6 +53,8 @@ pub enum Error {
     NotInitialized { program: String },
     #[error("{program} has no verification record from the deployer; the deploy workflow's verify must succeed first")]
     NotVerified { program: String },
+    #[error("{LAYERZERO_PROVER} cannot be finalized while a live path names a wrong worker, which finalizing would lock in: {reason}")]
+    InvalidLayerZeroWorker { reason: String },
     #[error("{program}'s canonical IDL is missing or differs from the release's, and a final program can never change it; the deploy workflow's IDL upload must succeed first")]
     IdlNotUploaded { program: String },
     #[error("{program} depends on {dependency}, which is neither final nor finalized in this run")]
@@ -88,6 +90,9 @@ pub struct Observed {
     /// Lamports in the hyper and LayerZero `pda_payer` reserves; closing a program strands its
     /// reserve. Not hashed: inbound deliveries move them.
     pub reserves: BTreeMap<String, u64>,
+    /// Why a live LayerZero path's executor or DVN is not a worker config, if one is not. Not
+    /// hashed: it only ever fails the plan.
+    pub layerzero_worker_fault: Option<String>,
 }
 
 /// A reviewed set of upgradeable programs to finalize or close.
@@ -181,13 +186,22 @@ pub fn observe(
     })
     .collect::<Result<_, Error>>()?;
 
+    let live_configs = config::read(chain, release)?;
+    let layerzero_worker_fault =
+        match layerzero::check_live_workers(chain, &live_configs.layerzero_paths) {
+            Ok(()) => None,
+            Err(layerzero::Error::Chain(error)) => return Err(error.into()),
+            Err(fault) => Some(fault.to_string()),
+        };
+
     Ok(Observed {
         genesis_hash: chain.genesis_hash()?,
         states,
-        live_configs: config::read(chain, release)?,
+        live_configs,
         verified,
         idls,
         reserves,
+        layerzero_worker_fault,
     })
 }
 
@@ -215,6 +229,7 @@ impl Selection {
             verified,
             idls,
             reserves,
+            layerzero_worker_fault,
         } = observed;
         release.cluster.require_genesis(genesis_hash)?;
         reject_unknown(selected, &release)?;
@@ -242,6 +257,7 @@ impl Selection {
             targets: &targets,
             live_configs: &live_configs,
             verified: &verified,
+            layerzero_worker_fault: &layerzero_worker_fault,
             idls: &idls,
         };
         targets.iter().try_for_each(|program| match operation {
@@ -404,6 +420,7 @@ struct Checks<'a> {
     targets: &'a BTreeSet<String>,
     live_configs: &'a Configs,
     verified: &'a BTreeSet<String>,
+    layerzero_worker_fault: &'a Option<String>,
     idls: &'a BTreeSet<String>,
 }
 
@@ -423,6 +440,11 @@ impl Checks<'_> {
         }
         if program == LAYERZERO_PROVER {
             setup::check(self.live_configs)?;
+            if let Some(reason) = self.layerzero_worker_fault {
+                return Err(Error::InvalidLayerZeroWorker {
+                    reason: reason.clone(),
+                });
+            }
         }
         if !self.verified.contains(program) {
             return Err(Error::NotVerified {
@@ -619,6 +641,7 @@ mod tests {
             idls: verified.clone(),
             verified,
             reserves: BTreeMap::from([(HYPER_PROVER.into(), 7), (LAYERZERO_PROVER.into(), 9)]),
+            layerzero_worker_fault: None,
         };
 
         (plan.release, observed)
