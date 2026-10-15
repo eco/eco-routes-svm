@@ -2,7 +2,6 @@ use anchor_lang::prelude::*;
 use intent_chainer::state::escrow_authority_pda;
 use intent_chainer::types::*;
 use portal::types::{Reward, TokenAmount};
-use tiny_keccak::{Hasher, Keccak};
 
 #[path = "../testdata/fixture_parser.rs"]
 mod fixtures;
@@ -13,13 +12,13 @@ fn encode(value: &impl AnchorSerialize) -> Vec<u8> {
     value.serialize(&mut out).unwrap();
     out
 }
-fn selected_template(o: &mut Order, index: usize) -> &mut Template {
-    if index == o.template.vaults.len() * 2 {
-        &mut o.template.route
+fn selected_template(t: &mut TemplateProgram, index: usize) -> &mut Template {
+    if index == t.vaults.len() * 2 {
+        &mut t.route
     } else if index.is_multiple_of(2) {
-        &mut o.template.vaults[index / 2].route
+        &mut t.vaults[index / 2].route
     } else {
-        &mut o.template.vaults[index / 2].reward
+        &mut t.vaults[index / 2].reward
     }
 }
 fn context() -> AmountContext {
@@ -57,18 +56,14 @@ fn p(route: Template) -> TemplateProgram {
     }
 }
 fn hash(data: &[u8]) -> [u8; 32] {
-    let mut h = Keccak::v256();
-    let mut out = [0; 32];
-    h.update(data);
-    h.finalize(&mut out);
-    out
+    solana_keccak_hasher::hashv(&[data]).to_bytes()
 }
 fn order(template: TemplateProgram) -> Order {
     Order {
         portal: portal::ID,
         base_mint: Pubkey::new_from_array([3; 32]),
         destination: 8453,
-        template,
+        template_hash: template.hash().unwrap(),
         reward: Reward {
             deadline: 2_000_000_000,
             creator: Pubkey::new_from_array([4; 32]),
@@ -440,13 +435,12 @@ fn geometry_dependencies_cycles_and_every_work_bound_are_rejected() {
     let mut node = node();
     node.route = tiny.clone();
     node.reward = tiny.clone();
-    let order = order(TemplateProgram {
+    let template = TemplateProgram {
         vaults: vec![node; MAX_VAULTS],
         route: tiny,
-    });
-    assert!(encode(&order).len() > MAX_ORDER_BYTES);
-    assert!(order.validate_template().is_err());
-    assert!(Order::try_from_slice(&encode(&order)).is_err());
+    };
+    assert!(encode(&template).len() > MAX_ORDER_BYTES);
+    assert!(template.validate().is_err());
 }
 
 #[test]
@@ -483,21 +477,26 @@ fn canonical_borsh_rejects_invalid_tags_trailing_bytes_truncation_and_allocation
 
 #[test]
 fn every_nested_field_changes_both_commitment_and_custody() {
-    let base = order(fixtures::program(
-        &fixtures::nested()["cases"][8]["program"],
-    ));
-    let baseline = base.hash();
-    let escrow = escrow_authority_pda(&baseline).0;
-    let check = |changed: Order| {
-        assert_ne!(changed.hash(), baseline);
-        assert_ne!(escrow_authority_pda(&changed.hash()).0, escrow);
-        assert_eq!(changed.hash().as_ref(), hash(&encode(&changed)));
+    let template = fixtures::program(&fixtures::nested()["cases"][8]["program"]);
+    let base = order(template.clone());
+    let base_params = base.params_hash().unwrap();
+    let base_template = template.hash().unwrap();
+    let escrow = escrow_authority_pda(&base_template, &base_params).0;
+
+    // Custody must move when EITHER half moves. Both seeds are load-bearing: a
+    // caller free to vary the uncommitted half would derive the same escrow for a
+    // different order.
+    let check = |o: &Order, t: &TemplateProgram| {
+        let params = o.params_hash().unwrap();
+        let tmpl = t.hash().unwrap();
+        assert!(params != base_params || tmpl != base_template);
+        assert_ne!(escrow_authority_pda(&tmpl, &params).0, escrow);
     };
     macro_rules! changed {
         ($field:ident, $value:expr) => {{
             let mut o = base.clone();
             o.$field = $value;
-            check(o);
+            check(&o, &template);
         }};
     }
     changed!(portal, Pubkey::new_unique());
@@ -516,15 +515,21 @@ fn every_nested_field_changes_both_commitment_and_custody() {
             4 => o.reward.tokens[0].token = Pubkey::new_unique(),
             _ => o.reward.tokens[0].amount = 1,
         }
-        check(o);
+        check(&o, &template);
     }
-    for node_index in 0..base.template.vaults.len() {
-        let mut o = base.clone();
-        o.template.vaults[node_index].destination += 1;
-        check(o);
+
+    // A template edit re-derives the order that commits to it, as an author would.
+    let edited = |t: TemplateProgram| {
+        let o = order(t.clone());
+        check(&o, &t);
+    };
+    for node_index in 0..template.vaults.len() {
+        let mut t = template.clone();
+        t.vaults[node_index].destination += 1;
+        edited(t);
         for field in 0..4 {
-            let mut o = base.clone();
-            match &mut o.template.vaults[node_index].derivation {
+            let mut t = template.clone();
+            match &mut t.vaults[node_index].derivation {
                 Derivation::Evm(c) => match field {
                     0 => c.portal[0] ^= 1,
                     1 => c.prefix ^= 1,
@@ -535,23 +540,23 @@ fn every_nested_field_changes_both_commitment_and_custody() {
                     0 => c.portal = Pubkey::new_unique(),
                     1 => c.token_program = Pubkey::new_unique(),
                     2 => c.mint = Pubkey::new_unique(),
-                    _ => o.template.vaults[node_index].derivation = evm(),
+                    _ => t.vaults[node_index].derivation = evm(),
                 },
             }
-            check(o);
+            edited(t);
         }
     }
-    for template_index in 0..base.template.vaults.len() * 2 + 1 {
-        let mut probe = base.clone();
+    for template_index in 0..template.vaults.len() * 2 + 1 {
+        let mut probe = template.clone();
         for i in 0..selected_template(&mut probe, template_index).segments.len() {
-            let mut o = base.clone();
-            selected_template(&mut o, template_index).segments[i].push(9);
-            check(o);
+            let mut t = template.clone();
+            selected_template(&mut t, template_index).segments[i].push(9);
+            edited(t);
         }
         for i in 0..selected_template(&mut probe, template_index).items.len() {
             for field in 0..5 {
-                let mut o = base.clone();
-                let item = &mut selected_template(&mut o, template_index).items[i];
+                let mut t = template.clone();
+                let item = &mut selected_template(&mut t, template_index).items[i];
                 match item {
                     Item::Amount(a) => match field {
                         0 => {
@@ -567,14 +572,14 @@ fn every_nested_field_changes_both_commitment_and_custody() {
                     },
                     Item::Vault(index) => *index ^= 1,
                 }
-                check(o);
+                edited(t);
             }
         }
     }
-    let mut o = base.clone();
-    o.template.vaults.swap(0, 1);
-    check(o);
-    let mut o = base.clone();
-    o.template.vaults.push(node());
-    check(o);
+    let mut t = template.clone();
+    t.vaults.swap(0, 1);
+    edited(t);
+    let mut t = template.clone();
+    t.vaults.push(node());
+    edited(t);
 }

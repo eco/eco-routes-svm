@@ -1,12 +1,12 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::{account, Bytes32};
 
-use crate::instructions::announce_order::emit_order_announcement;
+use crate::instructions::announce_order::emit_template_announcement;
 // Anchor's composite account derive also needs Chain's generated account modules.
 use crate::instructions::chain::*;
 use crate::instructions::ChainerError;
 use crate::state::{OrderBuffer, ORDER_BUFFER_SEED};
-use crate::types::{Order, MAX_ORDER_BYTES};
+use crate::types::{Order, TemplateProgram, MAX_ORDER_BYTES};
 
 /// Leaves room for init framing, one signature and compute-budget instructions
 /// in a legacy 1232-byte packet. Clients must still size their complete envelope.
@@ -15,8 +15,8 @@ pub const MAX_ORDER_CHUNK_BYTES: usize = 800;
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct InitOrderBufferArgs {
     pub seed: [u8; 32],
-    pub order_commitment: Bytes32,
-    pub order_len: u32,
+    pub template_hash: Bytes32,
+    pub template_len: u32,
     pub bytes: Vec<u8>,
 }
 
@@ -83,11 +83,11 @@ pub struct CloseOrderBuffer<'info> {
 
 pub fn init_order_buffer(ctx: Context<InitOrderBuffer>, args: InitOrderBufferArgs) -> Result<()> {
     require!(
-        args.order_len > 0 && args.order_len as usize <= MAX_ORDER_BYTES,
+        args.template_len > 0 && args.template_len as usize <= MAX_ORDER_BYTES,
         ChainerError::OrderTooLarge
     );
     require!(
-        args.bytes.len() <= MAX_ORDER_CHUNK_BYTES && args.bytes.len() <= args.order_len as usize,
+        args.bytes.len() <= MAX_ORDER_CHUNK_BYTES && args.bytes.len() <= args.template_len as usize,
         ChainerError::InvalidOrderBufferWrite
     );
     let authority = ctx.accounts.authority.key();
@@ -97,14 +97,14 @@ pub fn init_order_buffer(ctx: Context<InitOrderBuffer>, args: InitOrderBufferArg
         &ctx.accounts.authority,
         &ctx.accounts.system_program,
         &crate::ID,
-        OrderBuffer::HEADER_LEN + args.order_len as usize,
+        OrderBuffer::HEADER_LEN + args.template_len as usize,
         &[&[ORDER_BUFFER_SEED, authority.as_ref(), &args.seed, &[bump]]],
     )?;
     let header = OrderBuffer {
         authority,
         seed: args.seed,
-        order_commitment: args.order_commitment,
-        order_len: args.order_len,
+        template_hash: args.template_hash,
+        template_len: args.template_len,
         written: args.bytes.len() as u32,
         sealed: false,
         bump,
@@ -126,7 +126,7 @@ pub fn write_order_buffer(
         args.offset == buffer.written
             && !args.bytes.is_empty()
             && args.bytes.len() <= MAX_ORDER_CHUNK_BYTES
-            && (args.offset as usize + args.bytes.len()) <= buffer.order_len as usize,
+            && (args.offset as usize + args.bytes.len()) <= buffer.template_len as usize,
         ChainerError::InvalidOrderBufferWrite
     );
     let start = OrderBuffer::HEADER_LEN + args.offset as usize;
@@ -136,24 +136,24 @@ pub fn write_order_buffer(
     Ok(())
 }
 
-/// Parse exactly one Order directly from borrowed account data. Both seal and
+/// Parse exactly one template directly from borrowed account data. Both seal and
 /// execute run this, so the header is never treated as attesting arbitrary bytes.
-fn read_order(buffer: &Account<OrderBuffer>) -> Result<Order> {
+fn read_template(buffer: &Account<OrderBuffer>) -> Result<TemplateProgram> {
     require!(
-        buffer.order_len > 0 && buffer.order_len as usize <= MAX_ORDER_BYTES,
+        buffer.template_len > 0 && buffer.template_len as usize <= MAX_ORDER_BYTES,
         ChainerError::OrderTooLarge
     );
     require!(
-        buffer.written == buffer.order_len,
+        buffer.written == buffer.template_len,
         ChainerError::OrderBufferIncomplete
     );
     let info = buffer.to_account_info();
     let data = info.try_borrow_data()?;
     require!(
-        data.len() == OrderBuffer::HEADER_LEN + buffer.order_len as usize,
+        data.len() == OrderBuffer::HEADER_LEN + buffer.template_len as usize,
         ChainerError::InvalidBufferedOrder
     );
-    Order::try_from_slice(&data[OrderBuffer::HEADER_LEN..])
+    TemplateProgram::try_from_slice(&data[OrderBuffer::HEADER_LEN..])
         .map_err(|_| error!(ChainerError::InvalidBufferedOrder))
 }
 
@@ -162,17 +162,16 @@ pub fn seal_order_buffer(ctx: Context<SealOrderBuffer>) -> Result<()> {
         !ctx.accounts.order_buffer.sealed,
         ChainerError::OrderBufferSealed
     );
-    let order = read_order(&ctx.accounts.order_buffer)?;
-    validate_order(&order)?;
-    let commitment = order.hash();
+    let template = read_template(&ctx.accounts.order_buffer)?;
+    template.validate()?;
     require!(
-        commitment == ctx.accounts.order_buffer.order_commitment,
-        ChainerError::OrderCommitmentMismatch
+        template.hash()? == ctx.accounts.order_buffer.template_hash,
+        ChainerError::TemplateCommitmentMismatch
     );
-    emit_order_announcement(
+    emit_template_announcement(
         ctx.accounts.event_authority.to_account_info(),
-        order,
-        commitment,
+        template,
+        ctx.accounts.order_buffer.template_hash,
     )?;
     ctx.accounts.order_buffer.sealed = true;
     Ok(())
@@ -180,13 +179,14 @@ pub fn seal_order_buffer(ctx: Context<SealOrderBuffer>) -> Result<()> {
 
 pub fn chain_from_account<'info>(
     ctx: Context<'info, ChainFromAccount<'info>>,
+    order: Order,
     publish: bool,
 ) -> Result<()> {
     require!(
         ctx.accounts.order_buffer.sealed,
         ChainerError::OrderBufferNotSealed
     );
-    let order = read_order(&ctx.accounts.order_buffer)?;
+    let template = read_template(&ctx.accounts.order_buffer)?;
     // Delegate every custody/template/measurement/settlement check to the same
     // handler, not a CPI (and never forward the buffer authority). That handler
     // recomputes Order.hash() and verifies the supplied escrow before any value
@@ -198,8 +198,12 @@ pub fn chain_from_account<'info>(
             ctx.remaining_accounts,
             ctx.bumps.chain,
         ),
-        ChainArgs { order, publish },
-        Some(ctx.accounts.order_buffer.order_commitment),
+        ChainArgs {
+            order,
+            template,
+            publish,
+        },
+        Some(ctx.accounts.order_buffer.template_hash),
     )
 }
 

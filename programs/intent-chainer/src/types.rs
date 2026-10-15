@@ -3,20 +3,23 @@ use std::io::{self, Read, Write};
 use anchor_lang::prelude::*;
 use eco_svm_std::Bytes32;
 use portal::types::Reward;
-use tiny_keccak::{Hasher, Keccak};
 
 use crate::instructions::ChainerError;
-use crate::keccak_writer::KeccakWriter;
 pub use crate::template::*;
 
 /// Decimal fixed-point denominator shared with the EVM template implementation.
 pub const WAD: u128 = 1_000_000_000_000_000_000;
 
-/// Canonical Borsh commitment preimage. Every nested field is serialized here.
-/// The ABI change intentionally changes order hashes and escrow addresses.
+/// Canonical Borsh commitment preimage of an order's PARAMETERS.
 ///
-/// Remote vault recipients belong only to `template` data. Local custody remains
-/// the order-specific escrow followed by the vault under the committed `portal`.
+/// The template is committed separately, by [`Order::template_hash`], and supplied
+/// only in the transaction that executes this order. That split is the point: a
+/// parent that references a child order needs the child's two 32-byte commitments,
+/// never its template bytes, so nesting no longer stacks every downstream template
+/// into one preimage. See [`crate::state::escrow_authority_pda`].
+///
+/// Remote vault recipients belong only to template data. Local custody remains the
+/// order-specific escrow followed by the vault under the committed `portal`.
 #[derive(AnchorSerialize, Clone, Debug)]
 pub struct Order {
     /// Local reward Portal, committed rather than caller-selected.
@@ -24,7 +27,9 @@ pub struct Order {
     pub base_mint: Pubkey,
     /// Root route's execution chain.
     pub destination: u64,
-    pub template: TemplateProgram,
+    /// Commitment to the [`TemplateProgram`] this order renders. The preimage is
+    /// presented at execution and checked against this value.
+    pub template_hash: Bytes32,
     /// Local reward: exactly one base-mint token, authored amount zero, native zero.
     pub reward: Reward,
     /// Initial Output = ceil(Input * scale / WAD), in the u128 domain.
@@ -35,18 +40,21 @@ pub struct Order {
 }
 
 impl Order {
-    pub fn hash(&self) -> Bytes32 {
-        let mut hasher = Keccak::v256();
-        let mut hash = [0; 32];
-        self.serialize(&mut KeccakWriter::new(&mut hasher))
-            .expect("Order borsh serialization is infallible");
-        hasher.finalize(&mut hash);
-        hash.into()
+    /// Commitment to this order's parameters, used with
+    /// [`Order::template_hash`] to seed the escrow authority.
+    ///
+    /// SHA-256 through Solana's syscall, deliberately **not** keccak. This value
+    /// is only ever a PDA seed on this chain — nothing off-chain reproduces it,
+    /// unlike `portal::types::intent_hash`, which is a cross-chain ABI and stays
+    /// keccak. The syscall also costs roughly a hundredth of what the in-program
+    /// keccak did per byte, which is what made large orders expensive.
+    pub fn params_hash(&self) -> Result<Bytes32> {
+        commitment_of(self)
     }
 
-    /// No allocation or hashing, shared by announce and chain.
-    pub fn validate_template(&self) -> Result<()> {
-        self.template.validate()?;
+    /// No allocation or hashing. Parameters are small and fixed-shape; the cap
+    /// that matters bounds the TEMPLATE, in [`TemplateProgram::validate`].
+    pub fn validate_params(&self) -> Result<()> {
         require!(
             self.encoded_len()? <= MAX_ORDER_BYTES,
             ChainerError::OrderTooLarge
@@ -63,13 +71,26 @@ impl Order {
 
     /// Client helper. The handler independently measures and creates this same
     /// context on-chain before validating the caller's LOCAL accounts.
-    pub fn build_route(&self, amount_in: u64) -> Result<Vec<u8>> {
-        self.validate_template()?;
-        self.template.render(AmountContext {
-            input: amount_in,
-            output: scale_amount(amount_in as u128, self.scale)?,
-        })
+    pub fn build_route(&self, template: &TemplateProgram, amount_in: u64) -> Result<Vec<u8>> {
+        template.build_route(self.scale, amount_in)
     }
+}
+
+/// Exact Borsh length without materializing a copy.
+pub fn borsh_len<T: AnchorSerialize>(value: &T) -> Result<usize> {
+    let mut counter = SizeCounter(0);
+    value.serialize(&mut counter)?;
+    Ok(counter.0)
+}
+
+/// SHA-256 over one contiguous Borsh copy, through Solana's syscall.
+///
+/// Deliberately not keccak: these commitments are only ever PDA seeds on this
+/// chain. `portal::types::intent_hash` is the cross-chain ABI and stays keccak.
+pub fn commitment_of<T: AnchorSerialize>(value: &T) -> Result<Bytes32> {
+    let mut bytes = Vec::with_capacity(borsh_len(value)?);
+    value.serialize(&mut bytes)?;
+    Ok(solana_sha256_hasher::hashv(&[&bytes]).to_bytes().into())
 }
 
 struct SizeCounter(usize);
@@ -86,8 +107,9 @@ impl Write for SizeCounter {
     }
 }
 
-/// Cap encoded input while parsing, not just after allocating/hashing the order.
-/// Template vector lengths are separately bounded before allocation.
+/// Cap encoded input while parsing. Parameters are small and fixed-shape now that
+/// the template is committed by hash; the template's own vector lengths are bounded
+/// separately, where it is parsed.
 impl AnchorDeserialize for Order {
     fn deserialize_reader<R: Read>(reader: &mut R) -> io::Result<Self> {
         let reader = &mut reader.take(MAX_ORDER_BYTES as u64);
@@ -95,7 +117,7 @@ impl AnchorDeserialize for Order {
             portal: Pubkey::deserialize_reader(reader)?,
             base_mint: Pubkey::deserialize_reader(reader)?,
             destination: u64::deserialize_reader(reader)?,
-            template: TemplateProgram::deserialize_reader(reader)?,
+            template_hash: Bytes32::deserialize_reader(reader)?,
             reward: deserialize_reward(reader)?,
             scale: u128::deserialize_reader(reader)?,
             min_amount_in: u64::deserialize_reader(reader)?,
@@ -164,6 +186,7 @@ pub fn scale_amount(amount: u128, scale: u128) -> Result<u128> {
 
 #[cfg(test)]
 mod tests {
+
     use portal::types::TokenAmount;
 
     use super::*;
@@ -177,18 +200,23 @@ mod tests {
         assert_eq!(allocations, 0);
     }
 
+    /// The template a bare `order(..)` commits to, so tests can present it.
+    fn template(segments: Vec<Vec<u8>>, amounts: Vec<Amount>) -> TemplateProgram {
+        TemplateProgram {
+            vaults: vec![],
+            route: Template {
+                segments,
+                items: amounts.into_iter().map(Item::Amount).collect(),
+            },
+        }
+    }
+
     fn order(segments: Vec<Vec<u8>>, amounts: Vec<Amount>) -> Order {
         Order {
             portal: portal::ID,
             base_mint: Pubkey::new_from_array([3u8; 32]),
             destination: 1399811150,
-            template: TemplateProgram {
-                vaults: vec![],
-                route: Template {
-                    segments,
-                    items: amounts.into_iter().map(Item::Amount).collect(),
-                },
-            },
+            template_hash: template(segments, amounts).hash().unwrap(),
             reward: Reward {
                 deadline: 1_700_000_000,
                 creator: Pubkey::new_from_array([1u8; 32]),
@@ -214,7 +242,7 @@ mod tests {
 
     #[test]
     fn build_route_splices_a_little_endian_u64() {
-        let built = order(
+        let built = template(
             vec![vec![0xAA, 0xBB], vec![0xCC]],
             vec![Amount {
                 source: AmountSource::Output,
@@ -223,7 +251,7 @@ mod tests {
                 little_endian: true,
             }],
         )
-        .build_route(0x0102030405060708)
+        .build_route(WAD, 0x0102030405060708)
         .unwrap();
 
         assert_eq!(
@@ -234,7 +262,7 @@ mod tests {
 
     #[test]
     fn build_route_splices_a_big_endian_word() {
-        let built = order(
+        let built = template(
             vec![vec![], vec![]],
             vec![Amount {
                 source: AmountSource::Output,
@@ -243,7 +271,7 @@ mod tests {
                 little_endian: false,
             }],
         )
-        .build_route(0x0102030405060708)
+        .build_route(WAD, 0x0102030405060708)
         .unwrap();
 
         let mut expected = vec![0u8; 24];
@@ -255,7 +283,7 @@ mod tests {
     /// every other byte must survive untouched.
     #[test]
     fn build_route_splices_both_solana_positions() {
-        let built = order(
+        let built = template(
             vec![vec![0x11; 4], vec![0x22; 3], vec![0x33; 2]],
             vec![
                 Amount {
@@ -272,7 +300,7 @@ mod tests {
                 },
             ],
         )
-        .build_route(1_000_000)
+        .build_route(WAD, 1_000_000)
         .unwrap();
 
         let amount = 1_000_000u64.to_le_bytes();
@@ -288,14 +316,14 @@ mod tests {
 
     #[test]
     fn build_route_with_no_items_is_the_single_segment() {
-        let built = order(vec![vec![1, 2, 3]], vec![]).build_route(999).unwrap();
+        let built = template(vec![vec![1, 2, 3]], vec![]).build_route(WAD, 999).unwrap();
 
         assert_eq!(built, vec![1, 2, 3]);
     }
 
     #[test]
     fn build_route_rejects_a_segment_count_mismatch() {
-        let result = order(
+        let result = template(
             vec![vec![0xAA]],
             vec![Amount {
                 source: AmountSource::Output,
@@ -304,7 +332,7 @@ mod tests {
                 little_endian: true,
             }],
         )
-        .build_route(1);
+        .build_route(WAD, 1);
 
         assert!(result.is_err());
     }
@@ -321,19 +349,19 @@ mod tests {
             .collect();
         let segments = vec![vec![]; MAX_ITEMS + 2];
 
-        assert!(order(segments, amounts).build_route(1).is_err());
+        assert!(template(segments, amounts).build_route(WAD, 1).is_err());
     }
 
     #[test]
     fn build_route_rejects_a_route_over_the_cap() {
-        let result = order(vec![vec![0u8; MAX_ROUTE_LEN + 1]], vec![]).build_route(1);
+        let result = template(vec![vec![0u8; MAX_ROUTE_LEN + 1]], vec![]).build_route(WAD, 1);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn build_route_accepts_a_route_at_the_cap() {
-        let result = order(vec![vec![0u8; MAX_ROUTE_LEN]], vec![]).build_route(1);
+        let result = template(vec![vec![0u8; MAX_ROUTE_LEN]], vec![]).build_route(WAD, 1);
 
         assert!(result.is_ok());
     }
@@ -497,67 +525,67 @@ mod tests {
 
     // ---------- commitment ----------
 
-    /// The heap is the binding ceiling on route length (see [`MAX_ROUTE_LEN`]), and
-    /// the order — segments included — is streamed through it whole to derive the
-    /// commitment. `borsh::to_vec(&order)` would materialise a second full copy on
-    /// an allocator that never frees; [`KeccakWriter`] is what avoids it.
+    /// One copy, by design, and the bound is what makes that safe.
     ///
-    /// Asserted on `hash()` itself, not on the serialization path underneath it.
-    /// An earlier version of this test measured `serialize` directly and passed
-    /// while `hash` still called `borsh::to_vec` — it was guarding a path
-    /// production did not take. Exactly zero is the right bar, and it is the bar
-    /// portal's equivalent holds: a reintroduced `to_vec` shows up as one.
+    /// The syscall hashes contiguous bytes, so a preimage must be materialised
+    /// once. That is the deliberate trade against the previous streaming keccak,
+    /// which allocated nothing but cost ~130 CU/byte in-program. Parameters are
+    /// small and fixed-shape, so this copy is bounded regardless of template size
+    /// — which is the whole reason the template moved out of this preimage.
     #[test]
-    fn order_hash_does_not_allocate() {
+    fn params_hash_allocates_exactly_one_bounded_copy() {
         let order = order(vec![vec![7u8; MAX_ROUTE_LEN]], vec![]);
-        let _ = order.hash(); // warm up any lazy init before counting
+        let _ = order.params_hash(); // warm up any lazy init before counting
 
         crate::test_alloc::start_counting();
-        let _ = order.hash();
+        let _ = order.params_hash();
 
+        assert_eq!(crate::test_alloc::stop_counting(), 1);
+        // A template orders of magnitude larger does not grow the params preimage.
         assert_eq!(
-            crate::test_alloc::stop_counting(),
-            0,
-            "the order must stream into the hasher without being copied"
+            borsh_len(&order).unwrap(),
+            borsh_len(&self::order(vec![vec![0u8; 1]], vec![])).unwrap()
         );
     }
 
     #[test]
-    fn order_hash_is_deterministic() {
+    fn params_hash_is_deterministic() {
         let a = order(vec![vec![1]], vec![]);
         let b = order(vec![vec![1]], vec![]);
 
-        assert_eq!(a.hash(), b.hash());
-        goldie::assert_json!(a.hash().as_ref());
+        assert_eq!(a.params_hash().unwrap(), b.params_hash().unwrap());
+        goldie::assert_json!(a.params_hash().unwrap().as_ref());
     }
 
     #[test]
-    fn order_hash_changes_with_every_field() {
+    fn params_hash_changes_with_every_field() {
         let base = order(vec![vec![1]], vec![]);
-        let baseline = base.hash();
+        let baseline = base.params_hash().unwrap();
 
-        let mut segments = order(vec![vec![2]], vec![]);
-        assert_ne!(segments.hash(), baseline);
+        // The template is committed by hash, so a different template still moves
+        // the parameter commitment through `template_hash`.
+        let segments = order(vec![vec![2]], vec![]);
+        assert_ne!(segments.params_hash().unwrap(), baseline);
 
-        segments = order(vec![vec![1]], vec![]);
-        segments.destination += 1;
-        assert_ne!(segments.hash(), baseline);
+        let mut destination = order(vec![vec![1]], vec![]);
+        destination.destination += 1;
+        assert_ne!(destination.params_hash().unwrap(), baseline);
 
         let mut scale = order(vec![vec![1]], vec![]);
         scale.scale += 1;
-        assert_ne!(scale.hash(), baseline);
+        assert_ne!(scale.params_hash().unwrap(), baseline);
 
         let mut floor = order(vec![vec![1]], vec![]);
         floor.min_amount_in += 1;
-        assert_ne!(floor.hash(), baseline);
+        assert_ne!(floor.params_hash().unwrap(), baseline);
 
         let mut mint = order(vec![vec![1]], vec![]);
         mint.base_mint = Pubkey::new_from_array([9u8; 32]);
-        assert_ne!(mint.hash(), baseline);
+        assert_ne!(mint.params_hash().unwrap(), baseline);
 
         let mut reward = order(vec![vec![1]], vec![]);
         reward.reward.creator = Pubkey::new_from_array([9u8; 32]);
-        assert_ne!(reward.hash(), baseline);
+        assert_ne!(reward.params_hash().unwrap(), baseline);
     }
 
     /// The log budget is no longer the binding ceiling (see [`MAX_ROUTE_LEN`]),
@@ -597,7 +625,6 @@ mod tests {
 /// must land on the same bytes.
 #[cfg(test)]
 mod cross_vm_tests {
-    use portal::types::TokenAmount;
     use serde_json::Value;
 
     use super::*;
@@ -619,7 +646,7 @@ mod cross_vm_tests {
             .collect()
     }
 
-    fn fixture_order(vector: &Value) -> Order {
+    fn fixture_template(vector: &Value) -> TemplateProgram {
         let segments = vector["segments"]
             .as_array()
             .unwrap()
@@ -640,27 +667,9 @@ mod cross_vm_tests {
             })
             .collect();
 
-        Order {
-            portal: portal::ID,
-            base_mint: Pubkey::new_from_array([3u8; 32]),
-            destination: 1399811150,
-            template: TemplateProgram {
-                vaults: vec![],
-                route: Template { segments, items },
-            },
-            reward: Reward {
-                deadline: 1_700_000_000,
-                creator: Pubkey::new_from_array([1u8; 32]),
-                prover: Pubkey::new_from_array([2u8; 32]),
-                native_amount: 0,
-                tokens: vec![TokenAmount {
-                    token: Pubkey::new_from_array([3u8; 32]),
-                    amount: 0,
-                }],
-            },
-            scale: vector_field(vector, "scale").parse().unwrap(),
-            min_amount_in: 1,
-            require_publish: false,
+        TemplateProgram {
+            vaults: vec![],
+            route: Template { segments, items },
         }
     }
 
@@ -685,10 +694,10 @@ mod cross_vm_tests {
     fn splice_reproduces_the_evm_chainers_route_byte_for_byte() {
         for vector in fixture()["vectors"].as_array().unwrap() {
             let amount_in: u64 = vector_field(vector, "amount_in").parse().unwrap();
-            let order = fixture_order(vector);
+            let scale: u128 = vector_field(vector, "scale").parse().unwrap();
 
             assert_eq!(
-                order.build_route(amount_in).unwrap(),
+                fixture_template(vector).build_route(scale, amount_in).unwrap(),
                 hex_to_bytes(vector_field(vector, "expected_route")),
                 "the SVM splice must reproduce the EVM chainer's route exactly"
             );

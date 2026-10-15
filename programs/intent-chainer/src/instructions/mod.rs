@@ -84,4 +84,6 @@ pub enum ChainerError {
     /// Must decode exactly one canonical bounded Order, without trailing bytes.
     InvalidBufferedOrder,
     OrderCommitmentMismatch,
+    /// The supplied template does not hash to the order's committed `template_hash`.
+    TemplateCommitmentMismatch,
 }

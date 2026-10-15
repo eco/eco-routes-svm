@@ -38,12 +38,31 @@ pub struct IntentChained {
 #[event]
 #[derive(new)]
 pub struct OrderAnnounced {
-    /// `keccak(borsh(order))` — the escrow authority's seed.
-    pub order_commitment: Bytes32,
-    /// The escrow authority the order derives.
+    /// Commitment to the template this order renders, announced separately by
+    /// [`TemplateAnnounced`] because one template serves many orders.
+    pub template_hash: Bytes32,
+    /// `sha256(borsh(order))` — the other half of the escrow authority's seeds.
+    pub params_hash: Bytes32,
+    /// The escrow authority the two halves derive. Recorded rather than left to be
+    /// re-derived: without both hashes a funded escrow has no derivation path and
+    /// no sweep, which is the whole reason announcements exist.
     pub escrow_authority: Pubkey,
-    /// The complete nested preimage, including every remote configuration.
+    /// The complete parameter preimage.
     pub order: crate::types::Order,
+}
+
+#[event]
+#[derive(derive_new::new)]
+pub struct TemplateAnnounced {
+    /// `sha256(borsh(template))` — one half of the escrow authority's seeds.
+    pub template_hash: Bytes32,
+    /// The complete nested preimage, including every remote configuration.
+    ///
+    /// The escrow authority is not derivable from this alone: it also needs the
+    /// order's `params_hash`, which rides inline in the transaction that executes
+    /// it. A template is reusable across orders, which is the point of announcing
+    /// it separately — the bytes are published once, not once per order.
+    pub template: crate::types::TemplateProgram,
 }
 
 impl IntentChained {
