@@ -260,22 +260,7 @@ impl IntentChainer<'_> {
         order: &Order,
         extra: Vec<Instruction>,
     ) -> TransactionResult {
-        let args = intent_chainer::instructions::AnnounceOrderArgs {
-            order: order.clone(),
-        };
-        let announce = Instruction {
-            program_id: intent_chainer::ID,
-            accounts: intent_chainer::accounts::AnnounceOrder {
-                event_authority: Pubkey::find_program_address(
-                    &[b"__event_authority"],
-                    &intent_chainer::ID,
-                )
-                .0,
-                program: intent_chainer::ID,
-            }
-            .to_account_metas(None),
-            data: intent_chainer::instruction::AnnounceOrder { args }.data(),
-        };
+        let announce = announce_order_instruction(order);
 
         let payer = self.payer.insecure_clone();
         let (announce, _) = self.stage_template_instruction(announce);
@@ -322,24 +307,12 @@ impl IntentChainer<'_> {
 
     /// Drives `intent_chainer::announce_order`.
     pub fn announce_order(&mut self, order: &Order) -> TransactionResult {
-        let args = intent_chainer::instructions::AnnounceOrderArgs {
-            order: order.clone(),
-        };
-        let instruction = Instruction {
-            program_id: intent_chainer::ID,
-            accounts: intent_chainer::accounts::AnnounceOrder {
-                event_authority: Pubkey::find_program_address(
-                    &[b"__event_authority"],
-                    &intent_chainer::ID,
-                )
-                .0,
-                program: intent_chainer::ID,
-            }
-            .to_account_metas(None),
-            data: intent_chainer::instruction::AnnounceOrder { args }.data(),
-        };
+        self.send_template_instruction(announce_order_instruction(order))
+    }
 
-        self.send_template_instruction(instruction)
+    /// Drives `intent_chainer::announce_template`.
+    pub fn announce_template(&mut self, template: &TemplateProgram) -> TransactionResult {
+        self.send_template_instruction(announce_template_instruction(template))
     }
 
     /// Re-derives the escrow addresses from `chained.order`.
@@ -444,6 +417,21 @@ impl IntentChainer<'_> {
         )
     }
 
+    /// The inline `chain` instruction for `chained`, unsent, so a test can size or
+    /// bundle it.
+    pub fn chain_instruction(&self, chained: &ChainedIntent, publish: bool) -> Instruction {
+        self.chain_instruction_with(
+            chained,
+            publish,
+            chained.escrow_authority,
+            chained.escrow_ata,
+            chained.vault,
+            chained.vault_ata,
+            chained.order.base_mint,
+            chained.order.portal,
+        )
+    }
+
     /// The single builder every other `chain` helper funnels through.
     #[allow(clippy::too_many_arguments)]
     fn chain_full(
@@ -457,6 +445,32 @@ impl IntentChainer<'_> {
         base_mint: Pubkey,
         portal_program: Pubkey,
     ) -> TransactionResult {
+        let instruction = self.chain_instruction_with(
+            chained,
+            publish,
+            escrow_authority,
+            escrow_ata,
+            vault,
+            vault_ata,
+            base_mint,
+            portal_program,
+        );
+
+        self.send_template_instruction(instruction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn chain_instruction_with(
+        &self,
+        chained: &ChainedIntent,
+        publish: bool,
+        escrow_authority: Pubkey,
+        escrow_ata: Pubkey,
+        vault: Pubkey,
+        vault_ata: Pubkey,
+        base_mint: Pubkey,
+        portal_program: Pubkey,
+    ) -> Instruction {
         let args = intent_chainer::instructions::ChainArgs {
             order: chained.order.clone(),
             template: chained.template.clone(),
@@ -475,13 +489,11 @@ impl IntentChainer<'_> {
             associated_token_program: anchor_spl::associated_token::ID,
             system_program: anchor_lang::system_program::ID,
         };
-        let instruction = Instruction {
+        Instruction {
             program_id: intent_chainer::ID,
             accounts: accounts.to_account_metas(None),
             data: intent_chainer::instruction::Chain { args }.data(),
-        };
-
-        self.send_template_instruction(instruction)
+        }
     }
 
     /// An order whose spliced route is a valid Borsh `Route` of exactly
@@ -596,6 +608,44 @@ impl IntentChainer<'_> {
         };
 
         (minimal, with_accounts, accounts)
+    }
+}
+
+/// The chainer's `PDA([b"__event_authority"])`, derived from the seed rather than
+/// the crate constant so the documented client ABI is what gets exercised.
+pub fn event_authority() -> Pubkey {
+    Pubkey::find_program_address(&[b"__event_authority"], &intent_chainer::ID).0
+}
+
+/// Builds `intent_chainer::announce_order`.
+pub fn announce_order_instruction(order: &Order) -> Instruction {
+    let args = intent_chainer::instructions::AnnounceOrderArgs {
+        order: order.clone(),
+    };
+    Instruction {
+        program_id: intent_chainer::ID,
+        accounts: intent_chainer::accounts::AnnounceOrder {
+            event_authority: event_authority(),
+            program: intent_chainer::ID,
+        }
+        .to_account_metas(None),
+        data: intent_chainer::instruction::AnnounceOrder { args }.data(),
+    }
+}
+
+/// Builds `intent_chainer::announce_template`.
+pub fn announce_template_instruction(template: &TemplateProgram) -> Instruction {
+    let args = intent_chainer::instructions::AnnounceTemplateArgs {
+        template: template.clone(),
+    };
+    Instruction {
+        program_id: intent_chainer::ID,
+        accounts: intent_chainer::accounts::AnnounceTemplate {
+            event_authority: event_authority(),
+            program: intent_chainer::ID,
+        }
+        .to_account_metas(None),
+        data: intent_chainer::instruction::AnnounceTemplate { args }.data(),
     }
 }
 

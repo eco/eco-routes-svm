@@ -59,10 +59,13 @@ impl OrderBuffer {
 ///
 /// The commitment is split in two, and the split is what lets orders chain
 /// without stacking: a parent references a child by these 32-byte hashes alone,
-/// so the child's template bytes never enter the parent's preimage. Both halves
-/// are load-bearing — dropping either lets a caller vary the uncommitted half and
-/// derive the same escrow for a different order. Neither depends on the measured
-/// amount, which is why this address, unlike a vault, is knowable in advance.
+/// so the child's template bytes never enter the parent's preimage.
+/// `params_hash` is the load-bearing seed: dropping it lets a caller pair one
+/// template with parameters of their own and derive the same escrow. The template
+/// is bound twice — by its own seed and by `Order.template_hash` inside
+/// `params_hash` — so keep both seeds rather than leaning on either binding alone.
+/// Neither depends on the measured amount, which is why this address, unlike a
+/// vault, is knowable in advance.
 pub fn escrow_authority_pda(template_hash: &Bytes32, params_hash: &Bytes32) -> (Pubkey, u8) {
     Pubkey::find_program_address(
         &[ESCROW_SEED, template_hash.as_ref(), params_hash.as_ref()],
@@ -93,8 +96,9 @@ mod tests {
         ));
     }
 
-    /// Both seeds independently move custody. Neither may be dropped: a caller
-    /// free to vary the uncommitted half derives one escrow for two orders.
+    /// Both seeds independently move custody, and they are positional. Only the
+    /// derivation is pinned here; that the template is also bound through
+    /// `params_hash` is pinned by `types::tests::params_hash_changes_with_every_field`.
     #[test]
     fn escrow_authority_pda_varies_by_either_half() {
         let (t, p) = (Bytes32::from([1u8; 32]), Bytes32::from([2u8; 32]));

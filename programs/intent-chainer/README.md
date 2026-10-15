@@ -151,8 +151,8 @@ There are no opaque config blobs, padding/default fields, or bump fields.
 
 ```text
 Order =
-  portal[32] | base_mint[32] | destination:u64 |
-  TemplateProgram | Reward | scale:u128 | min_amount_in:u64 | require_publish:bool
+  portal[32] | base_mint[32] | destination:u64 | template_hash[32] |
+  Reward | scale:u128 | min_amount_in:u64 | require_publish:bool
 
 TemplateProgram = vault_count:u32 | Vault[vault_count] | Template(root)
 Vault = destination:u64 | Template(route) | Template(reward) | Derivation
@@ -170,13 +170,14 @@ Derivation tag 1 = portal_program[32] | token_program[32] | mint[32]
 Reward = deadline:u64 | creator[32] | prover[32] | native_amount:u64 |
          token_count:u32 | (mint[32] | amount:u64)[token_count]
 
-chain arguments = Order | publish:bool
+chain arguments = Order | TemplateProgram | publish:bool
 announce_order arguments = Order
-init_order_buffer arguments = seed[32] | order_commitment[32] | order_len:u32 |
+announce_template arguments = TemplateProgram
+init_order_buffer arguments = seed[32] | template_hash[32] | template_len:u32 |
                               chunk_len:u32 | chunk_bytes
 write_order_buffer arguments = offset:u32 | chunk_len:u32 | chunk_bytes
 seal_order_buffer arguments = (none)
-chain_from_account arguments = publish:bool
+chain_from_account arguments = Order | publish:bool
 close_order_buffer arguments = (none)
 ```
 
@@ -184,16 +185,50 @@ These arguments follow their Anchor instruction discriminator. Standalone Borsh 
 must consume exactly the expected schema (`try_from_slice` rejects trailing bytes).
 Appending bumps is not a configuration mechanism.
 
-`Order.hash() = keccak256(borsh(Order))`, streamed without a serialization copy.
-Every nested literal, item kind/source/scale/width/endian, reference, node destination,
-reward byte and remote configuration is committed. Mutating any of them changes the
-order hash and `escrow_authority_pda(order_hash)`.
+### The split commitment
+
+An order is committed in two halves, and custody is seeded by both:
+
+```text
+template_hash    = sha256(borsh(TemplateProgram))
+params_hash      = sha256(borsh(Order))          // Order carries template_hash
+escrow_authority = PDA([b"escrow", template_hash, params_hash], chainer_program)
+```
+
+Both are SHA-256 through the syscall, over one contiguous Borsh copy, deliberately
+**not** keccak: they are only ever PDA seeds on this chain, and nothing on another VM
+reproduces them. `intent_hash` is the cross-chain ABI and stays keccak256. The syscall
+also replaced an in-program keccak that cost ~130 CU per preimage byte.
+
+`template_hash` commits every nested literal, item kind/source/scale/width/endian,
+reference, node destination, reward byte and remote configuration. `params_hash` commits
+the local Portal, base mint, destination, reward (deadline, creator, prover), scale,
+floor and publish flag, and through `Order.template_hash` the template as well.
+Mutating any of them moves the escrow. Neither half depends on the measured amount
+(the reward is authored at zero), so, unlike a vault, the escrow address is knowable
+before intent1 executes. A parent that delivers into a child order's escrow therefore
+needs only the child's two 32-byte hashes; the child's template bytes never enter the
+parent's preimage.
+
+The template is the large, reusable half. Many orders can share one template, and the
+parameters (the half that tells one order from another, 253 bytes with the single
+reward leg) ride inline in every transaction that executes an order. `chain` binds the
+template it is handed to `Order.template_hash` (`TemplateCommitmentMismatch`) before
+using it.
 
 ## Custody, publication and retry boundaries
 
-- Escrow authority remains `PDA([b"escrow", Order.hash()], chainer_program)`.
-  Intent1 commits to its escrow ATA as the output recipient. Presenting another order
-  cannot authorize spending that escrow.
+- Escrow authority is `PDA([b"escrow", template_hash, params_hash], chainer_program)`.
+  Intent1 commits to its escrow ATA as the output recipient. Presenting another order,
+  with different parameters or a different template, cannot authorize spending that
+  escrow. Each half binds something different. `params_hash` is what makes the escrow
+  someone's: without it, anyone could pair a committed template with parameters of
+  their own (themselves as `reward.creator`, a short deadline) and derive the same
+  escrow. `template_hash` binds the bytes rendered into intent2 and its nested
+  recipients. It is currently bound twice, as a seed and through `Order.template_hash`
+  inside the parameters, so either binding alone would hold it. Keep both rather than
+  dropping one on the assumption that the other covers it. Collapsing the seeds to
+  anything the order does not determine reopens the sweep.
 - `Order.portal` remains a committed **local** reward Portal. One chainer can serve
   multiple Portal deployments. It is distinct from Portals in remote configurations.
 - The local reward must have exactly one base-mint token authored at amount zero and
@@ -254,53 +289,111 @@ authoritative, and callers must rederive the child accounts when it does.
 
 ## Durable announcements and events
 
-Announce the complete order **before funding intent1**, or retain it durably elsewhere.
-Losing an unannounced preimage leaves no way to reconstruct it from the escrow address.
+Recovering a funded escrow needs **both** preimages: the parameters and the template.
+Announce both **before funding intent1**, or retain them durably elsewhere. Losing
+either leaves no way to reconstruct it from the escrow address.
 
-`announce_order` validates the complete static preimage and records `OrderAnnounced`
-as an **Anchor self-CPI event**, not an ordinary `Program data:` log. It requires two
-read-only accounts: the chainer's `PDA([b"__event_authority"])` and the chainer program.
-The event authority signs the self-CPI. Its instruction data is:
+| Record | Emitted by | Carries |
+| --- | --- | --- |
+| `OrderAnnounced` | `announce_order`, once per order | `template_hash`, `params_hash`, `escrow_authority`, Borsh `Order` |
+| `TemplateAnnounced` | `announce_template` (inline) or `seal_order_buffer` (staged) | `template_hash`, Borsh `TemplateProgram` |
+
+Join the two on `template_hash`. One `TemplateAnnounced` serves every order that commits
+to that template.
+
+Both are **Anchor self-CPI events**, not ordinary `Program data:` logs. `announce_order`
+and `announce_template` are permissionless and custody-free. Each requires exactly two
+read-only accounts, the chainer's `PDA([b"__event_authority"])` and the chainer program,
+and no signer beyond the fee payer. The event authority signs the self-CPI.
+`announce_template` runs the same static validation as `seal_order_buffer`
+(`TemplateProgram::validate`, including the 4096-byte cap) and keys its record by the
+same hash `chain` checks. A template over the cap is refused while it is still being
+deserialized (`InstructionDidNotDeserialize`), as in `chain`; the staged path refuses
+the same bytes at `init_order_buffer` (`OrderTooLarge`). Instruction ABI:
+
+```text
+announce_order    = sha256("global:announce_order")[..8]    = 4fa857a7b64dbea3 | Borsh Order
+announce_template = sha256("global:announce_template")[..8] = 16cae0a7d0f1e832 | Borsh TemplateProgram
+accounts (both)   = [event_authority (read-only), chainer program (read-only)]
+```
+
+Their self-CPI instruction data:
 
 ```text
 Anchor EVENT_IX_TAG_LE[8] | OrderAnnounced discriminator[8] |
-order_commitment[32] | escrow_authority[32] | Borsh Order
+template_hash[32] | params_hash[32] | escrow_authority[32] | Borsh Order
+
+Anchor EVENT_IX_TAG_LE[8] | TemplateAnnounced discriminator[8] |
+template_hash[32] | Borsh TemplateProgram
 ```
 
-At the 4096-byte Order cap that is 4176 bytes. One exactly pre-sized buffer avoids the
-default event macro's repeated allocations on the non-freeing heap. Failure to record
-the CPI event fails the instruction; exhausting ordinary logs does not lose the preimage.
+`OrderAnnounced` is small and fixed-size: the Borsh `Order` is 253 bytes with its single
+reward leg. `TemplateAnnounced` at the 4096-byte template cap is a measured 4144 bytes.
+One exactly pre-sized buffer avoids the default event macro's repeated allocations on
+the non-freeing heap. Failure to record the CPI event fails the instruction; exhausting
+ordinary logs does not lose the preimage.
 
 Indexers must read successful transactions' inner instructions, verify the emitting
-chainer program/event framing, and validate the commitment. A logs-only subscription
+chainer program/event framing, and validate each preimage against its announced hash. A logs-only subscription
 is insufficient. Persist finalized preimages; RPC historical retention is an operational
 dependency, not perpetual storage furnished by this program.
 
-`IntentChained` retains Input, Output, root route hash, local vault, order commitment and
+`IntentChained` retains Input, Output, root route hash, local vault, both commitment halves
+(`template_hash` and `params_hash`, which together derive intent1's escrow) and the
 effective publication flag. Reconstruct using **both** initial amounts. `IntentPublished`
 is still Portal's ordinary full-route event; run the tested dedicated chain transaction,
 not an arbitrary log-heavy bundle. Its byte-exact visibility is tested at the root cap.
 
 ## Bounds, resource measurements and transport
 
-### Native staged-order path
+### Inline path
 
-Use **`chain_from_account`** when the inline Order does not fit. This adds transport
-state, not custody state. The existing `chain` and `announce_order` remain available
-for small orders; Order bytes, hashes and escrow derivation are unchanged by staging.
-Merely making the existing one-shot `announce_order(Order)` persist would still send
-the oversized preimage. Chunked upload plus a small seal/announcement handles both
-prepare and execution, without a generic external execution adapter.
+When the whole order fits one packet, no buffer is needed:
 
 ```text
-authority A: init(first chunk) → append chunks as needed → seal + announce
+before funding intent1:  [announce_template, announce_order]   one transaction
+after intent1 settles:   chain(order, template, publish)
+```
+
+The inline `chain` carries both halves plus eleven accounts, so its size depends only
+on the template's Borsh length and the envelope. The largest template it carries is
+found by growing a template a byte at a time until the signed `chain` no longer fits,
+measuring the announcement pair at every size on the way. The test then submits all of
+them at the boundary, in the same envelope as the staged path (legacy message, CU limit
+**and CU price**, no ALT):
+
+| Transaction, at the largest inline template (417 bytes) | Wire bytes | CU (observed) |
+| --- | ---: | ---: |
+| `chain` | **1232** | 81–91k |
+| `announce_template` alone | 681 | 21k |
+| `[announce_template, announce_order]` | **948** | 28–30k |
+| Same pair + idempotent escrow ATA creation (measured, not submitted) | 1150 | — |
+
+The test asserts the pair fits a packet at every template size for which the inline
+`chain` fits, so whenever an order can be chained inline its record fits one
+transaction. A template over 417 bytes in this envelope goes through the staged path
+below.
+
+### Native staged-order path
+
+Use **`chain_from_account`** when the template does not fit inline. This adds transport
+state, not custody state. The buffer stages the **template**, the large half; the
+parameters always ride inline, including on `chain_from_account`. The existing `chain`,
+`announce_order` and `announce_template` remain available for small templates; template
+bytes, hashes and escrow derivation are unchanged by staging. Chunked upload plus a
+small seal/announcement handles both prepare and execution, without a generic external
+execution adapter. Seal records the template; the parameters still need their own
+`announce_order`.
+
+```text
+authority A: init(first chunk) → append chunks as needed → seal + TemplateAnnounced
                                                                │ read-only
-any payer B:                                     chain_from_account
+any payer B:  announce_order (once per order) ……   chain_from_account(order, publish)
 authority A: close separately, in any state → rent returned to A
 ```
 
 The buffer PDA is `PDA([b"order_buffer", authority[32], seed[32]], chainer_program)`.
-Generate a fresh random 32-byte seed per trade; do not use a shared index/default seed.
+Generate a fresh random 32-byte seed per buffer; do not use a shared index/default seed.
 Authority A signs and pays buffer rent on initialization. No separate rent recipient
 is accepted: only A can write, seal, or close, and all closing lamports return to A.
 Chain's existing payer B pays transaction fees/local vault ATA rent; B can differ from A.
@@ -309,10 +402,10 @@ arbitrary execution target, and no combined execute-and-close instruction.
 
 | Instruction | Accounts (in order) | Behavior |
 | --- | --- | --- |
-| `init_order_buffer` | authority signer/writable, buffer writable, System | Validate 1..4096-byte length and <=800-byte first chunk; griefing-resistant allocation; bind authority, seed and declared commitment |
+| `init_order_buffer` | authority signer/writable, buffer writable, System | Validate 1..4096-byte template length and <=800-byte first chunk; griefing-resistant allocation; bind authority, seed and declared `template_hash` |
 | `write_order_buffer` | authority signer, buffer writable | Append 1..800 bytes at exactly `written`, within declared length; no overwrite or gaps |
-| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode; shared `validate_order`; hash match; full OrderAnnounced self-CPI; seal atomically |
-| `chain_from_account` | buffer read-only, then all existing Chain accounts | Require sealed, exact decode; invoke the SAME chain handler directly, recomputing hash and checking both buffer commitment and supplied escrow before value movement |
+| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode of one `TemplateProgram`; `TemplateProgram::validate`; hash must equal the declared `template_hash`; full `TemplateAnnounced` self-CPI; seal atomically |
+| `chain_from_account` | buffer read-only, then all existing Chain accounts | Require sealed, exact decode; parameters inline; invoke the SAME chain handler directly, which checks `order.template_hash` against the buffer's, recomputes both halves and checks the supplied escrow before value movement |
 | `close_order_buffer` | authority signer/writable, buffer writable | Close in any state; return rent to original authority; no token movement |
 
 All buffer consumers check program ownership, discriminator and its authority/seed PDA.
@@ -321,9 +414,9 @@ by raw payload bytes, **not another Vec length**:
 
 ```text
 OrderBuffer discriminator[8] = [150,173,11,86,146,96,229,77]
-authority[32] | seed[32] | order_commitment[32] |
-order_len:u32 | written:u32 | sealed:bool | canonical_bump:u8
-raw Borsh Order[order_len]    // payload starts at byte 114
+authority[32] | seed[32] | template_hash[32] |
+template_len:u32 | written:u32 | sealed:bool | canonical_bump:u8
+raw Borsh TemplateProgram[template_len]    // payload starts at byte 114
 ```
 
 The IDL account type describes the fixed header; fetch raw account data to access the
@@ -334,60 +427,68 @@ This transport bump is unrelated to remote vault derivation, which still accepts
 Sealed buffers cannot be rewritten, including by A. Before sealing, even A can only
 append; retry upload by reading `written`, not resending an already committed chunk.
 A bad/incomplete upload can always be closed and recreated. Failed seal/publication
-does not seal it or prevent rent recovery. Keep the Order preimage independently and
-wait for successful seal/announcement before funding intent1.
+does not seal it or prevent rent recovery. Keep both preimages independently and wait
+for successful seal/announcement before funding intent1.
 
 Closing can race execution and cause an account-not-found failure; it cannot move
-escrow funds. A may recreate the same PDA, but different bytes change Order.hash()
-and fail against the original escrow. Anyone can stage identical bytes in another
-buffer and retry; a third party staging different bytes cannot authorize that escrow.
-Closing cannot erase the recorded announcement or the escrow's commitment.
+escrow funds. A may recreate the same PDA, but different bytes fail the order's
+`template_hash` (`TemplateCommitmentMismatch`): seal binds the bytes to the header's
+declared hash, and execution binds that to the order. Anyone can stage identical bytes
+in another buffer and retry; a third party staging different bytes cannot authorize
+that escrow. Closing cannot erase the recorded announcement or the escrow's commitment.
 
+A sealed buffer attests a **template, not an order**. Any order committing to that
+`template_hash` can execute from it, and each reaches only its own escrow, because the
+inline parameters, the half that tells one order from another, seed custody too.
 Buffers are reusable transport, **not single-use settlement records**. Replaying after
-a drain fails on the empty escrow. Replaying against a different order's new escrow
-fails its commitment check. Re-funding the same order still follows the existing
-measurement and transfer-delivery rules; staging adds no settlement nonce.
+a drain fails on the empty escrow. Presenting another order's parameters fails that
+order's escrow check. Re-funding the same order still follows the existing measurement
+and transfer-delivery rules; staging adds no settlement nonce.
 Every execution revalidates templates/configs/rewards, remeasures, checks local accounts,
 and applies publication strengthening. There is **no deadline gate**, including at seal.
 A stale account list or failed transfer/publication leaves both buffer and escrow intact.
 
 ### Packet sizes and client integration
 
-The 781-byte transport fixture has a nested Solana vault, complete Portal Borsh
+The 560-byte transport template has a nested Solana vault, complete Portal Borsh
 route/reward bodies, and a root call with runtime amount/recipient. It is a
 production-shaped fixture, not the solver's exact captured quote. Tests sign and
 submit these legacy packets with a blockhash, CU limit **and CU price**, no ALT:
 
 | Transaction | Wire bytes |
 | --- | ---: |
-| Inline announce + escrow ATA (not submitted) | 1247 — too large |
-| Inline chain (not submitted) | 1343 — too large |
-| Prepare 1: init + all 781 Order bytes | **1150** |
+| Inline `announce_order` + escrow ATA (not submitted) | 719, fits |
+| Inline chain (not submitted) | 1375, too large |
+| Prepare 1: init + all 560 template bytes | **929** |
 | Prepare 2: seal/announce + idempotent escrow ATA creation | **499** |
-| Execute: chain_from_account | **594** |
+| Execute: chain_from_account, parameters inline | **848** |
 | Close separately | 263 |
 
-Prepare is explicitly **two transactions**, not one. A solver independently measured
-1254/1383-byte envelopes for the same two inline shapes; those differ by framing, and the
-chain figure predates dropping the child `WithdrawnMarker` account (33 bytes). Clients
-must still size their own final signed transactions. No stage packet carries an authority signature into execution.
-For a 4096-byte Order, upload is init with 800 bytes plus five append transactions;
-then seal/announce and execute. Init at 800 bytes is 1169 bytes, each full append
-1072 bytes, standalone seal 297 bytes, execution still 594 bytes. Every submitted
-native-path test packet is checked against 1232 bytes.
+Prepare is explicitly **two transactions**, not one, plus `announce_order` for the
+parameters. Clients must still size their own final signed transactions. No stage packet
+carries an authority signature into execution. For a 4096-byte template, upload is init
+with 800 bytes plus five append transactions; then seal/announce and execute. Init at
+800 bytes is 1169 bytes, each full append 1072 bytes, standalone seal 297 bytes.
+Execution is 848 bytes whatever the template size, because only the parameters ride
+with it. Every submitted native-path test packet is checked against 1232 bytes.
 
 Client changes (solver implementation remains out of scope):
 
-1. Use the new chainer artifact/IDL; compute the SAME Order commitment and escrow.
-2. Generate and retain a random seed, stage through the authority's wallet, then seal
-   (optionally bundled with escrow ATA creation). Persist the full announcement.
+1. Use the new chainer artifact/IDL; compute the SAME `template_hash`, `params_hash`
+   and escrow.
+2. Record both halves before funding intent1. Inline: `[announce_template,
+   announce_order]` in one transaction. Staged: generate and retain a random seed, stage
+   the template through the authority's wallet, seal (optionally bundled with escrow ATA
+   creation), and send `announce_order`. Persist both announcements.
 3. After intent1 settles, read the escrow balance and derive the existing local child
-   accounts. Send `chain_from_account(publish)` with read-only buffer followed by the
-   existing Chain account list. The buffer authority is absent; the rent payer signs.
-4. Retry unchanged Orders with freshly derived local accounts when needed. Close the
+   accounts. Send `chain(order, template, publish)`, or `chain_from_account(order,
+   publish)` with the read-only buffer followed by the existing Chain account list. The
+   buffer authority is absent; the rent payer signs.
+4. Retry unchanged orders with freshly derived local accounts when needed. Close the
    buffer separately through its authority; retain preimages for restaging/recovery.
-5. Keep quote-time packet/CU admission checks. Staging Order data does not stage later
-   fulfillment calls, compress account keys, or remove SVM scheduling constraints.
+   A sealed template buffer may be reused by later orders on the same template.
+5. Keep quote-time packet/CU admission checks. Staging template data does not stage
+   later fulfillment calls, compress account keys, or remove SVM scheduling constraints.
 
 ### Runtime bounds
 
@@ -397,38 +498,40 @@ Client changes (solver implementation remains out of scope):
 | Items per template | 8 (up to 136 over 17 templates) |
 | Aggregate rendered node routes + rewards + root | 2048 bytes |
 | Root route | 2048 bytes, within the aggregate bound |
-| Borsh Order preimage | 4096 bytes |
+| Borsh template preimage | 4096 bytes |
 
 Do not substitute EVM's 32 KiB rendered cap. Deserialization bounds vector counts and
-segment lengths before allocation and limits the Order reader to 4096 bytes. Shape,
-configuration, references and aggregate output are validated before hashing. Recipient
+segment lengths before allocation and limits the template reader to 4096 bytes. Shape,
+configuration, references and aggregate output are validated before rendering. Recipient
 results use a fixed array; downstream templates feed borrowed segments and stack-encoded
 items into native scatter/gather Keccak, without allocating route/reward bodies. The
-final root is pre-sized once. Success-path arithmetic
-does not allocate discarded Anchor errors. The stock allocator remains 32 KiB; no custom
-heap or heap-frame request is required.
+final root is pre-sized once. The only full-template copy is the one contiguous
+preimage the SHA-256 syscall hashes. Success-path arithmetic does not allocate discarded
+Anchor errors. The stock allocator remains 32 KiB; no custom heap or heap-frame request
+is required.
 
 Fresh SBF/LiteSVM measurements (Anchor 1.1.2, platform-tools v1.52 / rustc 1.89.0-dev,
-LiteSVM 0.16.0; instrumented heap peaks before the metrics log):
+LiteSVM 0.16.0). CU is the range over three uninstrumented runs; heap peaks come from a
+separate `resource-metrics` build, read before the metrics log:
 
-| Case | Order bytes | Root bytes | Chain CU (observed) | Chainer heap peak |
+| Case | Template bytes | Root bytes | Chain CU (observed) | Chainer heap peak |
 | --- | ---: | ---: | ---: | ---: |
-| EVM / Worldchain / TRON CCTP route, one nested node | 1845 | 928 | 561–590k | 8217 |
-| Solana remote vault, Borsh reward | 1728 | 928 | 545–562k | 8081 |
-| Three levels, shared references, mixed VMs | 1299 | 109 | 352k | 4525 |
-| Eight nodes, eight items in every template, both byte caps | 4096 | 21 | 944k | 11141 |
-| Eight Solana nodes, near-maximum root | 3317 | 2032 | 1.083M | 14921 |
-| Maximum Order announcement (separate invocation) | 4096 | — | 532k | 13106 |
+| EVM / Worldchain / TRON CCTP route, one nested node | 1624 | 928 | 280–322k | 9977 |
+| Solana remote vault, Borsh reward | 1507 | 928 | 278–317k | 9721 |
+| Three levels, shared references, mixed VMs | 1078 | 109 | 205–222k | 5741 |
+| Eight nodes, eight items in every template, both byte caps | 4096 | 8 | 512–529k | 15341 |
+| Eight Solana nodes, near-maximum root | 3096 | 2032 | 551–563k | 18153 |
+| Maximum template announcement, `seal_order_buffer` | 4096 | — | 108k | 17498 |
+| Maximum template announcement, `announce_template` by CPI | 4096 | — | 107k | 17114 |
 
-PDA bumps make CU vary; these are measurements, not an upper bound for every possible
-configuration. Request up to 1.4M CU for dense cases and simulate the exact submission.
-Dropping the child `WithdrawnMarker` account removed one `find_program_address`, worth a
-directly measured 3,387 CU on every `chain` / `chain_from_account` invocation (281,045 ->
-277,658 on the 781-byte staging case). The rows above predate that removal, have not been
-re-measured under the original instrumented conditions, and are conservative by about
-that much.
+The parameters are a fixed 253 bytes in every row. PDA bumps make CU vary; these are
+measurements, not an upper bound for every possible configuration. Request up to 1.4M
+CU for dense cases and simulate the exact submission. Every row dropped against the
+pre-split figures, mostly because both commitments moved from in-program keccak to the
+SHA-256 syscall. The `announce_template` row is a CPI from the test-only generic buffer,
+since a 4096-byte template cannot be a packet; its CU includes that caller.
 The tests also cover root-only 2048-byte publication and deliberately exhausted logs
-before a full 4096-byte announcement.
+before a full 4096-byte template announcement.
 
 **Runtime acceptance is not packet transport.** The earlier claim that a ~960-byte route
 fits one ordinary chain transaction was incorrect: LiteSVM can execute oversized
@@ -436,20 +539,21 @@ transactions. Tests now count actual wire bytes and submit only <=1232-byte pack
 
 The historical test-only generic buffer remains for inline ABI/CPI/log-pressure
 regressions; it is not deployed or required by the native path. Production clients
-should use the native path above. An ALT only compresses account keys, not Order data.
+should use the native path above. An ALT only compresses account keys, not template data.
 
-Native-path measurements retain the same 4096/2048 limits. A 4 KiB **encoded Order**
+Native-path measurements retain the same 4096/2048 limits. A 4 KiB **encoded template**
 does not authorize 4 KiB of rendered output. Native execution borrows the account's
-payload and deserializes one bounded Order, with no full-byte staging copy or extra
-execution CPI. Measured stock-heap peaks before the optional metrics log:
+payload and deserializes one bounded template, with no staging copy or extra execution
+CPI. Measured stock-heap peaks before the optional metrics log:
 
 | Native case | Chain CU (observed) | Chain heap | Seal/announcement heap |
 | --- | ---: | ---: | ---: |
-| 781-byte nested Order | ~285k | 4125 | 2351 |
-| 4096-byte Order, 8 nodes/136 items, 2048 aggregate rendered | ~922–934k | 11261 | 13490 |
-| 3317-byte Order, 8 Solana nodes, 2032-byte root | ~1.074–1.076M | 15041 | 8327 |
+| 560-byte nested template | 166–174k | 4821 | 2618 |
+| 4096-byte template, 8 nodes/136 items, 2048 aggregate rendered | 514–517k | 15461 | 17498 |
+| 3096-byte template, 8 Solana nodes, 2032-byte root | 545–563k | 18273 | 11130 |
+| 417-byte template, inline `chain` and `announce_template` | 81–91k | 3629 | 1581 |
 
-Sealing the dense 4096-byte case uses about 533k CU and records all 4176 event bytes.
+Sealing the dense 4096-byte template uses about 108k CU and records all 4144 event bytes.
 These tests use the real SBF artifact and <=1232-byte native submissions, not host
 renderer calls or a generic-buffer execution shortcut. Keep both bounds: there is
 measured stock-32-KiB headroom, but no evidence here justifies larger limits. Native
@@ -486,8 +590,9 @@ Independent fixtures:
   ethers/Solana SDK expectations were checked against the pinned Solidity harness on
   local Anvil. `generate-nested-vectors.cjs` documents regeneration using a fresh local
   Anvil instance. Neither generator calls a live chain.
-- The existing amount-only cross-VM output fixture is retained. The Order-hash golden
-  changes intentionally and was independently checked with manual Borsh + ethers Keccak.
+- The existing amount-only cross-VM output fixture is retained. The params-hash golden
+  changed intentionally with the split to SHA-256, and was independently checked with a
+  manual Borsh encoding hashed by Python's `hashlib.sha256`.
 
 Redeploy the chainer under a **new program ID**; do not upgrade in place. Regenerate IDL
 and TS types, migrate all Order builders/encoders/commitment derivation, add CPI-event
