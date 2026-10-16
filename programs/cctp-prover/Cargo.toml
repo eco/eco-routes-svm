@@ -34,4 +34,4 @@ getrandom = { workspace = true }
 
 [dev-dependencies]
 goldie = { workspace = true }
-sha2 = "0.10"
+sha2 = "0.11"
