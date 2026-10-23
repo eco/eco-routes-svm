@@ -1,0 +1,129 @@
+name: Reproduce
+
+# Rebuilds a release tag's programs and IDLs and checks them against the chain, byte for byte.
+# It needs no keys: it reads the chain, and with `upload` it attaches the reproduced assets to the
+# tag's GitHub release (replacing same-named ones), which also covers releases built outside
+# release.yml. Everything is read from the tag, including the toolchain and VERIFY_IMAGE in its
+# release.yml, so the build is the one that produced the deployed bytecode. The tag must carry the
+# real declare_id!s, as v<version> and deploy/v<version> do.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag carrying the program IDs, e.g. v3.0.0"
+        type: string
+        required: true
+      cluster:
+        description: "Cluster the programs are deployed on"
+        type: choice
+        options: [mainnet, devnet]
+        default: mainnet
+      upload:
+        description: "Attach the reproduced .so files and IDLs to the tag's release once everything matches"
+        type: boolean
+        default: false
+
+concurrency:
+  group: reproduce-${{ inputs.tag }}-${{ inputs.cluster }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag }}
+  CLUSTER: ${{ inputs.cluster }}
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Validate tag
+        run: |
+          [[ "$TAG" =~ ^(deploy/)?v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "invalid tag: ${TAG}" >&2; exit 1; }
+
+      - name: Checkout tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+
+      # The tag's own pins, so an older release rebuilds with the toolchain that built it.
+      - name: Read the tag's toolchain
+        run: |
+          for key in RUST_VERSION ANCHOR_VERSION SOLANA_VERSION VERIFY_IMAGE SOLANA_VERIFY_VERSION RELEASED_PROGRAMS; do
+            value=$(sed -n "s/^  ${key}: \"\(.*\)\"$/\1/p" .github/workflows/release.yml)
+            [ -n "$value" ] || { echo "${key} not found in the tag's release.yml" >&2; exit 1; }
+            echo "${key}=${value}" >> "$GITHUB_ENV"
+          done
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: reproduce
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+
+      # Same builds as release.yml: bytecode from the pinned verifiable build, IDLs from
+      # `anchor idl build` with the release version stamped in. solana-verify's container runs as
+      # root, so hand target/ back to the runner after it.
+      - name: Build programs and IDLs
+        run: |
+          features=()
+          if [ "$CLUSTER" = mainnet ]; then
+            features=(-- --features mainnet)
+          fi
+          version=${TAG#deploy/}
+          version=${version#v}
+          mkdir -p dist target/idl
+          # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
+          for program in $RELEASED_PROGRAMS; do
+            solana-verify build --base-image "$VERIFY_IMAGE" --library-name "$program" ${features[@]+"${features[@]}"}
+            sudo chown -R "$(id -u):$(id -g)" target
+            cp "target/deploy/${program}.so" "dist/${program}.${CLUSTER}.so"
+            anchor idl build --program-name "${program//_/-}" --out "target/idl/${program}.json" ${features[@]+"${features[@]}"}
+            jq --arg version "$version" '.metadata.version = $version' "target/idl/${program}.json" \
+              > "dist/${program}.${CLUSTER}.json"
+          done
+
+      - name: Compare with the chain
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: |
+          mkdir -p target/onchain
+          failed=0
+          {
+            echo "## Reproduce ${TAG} on ${CLUSTER}"
+            echo
+            echo "| Program | Address | Bytecode | IDL |"
+            echo "|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # shellcheck disable=SC2086 # RELEASED_PROGRAMS is a word list
+          for program in $RELEASED_PROGRAMS; do
+            address=$(jq -r .address "dist/${program}.${CLUSTER}.json")
+            built=$(solana-verify get-executable-hash "dist/${program}.${CLUSTER}.so")
+            deployed=$(solana-verify get-program-hash -u "$RPC_URL" "$address" 2>/dev/null | tail -n 1) || deployed=""
+            if [ "$built" = "$deployed" ]; then bytecode="✅ \`${built:0:8}\`"; else bytecode="❌ built \`${built:0:8}\`, chain \`${deployed:0:8}\`"; failed=1; fi
+            if anchor idl fetch "$address" --provider.cluster "$RPC_URL" -o "target/onchain/${program}.json" >/dev/null 2>&1 \
+              && cmp -s "dist/${program}.${CLUSTER}.json" "target/onchain/${program}.json"; then
+              idl="✅"
+            else
+              idl="❌"
+              failed=1
+            fi
+            echo "| \`${program}\` | \`${address}\` | ${bytecode} | ${idl} |" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          [ "$failed" = 0 ] || { echo "the build from ${TAG} does not match ${CLUSTER}" >&2; exit 1; }
+
+      - name: Upload to the release
+        if: inputs.upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # The GitHub release is always v<version>, also when the IDs came from deploy/v<version>.
+        run: gh release upload "v${TAG#deploy/v}" dist/* --clobber
