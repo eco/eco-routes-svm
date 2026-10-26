@@ -256,7 +256,8 @@ using it.
 - There is **no chainer deadline/buffer gate**. Builders budget deadline headroom before
   funding intent1. After funding, solvers should still forward to the local vault even
   near/after expiry, so Portal can refund an unproven intent or pay its proven claimant.
-  A valid proof blocks refund until withdrawal. All other chainer checks still apply.
+  A fulfillment proof blocks refund until withdrawal; cancellation proofs follow
+  Portal's cancellation-refund rules. All other chainer checks still apply.
 - Invalid amount widths, an unmet minimum or an unusable remote template are not
   repaired by an announcement. There is no generic
   chainer refund or arbitrary sweep. Keeping the preimage is necessary, not a guarantee
@@ -579,7 +580,7 @@ anchor idl build --program-name intent-chainer --out target/idl/intent_chainer.j
 ```
 
 `--ignore-keys` avoids rewriting program IDs from unrelated local keypairs. For a full
-workspace test, also build all other programs and mock-igp as CLAUDE.md specifies.
+workspace test, also build all other programs, mock-igp and mock-prover as CLAUDE.md specifies.
 Optional local heap profiling adds `-- --features resource-metrics` to the chainer SBF
 build; leave that feature disabled for release and rebuild uninstrumented for final tests.
 

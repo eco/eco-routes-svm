@@ -17,6 +17,7 @@ mainnet = [
     "eco-svm-std/mainnet",
     "flash-fulfiller/mainnet",
     "hyper-prover/mainnet",
+    "intent-chainer/mainnet",
     "layerzero-prover/mainnet",
     "local-prover/mainnet",
     "polymer-prover/mainnet",
