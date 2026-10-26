@@ -25,7 +25,7 @@ env:
   SOLANA_VERIFY_VERSION: "0.5.2"
   # Production programs only. The localnet test programs (dummy-ism, mock-polymer-prover,
   # malicious-*) must never reach a release, so assets are copied by name, never by glob.
-  RELEASED_PROGRAMS: "aggregator_prover portal hyper_prover local_prover flash_fulfiller proof_helper polymer_prover layerzero_prover cctp_prover"
+  RELEASED_PROGRAMS: "aggregator_prover portal intent_chainer hyper_prover local_prover flash_fulfiller proof_helper polymer_prover layerzero_prover cctp_prover"
 
 jobs:
   release:
@@ -64,7 +64,7 @@ jobs:
 
       - name: Compute next version (dry run)
         id: dry
-        uses: cycjimmy/semantic-release-action@v6
+        uses: cycjimmy/semantic-release-action@v8
         with:
           dry_run: true
         env:
@@ -190,7 +190,7 @@ jobs:
       - name: Release
         id: semantic
         if: steps.dry.outputs.new_release_published == 'true' && !inputs.dry_run
-        uses: cycjimmy/semantic-release-action@v6
+        uses: cycjimmy/semantic-release-action@v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

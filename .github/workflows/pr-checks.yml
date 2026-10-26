@@ -112,6 +112,7 @@ jobs:
 
       - name: Build non-Anchor test programs
         run: |
+          cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
 
@@ -144,6 +145,7 @@ jobs:
 
       - name: Build non-Anchor test programs
         run: |
+          cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
 

@@ -1,0 +1,109 @@
+use anchor_lang::prelude::*;
+use derive_new::new;
+use eco_svm_std::Bytes32;
+
+/// A follow-on intent was resolved from a measured balance and funded.
+///
+/// Route bytes are reconstructed from the complete Order and BOTH initial amounts.
+/// Nested recipients are deterministic data, not local transfer accounts. The
+/// route hash checks reconstruction; Portal's optional publication carries the
+/// full route. The Order preimage is durably announced through a self-CPI event.
+#[event]
+pub struct IntentChained {
+    /// Intent2's hash, computed from the spliced route and the resolved reward.
+    pub intent_hash: Bytes32,
+    /// Commitment to the template this order rendered.
+    pub template_hash: Bytes32,
+    /// Commitment to its parameters. With `template_hash` this derives the escrow
+    /// authority, so an indexer needs no other source to follow the money.
+    pub params_hash: Bytes32,
+    /// Intent2's vault, which now holds `amount_in`.
+    pub vault: Pubkey,
+    /// The measured mint.
+    pub base_mint: Pubkey,
+    /// The measured amount, escrowed as intent2's reward.
+    pub amount_in: u64,
+    /// Initial Output context: `ceil(amount_in * scale / WAD)` (not narrowed to u64).
+    pub amount_out: u128,
+    /// Intent2's destination chain id.
+    pub destination: u64,
+    /// `keccak(route)`, so a reconstructed route can be verified.
+    pub route_hash: Bytes32,
+    /// Whether this call also emitted portal's canonical `IntentPublished`.
+    pub published: bool,
+}
+
+/// The complete parameter preimage, recorded as an Anchor self-CPI event.
+///
+/// Carries the whole order, which is the point: the escrow authority is seeded by
+/// `sha256(borsh(order))` and the template hash, so without both preimages a
+/// funded escrow has no derivation path and no sweep. The template half is
+/// [`TemplateAnnounced`]. See [`crate::instructions::announce_order`].
+#[event]
+#[derive(new)]
+pub struct OrderAnnounced {
+    /// Commitment to the template this order renders, announced separately by
+    /// [`TemplateAnnounced`] because one template serves many orders.
+    pub template_hash: Bytes32,
+    /// `sha256(borsh(order))` — the other half of the escrow authority's seeds.
+    pub params_hash: Bytes32,
+    /// The escrow authority the two halves derive. Recorded rather than left to be
+    /// re-derived: without both hashes a funded escrow has no derivation path and
+    /// no sweep, which is the whole reason announcements exist.
+    pub escrow_authority: Pubkey,
+    /// The complete parameter preimage.
+    pub order: crate::types::Order,
+}
+
+/// The complete template preimage, recorded as an Anchor self-CPI event by
+/// [`crate::instructions::announce_template`] (inline) or `seal_order_buffer`
+/// (staged). Recovering a funded escrow needs this AND the order's
+/// [`OrderAnnounced`].
+#[event]
+#[derive(derive_new::new)]
+pub struct TemplateAnnounced {
+    /// `sha256(borsh(template))` — one half of the escrow authority's seeds.
+    pub template_hash: Bytes32,
+    /// The complete nested preimage, including every remote configuration.
+    ///
+    /// The escrow authority is not derivable from this alone: it also needs the
+    /// order's `params_hash`, which rides inline in the transaction that executes
+    /// it. A template is reusable across orders, which is the point of announcing
+    /// it separately — the bytes are published once, not once per order.
+    pub template: crate::types::TemplateProgram,
+}
+
+impl IntentChained {
+    /// Hand-written rather than `derive_new`: nine fields trips
+    /// `clippy::too_many_arguments`, and the lint is worth silencing explicitly
+    /// here rather than losing a field an indexer needs. Every one earns its
+    /// place — the two commitment halves together derive intent1's escrow address,
+    /// `route_hash` lets a reconstruction be verified, and `published` tells a
+    /// consumer whether to expect portal's `IntentPublished` too.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        intent_hash: Bytes32,
+        template_hash: Bytes32,
+        params_hash: Bytes32,
+        vault: Pubkey,
+        base_mint: Pubkey,
+        amount_in: u64,
+        amount_out: u128,
+        destination: u64,
+        route_hash: Bytes32,
+        published: bool,
+    ) -> Self {
+        Self {
+            intent_hash,
+            template_hash,
+            params_hash,
+            vault,
+            base_mint,
+            amount_in,
+            amount_out,
+            destination,
+            route_hash,
+            published,
+        }
+    }
+}

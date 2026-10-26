@@ -17,6 +17,7 @@ mainnet = [
     "eco-svm-std/mainnet",
     "flash-fulfiller/mainnet",
     "hyper-prover/mainnet",
+    "intent-chainer/mainnet",
     "layerzero-prover/mainnet",
     "local-prover/mainnet",
     "polymer-prover/mainnet",
@@ -30,12 +31,14 @@ anchor-lang = { workspace = true }
 anchor-spl = { workspace = true }
 base64 = "0.23.1"
 bincode = "1.3"
+borsh = "1.8.0"
 cctp-prover = { workspace = true, features = ["no-entrypoint"] }
 derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
 dummy-ism = { workspace = true }
 eco-svm-std = { workspace = true }
 flash-fulfiller = { workspace = true, features = ["no-entrypoint"] }
 hyper-prover = { workspace = true, features = ["no-entrypoint"] }
+intent-chainer = { workspace = true, features = ["no-entrypoint"] }
 layerzero-prover = { workspace = true, features = ["no-entrypoint"] }
 libsecp256k1 = "0.7.1"
 litesvm = "0.16.0"

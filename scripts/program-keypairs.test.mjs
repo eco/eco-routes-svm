@@ -29,6 +29,7 @@ const AGGREGATOR_SEED = "f78b4e3957c81fcda3f631607cb21aaa1d45b2a85f5e1f2647f523d
 const PROGRAMS = [
   "aggregator_prover",
   "portal",
+  "intent_chainer",
   "hyper_prover",
   "local_prover",
   "flash_fulfiller",
@@ -40,6 +41,7 @@ const PROGRAMS = [
 const CARGO_DEPENDENCIES = {
   aggregator_prover: ["portal", "anchor-lang"],
   portal: ["eco-svm-std"],
+  intent_chainer: ["portal", "eco-svm-std"],
   hyper_prover: ["portal"],
   local_prover: ["portal", "flash-fulfiller"],
   flash_fulfiller: ["portal"],
@@ -52,6 +54,7 @@ const CARGO_DEPENDENCIES = {
 const DEPENDENCIES = {
   aggregator_prover: ["cctp_prover", "hyper_prover", "layerzero_prover", "polymer_prover", "portal"],
   portal: [],
+  intent_chainer: ["portal"],
   hyper_prover: ["portal"],
   local_prover: ["flash_fulfiller", "portal"],
   flash_fulfiller: ["portal"],
