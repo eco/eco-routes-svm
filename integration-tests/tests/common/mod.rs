@@ -48,6 +48,8 @@ pub mod proof_helper_context;
 mod prover_query;
 pub mod template_transport;
 
+// Some integration binaries exercise only a concrete prover.
+#[allow(unused_imports)]
 pub use aggregator_prover_context::query_accounts as aggregator_query;
 pub use prover_query::ProverQuery;
 
