@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::prover;
 
-declare_id!("EcoLE4mTBSCZ4BwyxfBrCvX8tBRAXEyd1UfurM1CKDdV");
+declare_id!("EcoLGDxv2hnDijPfHX9fAbFeMmUmGQ1XzLNUfCHyEw91");
 
 pub mod instructions;
 pub mod state;
@@ -17,7 +17,14 @@ pub mod local_prover {
         prove_intent(ctx, args)
     }
 
-    pub fn close_proof(ctx: Context<CloseProof>) -> Result<()> {
-        instructions::close_proof(ctx)
+    pub fn get_proof(
+        ctx: Context<GetProof>,
+        args: prover::GetProofArgs,
+    ) -> Result<Option<prover::Proof>> {
+        instructions::get_proof(ctx, args)
+    }
+
+    pub fn close_proof(ctx: Context<CloseProof>, args: prover::CloseProofArgs) -> Result<()> {
+        instructions::close_proof(ctx, args)
     }
 }

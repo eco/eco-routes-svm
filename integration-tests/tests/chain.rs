@@ -7,7 +7,7 @@
 //! prove and withdraw intent2 so the pushed tokens actually reach a claimant.
 //! Everything else pins one property of that path.
 
-mod common;
+pub mod common;
 
 use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{AnchorDeserialize, Discriminator};
@@ -219,7 +219,6 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
             claimant.pubkey(),
             proof.0,
             WithdrawnMarker::pda(&chained.intent_hash).0,
-            proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
                 AccountMeta::new(claimant_ata, false),
@@ -852,7 +851,6 @@ fn chain_late_transfer_preserves_proven_claim() {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
                 AccountMeta::new(claimant_ata, false),
@@ -863,7 +861,7 @@ fn chain_late_transfer_preserves_proven_claim() {
         .expect("proven claimant must still receive the late-funded reward");
     assert_eq!(ctx.token_balance(&claimant_ata), DELIVERED);
     assert_eq!(ctx.token_balance(&chained.vault_ata), 0);
-    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&proof).is_some());
     assert!(ctx.get_account(&withdrawn_marker).is_some());
 }
 
@@ -1540,7 +1538,6 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
             claimant,
             old_proof,
             fresh_withdrawn,
-            proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(fresh.vault_ata, false),
                 AccountMeta::new(claimant_ata, false),
@@ -1548,7 +1545,7 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
             ],
             vec![AccountMeta::new(claimant, true)],
         )
-        .is_err_and(is_error(portal::instructions::PortalError::InvalidProof)));
+        .is_err_and(is_error(eco_svm_std::prover::ProverError::InvalidProof)));
     assert_eq!(ctx.token_balance(&fresh.vault_ata), DELIVERED);
     assert_eq!(ctx.token_balance(&claimant_ata), 0);
 
@@ -1590,7 +1587,7 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let dispatcher = dispatcher_pda(&local_prover::ID).0;
-    let closer = proof_closer_pda(&local_prover::ID).0;
+    let closer = proof_closer_pda(&chained.intent_hash).0;
     let before = (ctx.balance(&dispatcher), ctx.balance(&closer));
 
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());

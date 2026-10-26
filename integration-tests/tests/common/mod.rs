@@ -6,7 +6,7 @@
 
 use std::ops::Deref;
 
-use anchor_lang::{AnchorSerialize, Discriminator, Event, Space};
+use anchor_lang::{AccountSerialize, AnchorSerialize, Discriminator, Event, Space};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::associated_token::spl_associated_token_account::instruction::create_associated_token_account;
 use anchor_spl::token::{self, spl_token};
@@ -22,28 +22,41 @@ use litesvm::LiteSVM;
 use portal::state::{executor_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{self, Call, Reward, Route, TokenAmount};
 use rand::random;
+use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_sdk::clock::Clock;
-use solana_sdk::instruction::InstructionError;
+use solana_sdk::instruction::{AccountMeta, Instruction, InstructionError};
 use solana_sdk::message::Message;
 use solana_sdk::program_pack::Pack;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::rent::Rent;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
-use solana_sdk::transaction::{Transaction, TransactionError};
+use solana_sdk::transaction::{Transaction, TransactionError, VersionedTransaction};
 
+mod aggregator_prover_context;
+pub mod cctp_prover_context;
 mod flash_fulfiller_context;
 mod hyper_prover_context;
 pub mod hyperlane_context;
 pub mod intent_chainer_context;
+pub mod layerzero_prover_context;
 mod local_prover_context;
 pub mod order_buffer_context;
+pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
+mod prover_query;
 pub mod template_transport;
+
+pub use aggregator_prover_context::query_accounts as aggregator_query;
+pub use prover_query::ProverQuery;
 
 const COMPUTE_UNIT_LIMIT: u32 = 400_000;
 pub const SPL_NOOP_ID: Pubkey = solana_sdk::pubkey!("noopb9bkMVfRPU8AsbpTUg8AQkHtKwMYZiFUjNRtMmV");
+/// Circle's `message_transmitter_v2`, dumped from mainnet at slot 343321624
+/// (sha256 abbe67181ec4edcad11f4a0773d8bf658b2e599d6f1365ebfee1ab0f85fe9bb4). Loaded at its real ID;
+/// `cctp_prover_context::install_transmitter` plants a state account with test attesters.
+const MESSAGE_TRANSMITTER_V2_BIN: &[u8] = include_bytes!("../../../bins/message_transmitter_v2.so");
 const PORTAL_BIN: &[u8] = include_bytes!("../../../target/deploy/portal.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/hyper_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/local_prover.so");
@@ -52,8 +65,16 @@ const INTENT_CHAINER_BIN: &[u8] = include_bytes!("../../../target/deploy/intent_
 const MALICIOUS_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/malicious_prover.so");
 const MALICIOUS_PROOF_CLOSER_BIN: &[u8] =
     include_bytes!("../../../target/deploy/malicious_proof_closer.so");
+const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/polymer_prover.so");
+const CCTP_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/cctp_prover.so");
+const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../target/deploy/layerzero_prover.so");
+const MOCK_POLYMER_PROVER_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/mock_polymer_prover.so");
 
-type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
+const MOCK_LAYERZERO_ENDPOINT_BIN: &[u8] =
+    include_bytes!("../../../target/deploy/mock_layerzero_endpoint.so");
+
+pub type TransactionResult = Result<TransactionMetadata, Box<FailedTransactionMetadata>>;
 
 /// An intent already put through `fulfill` by [`Context::fulfill_rand_intents`].
 /// `route` and `reward_hash` are kept so callers can replay the same `fulfill`.
@@ -95,6 +116,38 @@ impl Default for Context {
             .unwrap();
         svm.add_program(malicious_proof_closer::ID, MALICIOUS_PROOF_CLOSER_BIN)
             .unwrap();
+        svm.add_program(polymer_prover::ID, POLYMER_PROVER_BIN)
+            .unwrap();
+        // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
+        // can stage the admin that `LayerZeroProver::install` configures.
+        svm.add_program(layerzero_prover::ID, LAYERZERO_PROVER_BIN)
+            .unwrap();
+        // Loaded upgradeable (with ProgramData), so `set_upgrade_authority`
+        // can stage the admin `init` checks.
+        svm.add_program(cctp_prover::ID, CCTP_PROVER_BIN).unwrap();
+        svm.add_program(
+            cctp_prover::cctp::MESSAGE_TRANSMITTER_V2_ID,
+            MESSAGE_TRANSMITTER_V2_BIN,
+        )
+        .unwrap();
+        // The mock declares Polymer's devnet ID, which is what non-mainnet
+        // polymer-prover builds CPI into. Under `--features mainnet` this
+        // address is the mainnet one and the mock's declared ID no longer
+        // matches — only `validate_polymer_prover_real` runs in that
+        // configuration, and it replaces this program with Polymer's dumped
+        // binary.
+        svm.add_program(
+            polymer_prover::polymer::POLYMER_PROVER_ID,
+            MOCK_POLYMER_PROVER_BIN,
+        )
+        .unwrap();
+        // The mock declares LayerZero's EndpointV2 ID (identical on mainnet and
+        // devnet). `layerzero_prover_real` replaces it with the dumped binary.
+        svm.add_program(
+            layerzero_prover::layerzero::ENDPOINT_ID,
+            MOCK_LAYERZERO_ENDPOINT_BIN,
+        )
+        .unwrap();
 
         hyperlane_context::add_hyperlane_programs(&mut svm);
         hyperlane_context::init_hyperlane(&mut svm);
@@ -112,7 +165,7 @@ impl Default for Context {
             .unwrap();
         svm.airdrop(&payer.pubkey(), sol_amount(10.0)).unwrap();
 
-        Self {
+        let mut context = Self {
             svm,
             mint_authority,
             token_program: token::ID,
@@ -122,7 +175,12 @@ impl Default for Context {
             solver,
             sender,
             compute_limit: COMPUTE_UNIT_LIMIT,
-        }
+        };
+        let payer = context.payer.pubkey();
+        context.set_upgrade_authority(&hyper_prover::ID, Some(payer));
+        context.set_upgrade_authority(&polymer_prover::ID, Some(payer));
+
+        context
     }
 }
 
@@ -186,6 +244,21 @@ impl Context {
         )
     }
 
+    /// A random intent with no route tokens, calls, or native amount — the
+    /// smallest shape `fulfill`/`cancel` will accept — targeting `prover`.
+    /// Returns the same `(intent_hash, route, reward)` a caller would otherwise
+    /// derive by hand from [`Context::rand_intent`].
+    pub fn rand_minimal_intent(&mut self, prover: Pubkey) -> (Bytes32, Route, Reward) {
+        let (_, mut route, mut reward) = self.rand_intent();
+        route.tokens.clear();
+        route.calls.clear();
+        route.native_amount = 0;
+        reward.prover = prover;
+        let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward.hash());
+
+        (intent_hash, route, reward)
+    }
+
     /// Fulfills `intent_count` minimal intents — no route tokens, calls, or
     /// native amount — against `prover`.
     pub fn fulfill_rand_intents(
@@ -195,13 +268,8 @@ impl Context {
     ) -> Vec<FulfilledIntent> {
         (0..intent_count)
             .map(|_| {
-                let (_, mut route, mut reward) = self.rand_intent();
-                route.tokens.clear();
-                route.calls.clear();
-                route.native_amount = 0;
-                reward.prover = prover;
+                let (intent_hash, route, reward) = self.rand_minimal_intent(prover);
                 let reward_hash = reward.hash();
-                let intent_hash = types::intent_hash(CHAIN_ID, &route.hash(), &reward_hash);
 
                 self.portal()
                     .fulfill_intent(
@@ -405,6 +473,40 @@ impl Context {
         self.set_account(address, account).unwrap();
     }
 
+    /// Sets the upgrade authority recorded in `program_id`'s ProgramData
+    /// (`None` simulates `solana program set-upgrade-authority --final`).
+    pub fn set_upgrade_authority(&mut self, program_id: &Pubkey, authority: Option<Pubkey>) {
+        let address = program_data_address(program_id);
+        let mut program_data = self.get_account(&address).unwrap();
+        let metadata = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 0,
+            upgrade_authority_address: authority,
+        })
+        .unwrap();
+        program_data.data[..metadata.len()].copy_from_slice(&metadata);
+        self.set_account(address, program_data).unwrap();
+    }
+
+    /// Stages an Anchor `account` at `address`, owned by `owner`.
+    pub fn set_anchor_account<T: AccountSerialize>(
+        &mut self,
+        address: Pubkey,
+        owner: Pubkey,
+        account: &T,
+    ) {
+        self.set_account(
+            address,
+            solana_sdk::account::Account {
+                lamports: 1_000_000_000,
+                data: anchor_account_data(account),
+                owner,
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    }
+
     pub fn balance(&self, pubkey: &Pubkey) -> u64 {
         self.svm.get_balance(pubkey).unwrap_or_default()
     }
@@ -441,6 +543,20 @@ impl Context {
             .and_then(|account| T::try_deserialize(&mut account.data.as_slice()).ok())
     }
 
+    /// The claimant recorded in `prover`'s proof of `intent_hash`, or the zero
+    /// key when there is none.
+    pub fn proof_claimant(&self, intent_hash: &Bytes32, prover: &Pubkey) -> Pubkey {
+        self.account::<ProofAccount>(&Proof::pda(intent_hash, prover).0)
+            .map(|account| account.0.claimant)
+            .unwrap_or_default()
+    }
+
+    /// Plants a `Proof` as `owner` would have written it. The discriminator is
+    /// hyper-prover's `ProofAccount::DISCRIMINATOR` whichever prover `owner`
+    /// names; that stands in for local-prover's and polymer-prover's only because
+    /// Anchor derives it from the struct *name* and all three call theirs
+    /// `ProofAccount` (pinned by `set_proof_discriminator_matches_every_prover`
+    /// in `close_proof_polymer_prover.rs`).
     pub fn set_proof(&mut self, proof_pda: Pubkey, proof: Proof, owner: Pubkey) {
         let mut data = Vec::new();
         data.extend_from_slice(ProofAccount::DISCRIMINATOR);
@@ -461,7 +577,7 @@ impl Context {
 
     pub fn set_withdrawn_marker(&mut self, withdrawn_marker_pda: Pubkey) {
         let mut data = Vec::new();
-        data.extend_from_slice(&[0u8; 8]);
+        data.extend_from_slice(WithdrawnMarker::DISCRIMINATOR);
 
         let account = solana_sdk::account::Account {
             // Not `WithdrawnMarker::min_balance`: that takes the `Rent` anchor-lang
@@ -487,7 +603,19 @@ impl Context {
         self.set_sysvar(&clock);
     }
 
-    pub fn send_transaction(&mut self, transaction: Transaction) -> TransactionResult {
+    pub fn send_instruction(&mut self, instruction: Instruction) -> TransactionResult {
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
+        self.send_transaction(transaction)
+    }
+
+    pub fn send_transaction(
+        &mut self,
+        transaction: impl Into<VersionedTransaction>,
+    ) -> TransactionResult {
         let result = self.svm.send_transaction(transaction);
         self.expire_blockhash();
         let slot = self.svm.get_sysvar::<Clock>().slot;
@@ -497,8 +625,46 @@ impl Context {
     }
 }
 
+/// The programs a portal `reward.prover` can name, each loaded by
+/// [`Context::default`].
+pub const CONCRETE_PROVERS: [Pubkey; 5] = [
+    local_prover::ID,
+    hyper_prover::ID,
+    polymer_prover::ID,
+    layerzero_prover::ID,
+    cctp_prover::ID,
+];
+
+/// The upgradeable-loader ProgramData account of `program_id`.
+pub fn program_data_address(program_id: &Pubkey) -> Pubkey {
+    solana_loader_v3_interface::get_program_data_address(program_id)
+}
+
+/// Serializes an Anchor account (mock or ours) for `set_account`.
+pub fn anchor_account_data<T: AccountSerialize>(account: &T) -> Vec<u8> {
+    let mut data = Vec::new();
+    account.try_serialize(&mut data).unwrap();
+    data
+}
+
 pub fn sol_amount(amount: f64) -> u64 {
     (amount * 1_000_000_000.0) as u64
+}
+
+/// The rent recipient a concrete prover's cleanup tail ends with: Hyperlane
+/// and LayerZero pin it to their (non-signing) PDA payer, CCTP to the proof's
+/// `claimant` (non-signing) unless it is cancelled or zero, and the rest pay a
+/// signing recipient.
+pub fn cleanup_recipient(prover: &Pubkey, signer: Pubkey, claimant: Pubkey) -> AccountMeta {
+    if *prover == hyper_prover::ID {
+        AccountMeta::new(hyper_prover::state::pda_payer_pda().0, false)
+    } else if *prover == layerzero_prover::ID {
+        AccountMeta::new(layerzero_prover::state::pda_payer_pda().0, false)
+    } else if *prover == cctp_prover::ID && eco_svm_std::claimant::is_payable(&claimant) {
+        AccountMeta::new(claimant, false)
+    } else {
+        AccountMeta::new(signer, true)
+    }
 }
 
 pub fn contains_event<E>(expected: E) -> impl Fn(TransactionMetadata) -> bool
@@ -610,6 +776,19 @@ where
     let marker = format!("Program {program_id} invoke");
 
     move |actual: T| actual.meta.logs.iter().any(|log| log.starts_with(&marker))
+}
+
+/// Asserts that `program_id`'s frame returned `Ok` inside a transaction that
+/// failed elsewhere — the runtime logs `Program <id> success` per frame — so a
+/// test can tell "the callee succeeded and *our* check rejected" from "the
+/// callee's own error propagated", which a bare `Custom(code)` cannot.
+pub fn program_succeeded<T>(program_id: Pubkey) -> impl Fn(T) -> bool
+where
+    T: Deref<Target = FailedTransactionMetadata>,
+{
+    let marker = format!("Program {program_id} success");
+
+    move |actual: T| actual.meta.logs.iter().any(|log| log == &marker)
 }
 
 pub fn is_error<T, Err>(expected: Err) -> impl Fn(T) -> bool

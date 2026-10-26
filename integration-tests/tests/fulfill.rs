@@ -6,7 +6,7 @@ use anchor_spl::associated_token::spl_associated_token_account::instruction::cre
 use anchor_spl::token::spl_token;
 use anchor_spl::token_2022::spl_token_2022;
 use eco_svm_std::prover::{IntentHashClaimant, ProofData, ProveArgs};
-use eco_svm_std::CHAIN_ID;
+use eco_svm_std::{CANCELLED, CHAIN_ID};
 use hyper_prover::instructions::HyperProverError;
 use portal::events::IntentFulfilled;
 use portal::instructions::PortalError;
@@ -171,12 +171,7 @@ fn fulfill_intent_token_transfer_success() {
     });
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
-        FulfillMarker::new(
-            claimant,
-            ctx.payer.pubkey(),
-            destination_route.deadline,
-            bump
-        )
+        FulfillMarker::new(claimant, bump)
     );
 }
 
@@ -306,12 +301,7 @@ fn fulfill_intent_token_2022_transfer_success() {
     });
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
-        FulfillMarker::new(
-            claimant,
-            ctx.payer.pubkey(),
-            destination_route.deadline,
-            bump
-        )
+        FulfillMarker::new(claimant, bump)
     );
 }
 
@@ -369,7 +359,7 @@ fn fulfill_intent_native_transfer_success() {
     assert_eq!(ctx.balance(&recipient), route.native_amount);
     assert_eq!(
         ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
-        FulfillMarker::new(claimant, ctx.payer.pubkey(), route.deadline, bump)
+        FulfillMarker::new(claimant, bump)
     );
 }
 
@@ -1060,6 +1050,66 @@ fn fulfill_intent_invalid_calldata_fail() {
     )));
 }
 
+/// A trailing account no call consumes is accepted and never hashed: it is how
+/// a solver supplies a CPI target program the route does not commit.
+#[test]
+fn fulfill_intent_unconsumed_trailing_account_success() {
+    let mut ctx = common::Context::default();
+    let (_, mut route, _) = ctx.rand_intent();
+    route.tokens.clear();
+    let reward_hash = rand::random::<[u8; 32]>().into();
+    let recipient = Pubkey::new_unique();
+    let claimant = Pubkey::new_unique().to_bytes().into();
+    let executor = state::executor_pda().0;
+    let solver = ctx.solver.pubkey();
+
+    ctx.airdrop(&solver, route.native_amount).unwrap();
+    let calldata = Calldata {
+        data: system_instruction::transfer(&executor, &recipient, route.native_amount).data,
+        account_count: 3,
+    };
+    let call_accounts = vec![
+        AccountMeta::new(executor, false),
+        AccountMeta::new(recipient, false),
+        AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
+    ];
+    let calldata_with_accounts =
+        CalldataWithAccounts::new(calldata.clone(), call_accounts.clone()).unwrap();
+
+    let source_route = route_with_calldatas_with_accounts(
+        route.clone(),
+        vec![(system_program::ID, calldata_with_accounts)],
+    );
+    let route_native_amount = route.native_amount;
+    let destination_route = route_with_calldatas(route, vec![(system_program::ID, calldata)]);
+    let intent_hash = types::intent_hash(CHAIN_ID, &source_route.hash(), &reward_hash);
+    let (fulfill_marker, bump) = state::FulfillMarker::pda(&intent_hash);
+
+    let mut accounts = call_accounts;
+    accounts.push(AccountMeta::new_readonly(Pubkey::new_unique(), false));
+    let result = ctx.portal().fulfill_intent(
+        intent_hash,
+        &destination_route,
+        reward_hash,
+        claimant,
+        executor,
+        fulfill_marker,
+        vec![],
+        accounts,
+    );
+    assert!(
+        result.is_ok_and(common::contains_event(IntentFulfilled::new(
+            intent_hash,
+            claimant
+        )))
+    );
+    assert_eq!(ctx.balance(&recipient), route_native_amount);
+    assert_eq!(
+        ctx.account::<FulfillMarker>(&fulfill_marker).unwrap(),
+        FulfillMarker::new(claimant, bump)
+    );
+}
+
 #[test]
 fn fulfill_intent_already_fulfilled_fail() {
     let mut ctx = common::Context::default();
@@ -1098,7 +1148,7 @@ fn fulfill_intent_already_fulfilled_fail() {
         vec![],
     );
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::IntentAlreadyFulfilled
+        portal::instructions::PortalError::IntentAlreadyFulfilledOrCancelled
     )));
 }
 
@@ -1240,4 +1290,28 @@ fn fulfill_intent_invalid_intent_hash_fail() {
         vec![],
     );
     assert!(result.is_err_and(common::is_error(PortalError::InvalidIntentHash)));
+}
+
+/// Only `cancel` may write the sentinel: a fulfill carrying it would record a
+/// fill that later proves as a cancellation.
+#[test]
+fn fulfill_reserved_claimant_fail() {
+    let mut ctx = common::Context::default();
+    let (intent_hash, route, reward) = ctx.rand_minimal_intent(hyper_prover::ID);
+    let reward_hash = reward.hash();
+    let fulfill_marker = state::FulfillMarker::pda(&intent_hash).0;
+
+    let result = ctx.portal().fulfill_intent(
+        intent_hash,
+        &route,
+        reward_hash,
+        CANCELLED,
+        state::executor_pda().0,
+        fulfill_marker,
+        vec![],
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(PortalError::ReservedClaimant)));
+    assert!(ctx.get_account(&fulfill_marker).is_none());
 }

@@ -245,3 +245,28 @@ fn prove_intent_wrong_proof_pda_fail() {
 
     assert!(result.is_err_and(common::is_error(LocalProverError::InvalidProof)));
 }
+
+/// Defence in depth: `prove` already requires the marker's PDA, but a marker's
+/// claimant is only trusted when the portal owns the account.
+#[test]
+fn prove_intent_foreign_owned_fulfill_marker_fail() {
+    let (mut ctx, intent_hashes) = setup(1);
+    let fulfill_marker = state::FulfillMarker::pda(&intent_hashes[0]).0;
+    let proof = prover::Proof::pda(&intent_hashes[0], &local_prover::ID).0;
+    let mut account = ctx.get_account(&fulfill_marker).unwrap();
+    account.owner = Pubkey::new_unique();
+    ctx.set_account(fulfill_marker, account).unwrap();
+
+    let result = ctx.portal().prove_intent_via_local_prover(
+        intent_hashes,
+        CHAIN_ID,
+        vec![fulfill_marker],
+        state::dispatcher_pda(&local_prover::ID).0,
+        vec![proof],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::InvalidFulfillMarker
+    )));
+    assert!(ctx.get_account(&proof).is_none());
+}

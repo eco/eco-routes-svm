@@ -5,7 +5,7 @@
 //! `local_prover.prove` → `portal.withdraw` → `portal.fulfill` → sweep.
 //! Living in its own program (rather than extending `local-prover`) avoids
 //! Solana's reentrancy rule — `local_prover` only appears on the stack
-//! inside portal's `close_proof` CPI, never twice.
+//! inside portal's proof-validation CPI, never twice.
 //!
 //! # Client requirement
 //!
@@ -21,7 +21,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("EcoFiZiPRTZzcQhHHUZqL9VGMjzYWvfQbDgJwaNsSXbQ");
+declare_id!("EcoFPd5rxoSdvW3sdkrx3DLAmATfVaibfNvLq3ZUh9ge");
 
 // Install a 256 KB bump allocator so flash_fulfill can actually use the
 // heap space requested by `ComputeBudgetInstruction::request_heap_frame`

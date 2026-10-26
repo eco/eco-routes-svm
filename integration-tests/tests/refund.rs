@@ -3,24 +3,44 @@ use std::iter;
 use anchor_lang::prelude::AccountMeta;
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use eco_svm_std::prover::Proof;
-use eco_svm_std::Bytes32;
+use eco_svm_std::{Bytes32, CANCELLED};
 use hyper_prover::state::pda_payer_pda;
 use portal::events::IntentRefunded;
-use portal::state::{self, proof_closer_pda};
+use portal::state;
 use portal::types::{intent_hash, Reward};
 use rand::random;
+use solana_address_lookup_table_interface::instruction::{
+    create_lookup_table, extend_lookup_table,
+};
+use solana_sdk::message::{v0, AddressLookupTableAccount, Message, VersionedMessage};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
+use solana_sdk::slot_hashes::SlotHashes;
+use solana_sdk::transaction::{Transaction, VersionedTransaction};
 
 pub mod common;
 
-fn setup(is_token_2022: bool) -> (common::Context, u64, Reward, Bytes32) {
+fn setup_with_prover(
+    is_token_2022: bool,
+    prover: Pubkey,
+) -> (common::Context, u64, Reward, Bytes32) {
+    setup_with_reward(is_token_2022, prover, |_, _| {})
+}
+
+/// `shape_reward` adjusts the random reward before it is funded.
+fn setup_with_reward(
+    is_token_2022: bool,
+    prover: Pubkey,
+    shape_reward: impl FnOnce(&mut common::Context, &mut Reward),
+) -> (common::Context, u64, Reward, Bytes32) {
     let mut ctx = if is_token_2022 {
         common::Context::new_with_token_2022()
     } else {
         common::Context::default()
     };
-    let (destination, _, reward) = ctx.rand_intent();
+    let (destination, _, mut reward) = ctx.rand_intent();
+    reward.prover = prover;
+    shape_reward(&mut ctx, &mut reward);
     let route_hash = random::<[u8; 32]>().into();
     let funder = ctx.funder.pubkey();
     let vault_pda = state::vault_pda(&intent_hash(destination, &route_hash, &reward.hash())).0;
@@ -60,6 +80,10 @@ fn setup(is_token_2022: bool) -> (common::Context, u64, Reward, Bytes32) {
         .unwrap();
 
     (ctx, destination, reward, route_hash)
+}
+
+fn setup(is_token_2022: bool) -> (common::Context, u64, Reward, Bytes32) {
+    setup_with_prover(is_token_2022, hyper_prover::ID)
 }
 
 #[test]
@@ -246,6 +270,8 @@ fn refund_intent_native_and_token_success() {
     });
 }
 
+/// A proof for another destination is not evidence for this intent, so the
+/// timeout refund proceeds.
 #[test]
 fn refund_intent_fulfilled_on_wrong_chain_success() {
     let (mut ctx, destination, reward, route_hash) = setup(false);
@@ -255,7 +281,7 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
     let proof = Proof::pda(&intent_hash, &reward.prover).0;
     let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
 
-    let fulfillment_proof = Proof::new(random(), Pubkey::new_unique());
+    let fulfillment_proof = Proof::new(destination + 1, Pubkey::new_unique());
     ctx.set_proof(proof, fulfillment_proof, hyper_prover::ID);
     ctx.warp_to_timestamp(reward.deadline as i64 + 1);
 
@@ -269,12 +295,10 @@ fn refund_intent_fulfilled_on_wrong_chain_success() {
         creator,
         vec![],
     );
-    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
-        intent_hash,
-        creator,
-    ))));
+    assert!(result.is_ok());
     assert_eq!(ctx.balance(&creator), reward.native_amount);
     assert_eq!(ctx.balance(&vault), 0);
+    assert!(ctx.get_account(&proof).is_some());
 }
 
 #[test]
@@ -306,6 +330,47 @@ fn refund_intent_withdrawn_success() {
     ))));
     assert_eq!(ctx.balance(&creator), reward.native_amount);
     assert_eq!(ctx.balance(&vault), 0);
+}
+
+/// Paths that query no prover reject prover query data instead of ignoring it.
+#[test]
+fn refund_intent_unqueried_prover_rejects_prover_data_fail() {
+    for withdrawn in [true, false] {
+        let prover = if withdrawn {
+            hyper_prover::ID
+        } else {
+            Pubkey::new_unique()
+        };
+        let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, prover);
+        let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+        let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+        if withdrawn {
+            ctx.set_withdrawn_marker(withdrawn_marker);
+        } else {
+            ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+        }
+
+        let result = ctx.portal().refund_intent_with_accounts(
+            destination,
+            reward.clone(),
+            state::vault_pda(&intent_hash).0,
+            route_hash,
+            Proof::pda(&intent_hash, &reward.prover).0,
+            withdrawn_marker,
+            reward.creator,
+            Some(reward.prover),
+            [],
+            common::ProverQuery {
+                accounts: vec![],
+                data: vec![1],
+            },
+        );
+
+        assert!(result.is_err_and(common::is_error(
+            portal::instructions::PortalError::UnexpectedProverQuery
+        )));
+        assert_eq!(ctx.balance(&reward.creator), 0);
+    }
 }
 
 #[test]
@@ -382,7 +447,7 @@ fn refund_intent_invalid_proof_fail() {
         vec![],
     );
     assert!(result.is_err_and(common::is_error(
-        portal::instructions::PortalError::InvalidProof
+        eco_svm_std::prover::ProverError::InvalidProof
     )));
 }
 
@@ -540,7 +605,6 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer_pda(&reward.prover).0,
             token_accounts,
             iter::once(AccountMeta::new(pda_payer_pda().0, false)),
         )
@@ -582,5 +646,618 @@ fn refund_intent_after_withdraw_excessive_funding_success() {
     reward.tokens.iter().for_each(|token| {
         assert_eq!(ctx.token_balance_ata(&token.token, &vault), 0);
         assert_eq!(ctx.token_balance_ata(&token.token, &creator), 1000);
+    });
+}
+
+fn cancelled_proof(destination: u64) -> Proof {
+    Proof::new(destination, Pubkey::new_from_array(CANCELLED.into()))
+}
+
+/// `[vault ATA, creator ATA, mint]` for each of `tokens`, creating the
+/// creator's ATAs the refund pays into.
+fn refund_token_accounts(
+    ctx: &mut common::Context,
+    tokens: &[portal::types::TokenAmount],
+    vault: &Pubkey,
+    creator: &Pubkey,
+) -> Vec<AccountMeta> {
+    let token_program = ctx.token_program;
+
+    tokens
+        .iter()
+        .flat_map(|token| {
+            ctx.airdrop_token_ata(&token.token, creator, 0);
+
+            vec![
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        vault,
+                        &token.token,
+                        &token_program,
+                    ),
+                    false,
+                ),
+                AccountMeta::new(
+                    get_associated_token_address_with_program_id(
+                        creator,
+                        &token.token,
+                        &token_program,
+                    ),
+                    false,
+                ),
+                AccountMeta::new_readonly(token.token, false),
+            ]
+        })
+        .collect()
+}
+
+#[test]
+fn refund_intent_cancelled_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+    let pda_payer = pda_payer_pda().0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    let pda_payer_balance = ctx.balance(&pda_payer);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+    assert!(ctx.now() < reward.deadline);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        withdrawn_marker,
+        reward.creator,
+        token_accounts,
+        vec![AccountMeta::new(pda_payer, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    reward.tokens.iter().for_each(|token| {
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &reward.creator),
+            token.amount
+        );
+    });
+    assert!(ctx.get_account(&proof).is_some());
+    assert_eq!(ctx.balance(&pda_payer), pda_payer_balance);
+}
+
+/// A cancellation for another destination is not evidence for this intent,
+/// so the refund waits for the deadline.
+#[test]
+fn refund_intent_cancelled_on_wrong_destination_not_expired_fail() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination + 1), hyper_prover::ID);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::RewardNotExpired
+    )));
+}
+
+#[test]
+fn refund_intent_cancelled_without_cleanup_accounts_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    let vault = state::vault_pda(&intent_hash).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&proof).is_some());
+}
+
+#[test]
+fn refund_intent_expired_with_non_program_prover_success() {
+    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+
+    let result = ctx.portal().refund_intent(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        Proof::pda(&intent_hash, &reward.prover).0,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+}
+
+#[test]
+fn refund_intent_non_program_prover_requires_deadline() {
+    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+
+    let result = ctx.portal().refund_intent_with_accounts(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        Proof::pda(&intent_hash, &reward.prover).0,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        Some(reward.prover),
+        vec![],
+        vec![],
+    );
+
+    assert!(result.is_err_and(common::is_error(
+        portal::instructions::PortalError::RewardNotExpired
+    )));
+    assert_eq!(ctx.balance(&reward.creator), 0);
+
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+    let result = ctx.portal().refund_intent(
+        destination,
+        reward.clone(),
+        state::vault_pda(&intent_hash).0,
+        route_hash,
+        Proof::pda(&intent_hash, &reward.prover).0,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+}
+
+/// Proofs stay intact, so a cancelled intent can be refunded in parts before
+/// the deadline.
+#[test]
+fn refund_intent_cancelled_partial_sweeps_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    assert!(reward.tokens.len() > 1);
+
+    for tokens in [&reward.tokens[1..], &reward.tokens[..1]] {
+        let token_accounts = refund_token_accounts(&mut ctx, tokens, &vault, &reward.creator);
+
+        let result = ctx.portal().refund_cancelled_intent(
+            destination,
+            reward.clone(),
+            vault,
+            route_hash,
+            proof,
+            state::WithdrawnMarker::pda(&intent_hash).0,
+            reward.creator,
+            token_accounts,
+            vec![AccountMeta::new(pda_payer_pda().0, false)],
+        );
+
+        assert!(result.is_ok());
+        assert!(ctx.get_account(&proof).is_some());
+        tokens.iter().for_each(|token| {
+            assert_eq!(
+                ctx.token_balance_ata(&token.token, &reward.creator),
+                token.amount
+            );
+        });
+    }
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert_eq!(ctx.balance(&vault), 0);
+}
+
+#[test]
+fn refund_intent_non_program_prover_cannot_authorize_early_cancellation() {
+    let (mut ctx, destination, reward, route_hash) = setup_with_prover(false, Pubkey::new_unique());
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), reward.prover);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    for now in [ctx.now(), reward.deadline + 1] {
+        ctx.warp_to_timestamp(now as i64);
+
+        let result = ctx.portal().refund_cancelled_intent(
+            destination,
+            reward.clone(),
+            vault,
+            route_hash,
+            proof,
+            state::WithdrawnMarker::pda(&intent_hash).0,
+            reward.creator,
+            token_accounts.clone(),
+            vec![AccountMeta::new(pda_payer_pda().0, false)],
+        );
+
+        if now < reward.deadline {
+            assert!(result.is_err_and(common::is_error(
+                portal::instructions::PortalError::RewardNotExpired
+            )));
+            assert_eq!(ctx.balance(&reward.creator), 0);
+        } else {
+            assert!(result.is_ok());
+            assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+        }
+        assert!(ctx.get_account(&proof).is_some());
+    }
+}
+
+#[test]
+fn refund_intent_cancelled_after_deadline_preserves_proof_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let pda_payer = pda_payer_pda().0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+    let pda_payer_balance = ctx.balance(&pda_payer);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        vec![],
+        vec![AccountMeta::new(pda_payer, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&proof).is_some());
+    assert_eq!(ctx.balance(&pda_payer), pda_payer_balance);
+}
+
+#[test]
+fn refund_intent_cancelled_after_deadline_without_cleanup_accounts_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    ctx.warp_to_timestamp(reward.deadline as i64);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+        vec![],
+    );
+
+    assert!(result.is_ok());
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&proof).is_some());
+}
+
+#[test]
+fn refund_intent_cancelled_unsweepable_reward_mint_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let missing_vault_ata = get_associated_token_address_with_program_id(
+        &vault,
+        &reward.tokens[0].token,
+        &ctx.token_program,
+    );
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    ctx.set_account(missing_vault_ata, Default::default())
+        .unwrap();
+    assert!(ctx.get_account(&missing_vault_ata).is_none());
+    let token_accounts =
+        refund_token_accounts(&mut ctx, &reward.tokens[1..], &vault, &reward.creator);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert!(ctx.get_account(&proof).is_some());
+    reward.tokens[1..].iter().for_each(|token| {
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &reward.creator),
+            token.amount
+        );
+    });
+}
+
+/// `prover` must be `reward.prover` whenever it is passed, on the cancelled
+/// path and on a timeout refund alike.
+#[test]
+fn refund_intent_invalid_prover_fail() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+
+    ctx.set_proof(proof, cancelled_proof(destination), hyper_prover::ID);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    for cancelled in [true, false] {
+        if !cancelled {
+            ctx.set_account(proof, Default::default()).unwrap();
+            ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+        }
+
+        let result = ctx.portal().refund_intent_with_accounts(
+            destination,
+            reward.clone(),
+            vault,
+            route_hash,
+            proof,
+            state::WithdrawnMarker::pda(&intent_hash).0,
+            reward.creator,
+            Some(local_prover::ID),
+            token_accounts.clone(),
+            vec![AccountMeta::new(pda_payer_pda().0, false)],
+        );
+
+        assert!(result.is_err_and(common::is_error(
+            portal::instructions::PortalError::InvalidProver
+        )));
+        assert_eq!(ctx.balance(&reward.creator), 0);
+    }
+}
+
+fn assert_cancelled_fast_refund_success(
+    ctx: &mut common::Context,
+    destination: u64,
+    reward: &Reward,
+    route_hash: Bytes32,
+    token_accounts: Vec<AccountMeta>,
+) {
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    assert!(ctx.now() < reward.deadline);
+
+    let result = ctx.portal().refund_cancelled_intent(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        state::WithdrawnMarker::pda(&intent_hash).0,
+        reward.creator,
+        token_accounts,
+        vec![AccountMeta::new(pda_payer_pda().0, false)],
+    );
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    assert_eq!(ctx.balance(&vault), 0);
+    reward.tokens.iter().for_each(|token| {
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &reward.creator),
+            token.amount
+        );
+    });
+    assert!(ctx.get_account(&proof).is_some());
+}
+
+#[test]
+fn refund_intent_cancelled_tokens_2022_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(true);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+
+    assert_eq!(ctx.token_program, anchor_spl::token_2022::ID);
+    ctx.set_proof(
+        Proof::pda(&intent_hash, &reward.prover).0,
+        cancelled_proof(destination),
+        hyper_prover::ID,
+    );
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+
+    assert_cancelled_fast_refund_success(
+        &mut ctx,
+        destination,
+        &reward,
+        route_hash,
+        token_accounts,
+    );
+}
+
+/// A non-reward token sitting in the vault may be swept alongside the reward
+/// mints.
+#[test]
+fn refund_intent_cancelled_extra_token_before_deadline_success() {
+    let (mut ctx, destination, reward, route_hash) = setup(false);
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let extra = portal::types::TokenAmount {
+        token: Pubkey::new_unique(),
+        amount: 1_000,
+    };
+
+    ctx.set_mint_account(&extra.token);
+    ctx.airdrop_token_ata(&extra.token, &vault, extra.amount);
+    ctx.set_proof(
+        Proof::pda(&intent_hash, &reward.prover).0,
+        cancelled_proof(destination),
+        hyper_prover::ID,
+    );
+    let token_accounts = refund_token_accounts(
+        &mut ctx,
+        &[reward.tokens.clone(), vec![extra.clone()]].concat(),
+        &vault,
+        &reward.creator,
+    );
+
+    assert_cancelled_fast_refund_success(
+        &mut ctx,
+        destination,
+        &reward,
+        route_hash,
+        token_accounts,
+    );
+    assert_eq!(
+        ctx.token_balance_ata(&extra.token, &reward.creator),
+        extra.amount
+    );
+}
+
+/// Solana's wire limit for a serialized legacy or v0 transaction.
+const PACKET_DATA_SIZE: usize = 1232;
+
+fn serialized_len(transaction: &Transaction) -> usize {
+    bincode::serialize(transaction).unwrap().len()
+}
+
+#[test]
+fn refund_intent_five_mint_timeout_uses_lookup_table() {
+    let (mut ctx, destination, reward, route_hash) =
+        setup_with_reward(false, hyper_prover::ID, |ctx, reward| {
+            (0..3).for_each(|_| {
+                let token = Pubkey::new_unique();
+                ctx.set_mint_account(&token);
+                reward.tokens.push(portal::types::TokenAmount {
+                    token,
+                    amount: 1_000_000,
+                });
+            })
+        });
+    let intent_hash = intent_hash(destination, &route_hash, &reward.hash());
+    let vault = state::vault_pda(&intent_hash).0;
+    let proof = Proof::pda(&intent_hash, &reward.prover).0;
+    let withdrawn_marker = state::WithdrawnMarker::pda(&intent_hash).0;
+
+    assert_eq!(reward.tokens.len(), 5);
+    assert_ne!(ctx.payer.pubkey(), reward.creator);
+    ctx.warp_to_timestamp(reward.deadline as i64 + 1);
+    let token_accounts = refund_token_accounts(&mut ctx, &reward.tokens, &vault, &reward.creator);
+    let instruction = ctx.portal().refund_intent_instruction(
+        destination,
+        reward.clone(),
+        vault,
+        route_hash,
+        proof,
+        withdrawn_marker,
+        reward.creator,
+        Some(reward.prover),
+        token_accounts,
+        vec![],
+    );
+    let payer = ctx.payer.pubkey();
+    let legacy = Transaction::new(
+        &[&ctx.payer],
+        Message::new(std::slice::from_ref(&instruction), Some(&payer)),
+        ctx.latest_blockhash(),
+    );
+    assert!(serialized_len(&legacy) > PACKET_DATA_SIZE);
+    let slot = ctx.get_sysvar::<SlotHashes>().first().unwrap().0;
+    let (create, table) = create_lookup_table(payer, payer, slot);
+    let addresses = instruction
+        .accounts
+        .iter()
+        .filter(|account| !account.is_signer)
+        .map(|account| account.pubkey)
+        .collect::<Vec<_>>();
+    let extend = extend_lookup_table(table, payer, Some(payer), addresses.clone());
+    let transaction = Transaction::new(
+        &[&ctx.payer],
+        Message::new(&[create, extend], Some(&payer)),
+        ctx.latest_blockhash(),
+    );
+    ctx.send_transaction(transaction).unwrap();
+    let message = v0::Message::try_compile(
+        &payer,
+        &[instruction],
+        &[AddressLookupTableAccount {
+            key: table,
+            addresses,
+        }],
+        ctx.latest_blockhash(),
+    )
+    .unwrap();
+    let transaction =
+        VersionedTransaction::try_new(VersionedMessage::V0(message), &[&ctx.payer]).unwrap();
+    assert!(bincode::serialize(&transaction).unwrap().len() <= PACKET_DATA_SIZE);
+    let result = ctx.send_transaction(transaction);
+
+    assert!(result.is_ok_and(common::contains_event(IntentRefunded::new(
+        intent_hash,
+        reward.creator,
+    ))));
+    assert_eq!(ctx.balance(&reward.creator), reward.native_amount);
+    reward.tokens.iter().for_each(|token| {
+        assert_eq!(
+            ctx.token_balance_ata(&token.token, &reward.creator),
+            token.amount
+        );
     });
 }

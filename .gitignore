@@ -3,3 +3,5 @@
 .anchor
 /dist
 /keys
+.idea/
+/packages/deployer/target

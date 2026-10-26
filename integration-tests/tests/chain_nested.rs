@@ -1,5 +1,5 @@
 //! Nested recipients are route data; all token movement remains local.
-mod common;
+pub mod common;
 #[path = "../../programs/intent-chainer/testdata/fixture_parser.rs"]
 mod fixtures;
 

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("EcooswwC1NggsckZyF5SeAL9WsgJs3UhPbrqY1apV73F");
+declare_id!("EcoowmRRrMyYtQCuh5fCvMDWcD6B9ZDZkpgedf2bWKXi");
 
 pub mod events;
 pub mod instructions;
@@ -22,6 +22,13 @@ pub mod portal {
         fund_intent(ctx, args)
     }
 
+    pub fn close_proof<'info>(
+        ctx: Context<'info, CloseProof<'info>>,
+        args: CloseProofArgs,
+    ) -> Result<()> {
+        instructions::close_proof(ctx, args)
+    }
+
     pub fn refund<'info>(ctx: Context<'info, Refund<'info>>, args: RefundArgs) -> Result<()> {
         refund_intent(ctx, args)
     }
@@ -38,11 +45,8 @@ pub mod portal {
         prove_intent(ctx, args)
     }
 
-    pub fn close_fulfill_marker(
-        ctx: Context<CloseFulfillMarker>,
-        args: CloseFulfillMarkerArgs,
-    ) -> Result<()> {
-        instructions::close_fulfill_marker(ctx, args)
+    pub fn cancel(ctx: Context<Cancel>, args: CancelArgs) -> Result<()> {
+        cancel_intent(ctx, args)
     }
 }
 

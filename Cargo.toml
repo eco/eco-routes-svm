@@ -5,11 +5,15 @@ members = [
     "packages/*",
     "programs/*",
 ]
+# Its own workspace and lockfile; see its Cargo.toml.
+exclude = ["packages/deployer"]
 resolver = "2"
 
 [workspace.dependencies]
+aggregator-prover = { path = "programs/aggregator-prover" }
 anchor-lang = "1.1.2"
 anchor-spl = "1.1.2"
+cctp-prover = { path = "programs/cctp-prover" }
 derive-new = "0.7.0"
 dummy-ism = { path = "programs/dummy-ism" }
 eco-svm-std = { path = "packages/eco-svm-std" }
@@ -21,10 +25,14 @@ getrandom = { version = "0.2", features = ["custom"] }
 goldie = "0.7.0"
 hyper-prover = { path = "programs/hyper-prover" }
 intent-chainer = { path = "programs/intent-chainer" }
+layerzero-prover = { path = "programs/layerzero-prover" }
 local-prover = { path = "programs/local-prover" }
 malicious-proof-closer = { path = "programs/malicious-proof-closer" }
 malicious-prover = { path = "programs/malicious-prover" }
 mock-igp = { path = "integration-tests/programs/mock-igp" }
+mock-layerzero-endpoint = { path = "programs/mock-layerzero-endpoint" }
+mock-polymer-prover = { path = "programs/mock-polymer-prover" }
+polymer-prover = { path = "programs/polymer-prover" }
 portal = { path = "programs/portal" }
 proof-helper = { path = "programs/proof-helper" }
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }

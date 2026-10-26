@@ -1,0 +1,24 @@
+[package]
+description = "Localnet stand-in for LayerZero's EndpointV2 program"
+edition = "2021"
+name = "mock-layerzero-endpoint"
+version = "0.1.0"
+
+[package.metadata.solana]
+tools-version = "v1.52"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "mock_layerzero_endpoint"
+
+[features]
+cpi = ["no-entrypoint"]
+default = []
+idl-build = ["anchor-lang/idl-build"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+
+[dependencies]
+anchor-lang = { workspace = true, features = ["event-cpi"] }
+tiny-keccak = { workspace = true }
