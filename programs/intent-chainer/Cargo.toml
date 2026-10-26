@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Publishes an intent whose reward amount is only known once an earlier intent executes."
 edition = "2021"
 
+# Keep plain cargo build-sbf / solana-verify on the compiler used by Anchor and CI.
+[package.metadata.solana]
+tools-version = "v1.52"
+
 [lib]
 crate-type = ["cdylib", "lib"]
 name = "intent_chainer"

@@ -62,6 +62,32 @@ cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.tom
 
 If proof-helper / pay_for_gas integration tests fail with a missing `.so`, run that command.
 
+Chainer transport tests also require the non-Anchor, test-only `template-buffer` (never deploy it):
+
+```bash
+cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
+```
+
+The optional chainer `resource-metrics` feature is for local SBF heap profiling only; leave it disabled in release builds.
+
+The chainer's production staged-order transport stages the order's **template** (the
+large half; its parameters always ride inline): `init_order_buffer` (first chunk,
+declares `template_hash`) → `write_order_buffer` (append-only chunks, as needed) →
+`seal_order_buffer` (full template validation + hash check + `TemplateAnnounced`
+self-CPI) → `chain_from_account(order, publish)` (read-only buffer, no buffer-authority
+signer). `close_order_buffer` returns rent separately to its original authority,
+including abandoned buffers. The buffer is transport only, and it attests a template,
+not an order: any order committing to that `template_hash` may execute from it and
+reaches only its own escrow, because the shared chain handler checks
+`order.template_hash` against the buffer (`TemplateCommitmentMismatch`), recomputes
+both commitment halves and validates the order-specific escrow before moving value.
+A template small enough for the inline `chain` (measured: up to 417 bytes in a legacy
+packet with CU limit and price) is recorded by `announce_template` instead, which runs
+the same validation and emits the same event. Never add a time gate or an
+execute-and-close authority tail. Native packet and stock-heap tests live in
+`chain_nested`, the inline-path packet test in `chain`; the generic test-only buffer
+above is retained for inline ABI/CPI regressions, not as a production dependency.
+
 `packages/deployer` is **its own Cargo workspace with its own `Cargo.lock`**, excluded from the root. Never move it (or any other host-only dependency tree) back into the root workspace: Cargo unifies features and versions across a workspace, so its RPC client changed every program's bytecode — and therefore every release address — without touching program source. Its litesvm tests (`packages/deployer/tests/`) load `target/deploy/*.so`, so `anchor build` first:
 
 ```bash

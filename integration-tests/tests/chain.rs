@@ -20,7 +20,7 @@ use common::template_transport::{transaction_size, PACKET_BYTES};
 use common::{
     contains_cpi_event, contains_event, is_error, order_buffer_context as staging, Context,
 };
-use eco_svm_std::prover::Proof;
+use eco_svm_std::prover::{Proof, ProverError};
 use eco_svm_std::CHAIN_ID;
 use intent_chainer::events::{IntentChained, OrderAnnounced, TemplateAnnounced};
 use intent_chainer::instructions::{ChainerError, MAX_ORDER_CHUNK_BYTES};
@@ -208,8 +208,6 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
         &ctx.token_program,
     );
     let before = ctx.token_balance(&claimant_ata);
-    let payer_key = ctx.payer.pubkey();
-
     ctx.portal()
         .withdraw_intent(
             CHAIN_ID,
@@ -219,13 +217,12 @@ fn chained_svm_to_svm_intent_is_funded_and_withdrawable() {
             claimant.pubkey(),
             proof.0,
             WithdrawnMarker::pda(&chained.intent_hash).0,
-            proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
                 AccountMeta::new(claimant_ata, false),
                 AccountMeta::new_readonly(base_mint, false),
             ],
-            vec![AccountMeta::new(payer_key, true)],
+            vec![],
         )
         .expect("intent2 must be withdrawable by the proven claimant");
 
@@ -852,18 +849,17 @@ fn chain_late_transfer_preserves_proven_claim() {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(chained.vault_ata, false),
                 AccountMeta::new(claimant_ata, false),
                 AccountMeta::new_readonly(base_mint, false),
             ],
-            vec![AccountMeta::new(claimant, true)],
+            vec![],
         )
         .expect("proven claimant must still receive the late-funded reward");
     assert_eq!(ctx.token_balance(&claimant_ata), DELIVERED);
     assert_eq!(ctx.token_balance(&chained.vault_ata), 0);
-    assert!(ctx.get_account(&proof).is_none());
+    assert!(ctx.get_account(&proof).is_some());
     assert!(ctx.get_account(&withdrawn_marker).is_some());
 }
 
@@ -1540,15 +1536,14 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
             claimant,
             old_proof,
             fresh_withdrawn,
-            proof_closer_pda(&local_prover::ID).0,
             vec![
                 AccountMeta::new(fresh.vault_ata, false),
                 AccountMeta::new(claimant_ata, false),
                 AccountMeta::new_readonly(base_mint, false)
             ],
-            vec![AccountMeta::new(claimant, true)],
+            vec![],
         )
-        .is_err_and(is_error(portal::instructions::PortalError::InvalidProof)));
+        .is_err_and(is_error(ProverError::InvalidProof)));
     assert_eq!(ctx.token_balance(&fresh.vault_ata), DELIVERED);
     assert_eq!(ctx.token_balance(&claimant_ata), 0);
 
@@ -1575,7 +1570,7 @@ fn fresh_child_salt_isolates_funding_from_a_refunded_childs_late_proof() {
 #[test]
 fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
     // A guard against the chainer accidentally acquiring prover authority: it
-    // must never sign portal's per-prover PDAs.
+    // must never sign portal's dispatcher or intent-scoped proof closer PDAs.
     let (mut ctx, base_mint, recipient_ata) = setup();
     let (order, template) = ctx.intent_chainer().svm_order(
         base_mint,
@@ -1590,7 +1585,7 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
     let dispatcher = dispatcher_pda(&local_prover::ID).0;
-    let closer = proof_closer_pda(&local_prover::ID).0;
+    let closer = proof_closer_pda(&chained.intent_hash).0;
     let before = (ctx.balance(&dispatcher), ctx.balance(&closer));
 
     assert!(ctx.intent_chainer().chain(&chained, false).is_ok());
