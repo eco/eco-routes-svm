@@ -138,8 +138,10 @@ jobs:
           deployer-keypair: ${{ secrets.DEPLOYER_KEYPAIR }}
           github-token: ${{ github.token }}
 
+      # The Rust cache restores ~/.cargo/bin without cargo's install records, so a cached
+      # solana-verify would otherwise fail the install; --force also rebuilds the pinned version.
       - name: Install solana-verify
-        run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked
+        run: cargo install solana-verify --version "$SOLANA_VERIFY_VERSION" --locked --force
 
       - name: Plan again and require the approved plan
         id: gate
