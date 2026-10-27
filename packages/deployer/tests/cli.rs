@@ -24,14 +24,16 @@ use tempfile::TempDir;
 const SENDER: &str = "0xAbCdEf0123456789aBcDeF0123456789abcdef01";
 const SLOT_HASHES_SPAN: u64 = 512;
 
-fn programs() -> [(&'static str, Pubkey); 6] {
+fn programs() -> [(&'static str, Pubkey); 8] {
     [
         (AGGREGATOR_PROVER, aggregator_prover::ID),
         (CCTP_PROVER, cctp_prover::ID),
         (HYPER_PROVER, hyper_prover::ID),
+        ("intent_chainer", intent_chainer::ID),
         (LAYERZERO_PROVER, layerzero_prover::ID),
         (LOCAL_PROVER, local_prover::ID),
         (POLYMER_PROVER, polymer_prover::ID),
+        ("portal", portal::ID),
     ]
 }
 
@@ -129,8 +131,12 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
         .iter()
         .map(|(name, program)| {
             let dependencies = match *name {
-                AGGREGATOR_PROVER => serde_json::to_string(&AGGREGATOR_MEMBERS).unwrap(),
-                _ => "[]".to_owned(),
+                AGGREGATOR_PROVER => serde_json::to_string(
+                    &[AGGREGATOR_MEMBERS.as_slice(), &["portal"]].concat(),
+                )
+                .unwrap(),
+                "portal" => "[]".to_owned(),
+                _ => r#"["portal"]"#.to_owned(),
             };
 
             format!(r#""{name}":{{"address":"{program}","seed":"","salt":0,"dependencies":{dependencies}}}"#)
@@ -201,8 +207,10 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
             .lines()
             .collect::<Vec<_>>(),
         [
+            "portal",
             CCTP_PROVER,
             HYPER_PROVER,
+            "intent_chainer",
             LAYERZERO_PROVER,
             LOCAL_PROVER,
             POLYMER_PROVER,
@@ -210,6 +218,8 @@ fn plan_then_deploy_then_apply_agree_on_the_hash() {
         ]
     );
     let printed = String::from_utf8(applied.clone()).unwrap();
+    assert!(!printed.contains("intent_chainer init "), "{printed}");
+    assert!(!printed.contains("portal init "), "{printed}");
     assert!(printed.contains("hyper_prover init "), "{printed}");
     assert!(printed.contains("layerzero_prover set_alt "), "{printed}");
     assert!(

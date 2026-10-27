@@ -26,19 +26,23 @@ const AGGREGATOR_PROVER_BIN: &[u8] =
     include_bytes!("../../../../target/deploy/aggregator_prover.so");
 const CCTP_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/cctp_prover.so");
 const HYPER_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/hyper_prover.so");
+const INTENT_CHAINER_BIN: &[u8] = include_bytes!("../../../../target/deploy/intent_chainer.so");
 const LAYERZERO_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/layerzero_prover.so");
 const LOCAL_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/local_prover.so");
 const POLYMER_PROVER_BIN: &[u8] = include_bytes!("../../../../target/deploy/polymer_prover.so");
+const PORTAL_BIN: &[u8] = include_bytes!("../../../../target/deploy/portal.so");
 const MOCK_LAYERZERO_ENDPOINT_BIN: &[u8] =
     include_bytes!("../../../../target/deploy/mock_layerzero_endpoint.so");
 
-pub const RELEASE_PROGRAMS: [Pubkey; 6] = [
+pub const RELEASE_PROGRAMS: [Pubkey; 8] = [
     aggregator_prover::ID,
     cctp_prover::ID,
     hyper_prover::ID,
+    intent_chainer::ID,
     layerzero_prover::ID,
     local_prover::ID,
     polymer_prover::ID,
+    portal::ID,
 ];
 
 /// The release programs at their compiled IDs and the mock LayerZero endpoint, initialized for
@@ -59,9 +63,11 @@ impl Default for Context {
             (aggregator_prover::ID, AGGREGATOR_PROVER_BIN),
             (cctp_prover::ID, CCTP_PROVER_BIN),
             (hyper_prover::ID, HYPER_PROVER_BIN),
+            (intent_chainer::ID, INTENT_CHAINER_BIN),
             (layerzero_prover::ID, LAYERZERO_PROVER_BIN),
             (local_prover::ID, LOCAL_PROVER_BIN),
             (polymer_prover::ID, POLYMER_PROVER_BIN),
+            (portal::ID, PORTAL_BIN),
             (ENDPOINT_ID, MOCK_LAYERZERO_ENDPOINT_BIN),
         ]
         .into_iter()

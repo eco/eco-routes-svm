@@ -37,9 +37,11 @@ wincode = "0.5"
 
 [dev-dependencies]
 goldie = "0.7.0"
+intent-chainer = { path = "../../programs/intent-chainer", features = ["no-entrypoint"] }
 litesvm = "0.16.0"
 local-prover = { path = "../../programs/local-prover", features = ["no-entrypoint"] }
 mock-layerzero-endpoint = { path = "../../programs/mock-layerzero-endpoint", features = ["no-entrypoint"] }
+portal = { path = "../../programs/portal", features = ["no-entrypoint"] }
 tempfile = "3"
 
 [profile.release]

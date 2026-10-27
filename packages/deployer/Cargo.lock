@@ -1351,11 +1351,13 @@ dependencies = [
  "goldie",
  "hex",
  "hyper-prover",
+ "intent-chainer",
  "layerzero-prover",
  "litesvm",
  "local-prover",
  "mock-layerzero-endpoint",
  "polymer-prover",
+ "portal",
  "serde",
  "serde_json",
  "solana-account-decoder-client-types",
@@ -2225,6 +2227,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "intent-chainer"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anchor-spl",
+ "derive-new",
+ "eco-svm-std",
+ "getrandom 0.2.17",
+ "portal",
+ "solana-keccak-hasher",
+ "solana-sha256-hasher",
 ]
 
 [[package]]
