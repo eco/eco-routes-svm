@@ -76,6 +76,9 @@ An atomic orchestrator that lets solvers fulfill intents with zero capital — t
 - **Flash Vault PDA**: Acts as the transient intermediary; owns ATAs during execution and is drained at the end
 - **Optional Intent Buffer**: `set_flash_fulfill_intent` stores a full route + reward under a PDA so callers can later invoke `flash_fulfill` with just the intent hash
 
+#### **Intent-Chainer Program** (`programs/intent-chainer/`)
+Publishes an intent whose reward amount is only known once an earlier intent executes. `chain` measures the order-specific escrow ATA, renders the measured amount and any remote vault recipients into the child route, pushes the balance into the child's vault and optionally CPIs `portal::publish`. It has no config `init` and no config account, so a release deploys, verifies and finalizes it (after `portal`, which it depends on through Cargo) without any inputs. See [`programs/intent-chainer/README.md`](programs/intent-chainer/README.md).
+
 ### How They Work Together
 
 The optional **Aggregator-Prover** (`programs/aggregator-prover/`) forwards proof validation and cleanup to an immutable set of concrete provers. Solvers deliver a concrete proof and withdraw through the aggregator, with no aggregation transaction or aggregate proof PDA.
@@ -507,7 +510,7 @@ anchor deploy --provider.cluster mainnet
 
 ### Feature Flag Details
 
-The `mainnet` feature flag is defined on every production program (`portal`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`, `cctp-prover`):
+The `mainnet` feature flag is defined on every production program (`portal`, `intent-chainer`, `hyper-prover`, `local-prover`, `aggregator-prover`, `flash-fulfiller`, `proof-helper`, `polymer-prover`, `layerzero-prover`, `cctp-prover`):
 
 ```toml
 [features]
@@ -554,6 +557,7 @@ malicious-prover = "..."       # localnet-only test program
 malicious-proof-closer = "..." # localnet-only test program
 flash-fulfiller = "..."
 hyper-prover = "..."
+intent-chainer = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
@@ -565,6 +569,7 @@ proof-helper = "..."
 aggregator-prover = "..."
 flash-fulfiller = "..."
 hyper-prover = "..."
+intent-chainer = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
@@ -577,6 +582,7 @@ proof-helper = "..."
 aggregator-prover = "..."
 flash-fulfiller = "..."
 hyper-prover = "..."
+intent-chainer = "..."
 local-prover = "..."
 polymer-prover = "..."
 layerzero-prover = "..."
@@ -611,7 +617,7 @@ dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.js
 
 plus `program-ids.json`, recording each program's `address`, `seed`, `salt` and `dependencies` (the released programs whose IDs it compiles in, plus the aggregator's members; see [Program IDs](#program-ids)).
 
-`<program>` is each of `portal`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover`, `layerzero_prover` and `cctp_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
+`<program>` is each of `portal`, `intent_chainer`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover`, `layerzero_prover` and `cctp_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
 
@@ -823,6 +829,8 @@ solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deploy
 | `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
 | `cctp_prover` | `peers`: at most 32 `{domain, chain_id, sender}`, one per EVM chain: its CCTP domain, its chain ID and its EVM `CCTPProver` address left-padded to 32 bytes; past about 19 peers send it as a v1 transaction | deployer, as payer and upgrade authority |
 | `layerzero_prover` | `init` with every peer (one v1 transaction), then `init_path` and `set_path_config` per peer, a frozen lookup table of `required_alt_addresses`, and `set_alt`; see [Administration and finalization](#administration-and-finalization) | deployer, as payer and upgrade authority |
+
+`portal`, `intent_chainer`, `local_prover`, `flash_fulfiller` and `proof_helper` have no config `init`: deploy them, upload their IDLs and verify them.
 
 Every config is permanent (for a LayerZero path while `layerzero_prover` is upgradeable, see [Administration and finalization](#administration-and-finalization)). Read each one back and compare it with what you sent:
 
