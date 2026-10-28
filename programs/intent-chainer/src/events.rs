@@ -43,7 +43,7 @@ pub struct IntentChained {
 #[derive(new)]
 pub struct OrderAnnounced {
     /// Commitment to the template this order renders, announced separately by
-    /// [`TemplateAnnounced`] because one template serves many orders.
+    /// [`TemplateAnnounced`] or [`TemplateSealed`] because one template serves many orders.
     pub template_hash: Bytes32,
     /// `sha256(borsh(order))` — the other half of the escrow authority's seeds.
     pub params_hash: Bytes32,
@@ -55,22 +55,22 @@ pub struct OrderAnnounced {
     pub order: crate::types::Order,
 }
 
-/// The complete template preimage, recorded as an Anchor self-CPI event by
-/// [`crate::instructions::announce_template`] (inline) or `seal_order_buffer`
-/// (staged). Recovering a funded escrow needs this AND the order's
-/// [`OrderAnnounced`].
+/// An inline template was validated and announced. Carries no template bytes: they are
+/// already on-chain, whole, as the `announce_template` instruction's own argument, at the
+/// top level of its transaction or as an inner instruction when another program called it.
+///
+/// To recover the template, read that instruction's data after its 8-byte discriminator
+/// and check `sha256` of it against `template_hash`; `announce_template` verified the
+/// length and validated the template on-chain. A staged template is recorded by
+/// [`TemplateSealed`] and recovered from its buffer's writes instead. Recovering a funded
+/// escrow needs the template AND the order's [`OrderAnnounced`].
 #[event]
 #[derive(derive_new::new)]
 pub struct TemplateAnnounced {
     /// `sha256(borsh(template))` — one half of the escrow authority's seeds.
     pub template_hash: Bytes32,
-    /// The complete nested preimage, including every remote configuration.
-    ///
-    /// The escrow authority is not derivable from this alone: it also needs the
-    /// order's `params_hash`, which rides inline in the transaction that executes
-    /// it. A template is reusable across orders, which is the point of announcing
-    /// it separately — the bytes are published once, not once per order.
-    pub template: crate::types::TemplateProgram,
+    /// The Borsh length of the template, which is the length of the instruction's argument.
+    pub template_len: u32,
 }
 
 /// A staged template was validated and sealed. Carries no template bytes: they are
@@ -79,8 +79,8 @@ pub struct TemplateAnnounced {
 ///
 /// To recover a template, collect those instructions' chunks by `offset` and check the
 /// result against `template_hash`. The seal verified exactly that on-chain, so a copy
-/// that matches the hash is the template. An inline template is announced in full by
-/// [`TemplateAnnounced`] instead, because it has no buffer to read it from.
+/// that matches the hash is the template. An inline template is recorded by
+/// [`TemplateAnnounced`] instead, and recovered from the `announce_template` instruction.
 #[event]
 #[derive(derive_new::new)]
 pub struct TemplateSealed {

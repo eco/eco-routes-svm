@@ -395,7 +395,7 @@ fn all_cross_vm_fixtures_fund_only_the_local_vault_and_publish_exact_bytes() {
             .unwrap_or_else(|e| panic!("{}: {}", case["name"], e.err));
         assert!(contains_cpi_event(TemplateAnnounced::new(
             order.template_hash,
-            template.clone()
+            borsh::to_vec(&template).unwrap().len() as u32
         ))(template_announcement));
         let meta = ctx
             .intent_chainer()
@@ -849,7 +849,7 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         order.template_hash,
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32
     ))(template_record));
     // Intentionally exhaust normal logs BEFORE the large announcement. The CPI
     // event must remain byte-exact in recorded inner instruction data, not a

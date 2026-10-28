@@ -297,20 +297,23 @@ either leaves no way to reconstruct it from the escrow address.
 | Record | Emitted by | Carries |
 | --- | --- | --- |
 | `OrderAnnounced` | `announce_order`, once per order | `template_hash`, `params_hash`, `escrow_authority`, Borsh `Order` |
-| `TemplateAnnounced` | `announce_template` (inline) | `template_hash`, Borsh `TemplateProgram` |
+| `TemplateAnnounced` | `announce_template` (inline) | `template_hash`, `template_len`; no template bytes |
 | `TemplateSealed` | `seal_order_buffer` (staged) | `template_hash`, `template_len`, the buffer account; no template bytes |
 
 Join the two on `template_hash`. One `TemplateAnnounced` serves every order that commits
 to that template.
 
-A staged template is not announced by value, because it already is on the record: its
+Neither template event carries the template, because it already is on the record. An inline
+template is the `announce_template` instruction's own argument: read that instruction's data
+(top-level, or inner when another program called it) after its 8-byte discriminator and check
+`sha256` of it against `template_hash`. A staged template: its
 bytes are the `init_order_buffer` and `write_order_buffer` instruction data that filled
 the buffer, and the buffer account itself until it is closed. To recover one, collect those
 chunks by `offset` from the buffer named in `TemplateSealed`, concatenate them, and check
 `sha256` of the result against `template_hash`; seal verified exactly that on-chain. Keep a
 buffer open until the orders that commit to its template are done, or persist the template
-elsewhere before closing it. This is what lifts the template past the 10,240-byte
-inner-instruction data limit that a by-value announcement would hit at about 10 KB.
+elsewhere before closing it. Recording hashes instead of bytes is what lifts a template past
+the 10,240-byte inner-instruction data limit that a by-value event would hit at about 10 KB.
 
 Both are **Anchor self-CPI events**, not ordinary `Program data:` logs. `announce_order`
 and `announce_template` are permissionless and custody-free. Each requires exactly two
@@ -335,14 +338,17 @@ Anchor EVENT_IX_TAG_LE[8] | OrderAnnounced discriminator[8] |
 template_hash[32] | params_hash[32] | escrow_authority[32] | Borsh Order
 
 Anchor EVENT_IX_TAG_LE[8] | TemplateAnnounced discriminator[8] |
-template_hash[32] | Borsh TemplateProgram
+template_hash[32] | template_len:u32
+
+Anchor EVENT_IX_TAG_LE[8] | TemplateSealed discriminator[8] |
+template_hash[32] | template_len:u32 | buffer[32]
 ```
 
 `OrderAnnounced` is small and fixed-size: the Borsh `Order` is 253 bytes with its single
-reward leg. `TemplateAnnounced` adds 48 bytes of framing to the template, so an inline template is always far below the 10,240-byte limit.
+reward leg. `TemplateAnnounced` is 44 bytes and `TemplateSealed` 76, whatever the template's size.
 One exactly pre-sized buffer avoids the default event macro's repeated allocations on
 the non-freeing heap. Failure to record the CPI event fails the instruction; exhausting
-ordinary logs does not lose the preimage.
+ordinary logs does not lose the record.
 
 Indexers must read successful transactions' inner instructions, verify the emitting
 chainer program/event framing, and validate each preimage against its announced hash. A logs-only subscription

@@ -2018,16 +2018,28 @@ fn announce_template_records_the_hash_chain_checks() {
         .intent_chainer()
         .resolve(&order, &template, DELIVERED, recipient_ata);
 
-    let meta = ctx
-        .intent_chainer()
-        .announce_template(&template)
-        .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    // As the solver sends it: a top-level transaction, whose instruction data IS the
+    // template's record. The event holds only the hash and length.
+    let payer = ctx.payer.insecure_clone();
+    let instruction = announce_template_instruction(&template);
+    let recorded = instruction.data[8..].to_vec();
+    let (meta, _) = staging::send(&mut ctx, &payer, &[instruction]);
+    let meta = meta.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     let announced = decode_template_announced(&meta);
     assert_eq!(announced.template_hash, order.template_hash);
+    assert_eq!(recorded.len() as u32, announced.template_len);
+    assert_eq!(
+        TemplateProgram::try_from_slice(&recorded)
+            .unwrap()
+            .hash()
+            .unwrap(),
+        announced.template_hash,
+        "the instruction data is the template the event's hash names"
+    );
 
-    // Execute inline from the recorded preimage, not the one the test built.
+    // Execute inline from the recovered preimage, not the one the test built.
     let recovered = ChainedIntent {
-        template: announced.template,
+        template: TemplateProgram::try_from_slice(&recorded).unwrap(),
         ..chained.clone()
     };
     ctx.intent_chainer().seed_escrow(&recovered, DELIVERED);
@@ -2073,7 +2085,7 @@ fn announce_template_needs_only_the_fee_payer_and_matches_the_documented_abi() {
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32
     ))(meta));
 }
 
@@ -2276,7 +2288,7 @@ fn inline_announcements_fit_wherever_the_inline_chain_fits() {
     let paired = paired.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         order.template_hash,
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32
     ))(paired.clone()));
     assert!(contains_cpi_event(OrderAnnounced::new(
         order.template_hash,
