@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -153,9 +162,24 @@ test("dependencies match the workspace", () => {
   assert.deepEqual(dependencies(workspace, PROGRAMS), DEPENDENCIES);
 });
 
+// The programs whose bytecode never leaves localnet; every other crate in programs/ is released.
+const LOCALNET_ONLY = [
+  "dummy_ism",
+  "malicious_proof_closer",
+  "malicious_prover",
+  "mock_layerzero_endpoint",
+  "mock_polymer_prover",
+];
+
+const releasedPrograms = () =>
+  readFileSync(join(REPOSITORY, ".github/workflows/release.yml"), "utf8")
+    .match(/RELEASED_PROGRAMS: "([^"]+)"/)[1]
+    .trim()
+    .split(/\s+/)
+    .toSorted();
+
 test("released programs match the Anchor cluster builds", () => {
-  const workflow = readFileSync(join(REPOSITORY, ".github/workflows/release.yml"), "utf8");
-  const released = workflow.match(/RELEASED_PROGRAMS: "([^"]+)"/)[1].split(" ").toSorted();
+  const released = releasedPrograms();
   const anchor = readFileSync(join(REPOSITORY, "Anchor.toml"), "utf8");
 
   ["build-mainnet", "build-devnet"].forEach((script) => {
@@ -166,6 +190,46 @@ test("released programs match the Anchor cluster builds", () => {
 
     assert.deepEqual(built, released, script);
   });
+});
+
+test("every program crate is released or explicitly localnet-only, and the fixture lists the released ones", () => {
+  const crates = readdirSync(join(REPOSITORY, "programs"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map(({ name }) => name.replaceAll("-", "_"))
+    .toSorted();
+
+  assert.deepEqual(crates, [...releasedPrograms(), ...LOCALNET_ONLY].toSorted());
+  assert.deepEqual(PROGRAMS.toSorted(), releasedPrograms());
+});
+
+test("released programs are registered on both clusters, define the mainnet feature and share one compiler pin", () => {
+  const released = releasedPrograms();
+  const anchor = readFileSync(join(REPOSITORY, "Anchor.toml"), "utf8");
+
+  ["devnet", "mainnet"].forEach((cluster) => {
+    const table = anchor.match(new RegExp(`^\\[programs\\.${cluster}\\]\\n((?:.+\\n)+)`, "m"))[1];
+    const registered = table
+      .split("\n")
+      .filter((line) => /^[a-z0-9-]+ = "/.test(line))
+      .map((line) => line.split(" = ")[0].replaceAll("-", "_"))
+      .toSorted();
+
+    assert.deepEqual(registered, released, cluster);
+  });
+  const manifests = released.map((program) => [
+    program,
+    readFileSync(join(REPOSITORY, "programs", program.replaceAll("_", "-"), "Cargo.toml"), "utf8"),
+  ]);
+  manifests.forEach(([program, manifest]) =>
+    assert.match(manifest, /^mainnet = \[/m, `${program} defines the mainnet feature`),
+  );
+  const toolsVersions = manifests.map(([program, manifest]) => {
+    const match = manifest.match(/^tools-version = "([^"]+)"$/m);
+    assert.ok(match, `${program} pins its platform-tools`);
+
+    return match[1];
+  });
+  assert.deepEqual([...new Set(toolsVersions)], [toolsVersions[0]]);
 });
 
 test("seeds are pinned", () => {
@@ -189,6 +253,9 @@ test("a seed moves with its own or a dependency's bytecode on either cluster", (
     "flash_fulfiller",
     "local_prover",
   ]);
+  assert.deepEqual(moved(programSeeds({ overrides: { intent_chainer: { devnet: Buffer.from("changed") } } })), [
+    "intent_chainer",
+  ]);
   assert.deepEqual(moved(programSeeds({ overrides: { layerzero_prover: { devnet: Buffer.from("changed") } } })), [
     "aggregator_prover",
     "layerzero_prover",
@@ -210,6 +277,7 @@ test("a salt moves its program and everything depending on it", () => {
     PROGRAMS.filter((program) => program !== "proof_helper").toSorted(),
   );
   assert.deepEqual(moved(programSeeds({ salts: { polymer_prover: 1 } })), ["aggregator_prover", "polymer_prover"]);
+  assert.deepEqual(moved(programSeeds({ salts: { intent_chainer: 1 } })), ["intent_chainer"]);
   [-1, 1.5, "1"].forEach((salt) =>
     assert.throws(() => programSeeds({ salts: { portal: salt } }), /must be a non-negative integer/),
   );

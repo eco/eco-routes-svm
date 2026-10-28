@@ -838,7 +838,7 @@ mod tests {
     const DVN: &str = "11111111111111111111111111111112";
     const OTHER_DVN: &str = "11111111111111111111111111111114";
     const EXECUTOR: &str = "11111111111111111111111111111113";
-    const PROGRAMS: [&str; 9] = [
+    const PROGRAMS: [&str; 10] = [
         "aggregator_prover",
         "cctp_prover",
         "flash_fulfiller",
@@ -848,6 +848,7 @@ mod tests {
         "polymer_prover",
         "portal",
         "proof_helper",
+        "intent_chainer",
     ];
 
     type ConfigChange = fn(&mut Configs);
@@ -1451,6 +1452,10 @@ mod tests {
         assert_eq!(
             actions_of(&plan, "hyper_prover"),
             vec![Action::Init, Action::Verify]
+        );
+        assert_eq!(
+            actions_of(&plan, "intent_chainer"),
+            vec![Action::Deploy, Action::Verify]
         );
     }
 

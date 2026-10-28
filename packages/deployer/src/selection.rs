@@ -605,7 +605,7 @@ struct CanonicalProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plan::{AGGREGATOR_PROVER, CCTP_PROVER, POLYMER_PROVER};
+    use crate::plan::{ReleaseProgram, AGGREGATOR_PROVER, CCTP_PROVER, POLYMER_PROVER};
     use crate::testing::{self, address, full_setup};
 
     fn deployer() -> Pubkey {
@@ -879,6 +879,94 @@ mod tests {
             result,
             Err(Error::FinalDependent { program, dependent })
                 if program == HYPER_PROVER && dependent == AGGREGATOR_PROVER
+        ));
+    }
+
+    /// The fixture release plus `portal` and `intent_chainer`, which depends on `portal` and has
+    /// no config, every program deployed, verified and with its canonical IDL.
+    fn build_with_chainer(
+        operation: Operation,
+        selected: &str,
+        change: impl FnOnce(&mut Observed),
+    ) -> Result<Selection, Error> {
+        let (mut release, mut observed) = observed(Status::Partial);
+        [
+            ("portal", vec![]),
+            ("intent_chainer", vec!["portal".to_owned()]),
+        ]
+        .into_iter()
+        .enumerate()
+        .for_each(|(index, (name, dependencies))| {
+            let address = address(150 + index as u8);
+            let program = ReleaseProgram {
+                address,
+                so_sha256: [0; 32],
+                dependencies,
+            };
+            let state = ProgramState {
+                address,
+                status: Status::Partial,
+                authority: Some(deployer()),
+                data_hash: Some([1; 32]),
+            };
+            release.programs.insert(name.into(), program);
+            observed.states.insert(name.into(), state);
+            observed.verified.insert(name.into());
+            observed.idls.insert(name.into());
+        });
+        change(&mut observed);
+
+        Selection::build(operation, &selected.parse()?, release, deployer(), observed)
+    }
+
+    #[test]
+    fn finalize_requires_portal_final_or_selected_for_intent_chainer_and_needs_no_config() {
+        let alone = build_with_chainer(Operation::Finalize, "intent_chainer", |_| {});
+        let together = build_with_chainer(Operation::Finalize, "intent_chainer,portal", |_| {});
+        let all = build_with_chainer(Operation::Finalize, "all", |_| {});
+        let portal_final = build_with_chainer(Operation::Finalize, "intent_chainer", |observed| {
+            set_status(observed, "portal", Status::Live)
+        });
+
+        assert!(matches!(
+            alone,
+            Err(Error::DependencyNotFinal { program, dependency })
+                if program == "intent_chainer" && dependency == "portal"
+        ));
+        assert_eq!(targeted(&together.unwrap()), ["intent_chainer", "portal"]);
+        assert!(targeted(&all.unwrap()).contains(&"intent_chainer"));
+        assert_eq!(targeted(&portal_final.unwrap()), ["intent_chainer"]);
+    }
+
+    #[test]
+    fn finalize_refuses_an_unverified_intent_chainer_or_one_without_its_idl() {
+        let unverified = build_with_chainer(Operation::Finalize, "all", |observed| {
+            observed.verified.remove("intent_chainer");
+        });
+        let no_idl = build_with_chainer(Operation::Finalize, "all", |observed| {
+            observed.idls.remove("intent_chainer");
+        });
+
+        assert!(matches!(
+            unverified,
+            Err(Error::NotVerified { program }) if program == "intent_chainer"
+        ));
+        assert!(matches!(
+            no_idl,
+            Err(Error::IdlNotUploaded { program }) if program == "intent_chainer"
+        ));
+    }
+
+    #[test]
+    fn close_refuses_portal_while_a_final_intent_chainer_depends_on_it() {
+        let result = build_with_chainer(Operation::Close, "portal", |observed| {
+            set_status(observed, "intent_chainer", Status::Live)
+        });
+
+        assert!(matches!(
+            result,
+            Err(Error::FinalDependent { program, dependent })
+                if program == "portal" && dependent == "intent_chainer"
         ));
     }
 
