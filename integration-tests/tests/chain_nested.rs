@@ -11,7 +11,7 @@ use common::{
     contains_cpi_event, contains_event, is_error, order_buffer_context as staging, Context,
 };
 use eco_svm_std::prover::Proof;
-use intent_chainer::events::{IntentChained, OrderAnnounced, TemplateAnnounced, TemplateSealed};
+use intent_chainer::events::{IntentChained, OrderAnnounced, TemplateAnnounced};
 use intent_chainer::instructions::ChainerError;
 use intent_chainer::state::{escrow_authority_pda, vault_pda, OrderBuffer};
 use intent_chainer::types::*;
@@ -395,7 +395,8 @@ fn all_cross_vm_fixtures_fund_only_the_local_vault_and_publish_exact_bytes() {
             .unwrap_or_else(|e| panic!("{}: {}", case["name"], e.err));
         assert!(contains_cpi_event(TemplateAnnounced::new(
             order.template_hash,
-            borsh::to_vec(&template).unwrap().len() as u32
+            borsh::to_vec(&template).unwrap().len() as u32,
+            None
         ))(template_announcement));
         let meta = ctx
             .intent_chainer()
@@ -849,7 +850,8 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         order.template_hash,
-        borsh::to_vec(&template).unwrap().len() as u32
+        borsh::to_vec(&template).unwrap().len() as u32,
+        None
     ))(template_record));
     // Intentionally exhaust normal logs BEFORE the large announcement. The CPI
     // event must remain byte-exact in recorded inner instruction data, not a
@@ -891,17 +893,17 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         meta.logs.iter().any(|l| l.contains("Log truncated")),
         "must actually exhaust logs"
     );
-    assert!(contains_cpi_event(TemplateSealed::new(
+    assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
         borsh::to_vec(&template).unwrap().len() as u32,
-        buffer
+        Some(buffer)
     ))(meta.clone()));
     let event_bytes = meta
         .inner_instructions
         .iter()
         .flatten()
         .map(|inner| &inner.instruction.data)
-        .find(|data| data.get(8..16) == Some(TemplateSealed::DISCRIMINATOR))
+        .find(|data| data.get(8..16) == Some(TemplateAnnounced::DISCRIMINATOR))
         .map_or(0, Vec::len);
     println!(
         "max announcement: template={} event={} CU={} logs={}",
@@ -1060,10 +1062,10 @@ fn native_staging_560_byte_template_fits_both_prepare_phases_and_chain() {
         &payer,
         &[staging::seal(payer.pubkey(), buffer), create_ata],
     );
-    assert!(contains_cpi_event(TemplateSealed::new(
+    assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
         bytes.len() as u32,
-        buffer
+        Some(buffer)
     ))(sealed.unwrap()));
     ctx.intent_chainer().seed_escrow(&c, input);
     let (executed, chain_size) = staging::send(
@@ -1313,10 +1315,10 @@ fn native_staging_maximum_nested_orders_hold_under_stock_heap_and_publish_fully(
             staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
                 .0
                 .unwrap();
-        assert!(contains_cpi_event(TemplateSealed::new(
+        assert!(contains_cpi_event(TemplateAnnounced::new(
             template.hash().unwrap(),
             bytes.len() as u32,
-            buffer
+            Some(buffer)
         ))(announcement));
         ctx.intent_chainer().seed_escrow(&c, 1);
         let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
@@ -1635,10 +1637,10 @@ fn native_staging_a_root_at_the_cap_chains_and_commits_its_hash() {
         .0
         .unwrap();
     let seal_cu = sealed.compute_units_consumed;
-    assert!(contains_cpi_event(TemplateSealed::new(
+    assert!(contains_cpi_event(TemplateAnnounced::new(
         c.order.template_hash,
         bytes.len() as u32,
-        buffer
+        Some(buffer)
     ))(sealed));
     ctx.intent_chainer().seed_escrow(&c, 1);
     let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);

@@ -2085,7 +2085,8 @@ fn announce_template_needs_only_the_fee_payer_and_matches_the_documented_abi() {
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
-        borsh::to_vec(&template).unwrap().len() as u32
+        borsh::to_vec(&template).unwrap().len() as u32,
+        None
     ))(meta));
 }
 
@@ -2288,7 +2289,8 @@ fn inline_announcements_fit_wherever_the_inline_chain_fits() {
     let paired = paired.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         order.template_hash,
-        borsh::to_vec(&template).unwrap().len() as u32
+        borsh::to_vec(&template).unwrap().len() as u32,
+        None
     ))(paired.clone()));
     assert!(contains_cpi_event(OrderAnnounced::new(
         order.template_hash,

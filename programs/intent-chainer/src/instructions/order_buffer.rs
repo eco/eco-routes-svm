@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::{account, Bytes32};
 
-use crate::instructions::announce_order::emit_template_sealed;
+use crate::instructions::announce_order::emit_template_announced;
 // Anchor's composite account derive also needs Chain's generated account modules.
 use crate::instructions::chain::*;
 use crate::instructions::ChainerError;
@@ -222,11 +222,11 @@ pub fn seal_order_buffer(ctx: Context<SealOrderBuffer>) -> Result<()> {
         hash == ctx.accounts.order_buffer.template_hash,
         ChainerError::TemplateCommitmentMismatch
     );
-    emit_template_sealed(
+    emit_template_announced(
         ctx.accounts.event_authority.to_account_info(),
         hash,
         ctx.accounts.order_buffer.template_len,
-        ctx.accounts.order_buffer.key(),
+        Some(ctx.accounts.order_buffer.key()),
     )?;
     drop(data);
     ctx.accounts.order_buffer.sealed = true;

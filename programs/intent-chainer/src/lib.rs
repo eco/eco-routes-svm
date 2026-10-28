@@ -164,7 +164,7 @@ pub mod intent_chainer {
         instructions::write_order_buffer(ctx, args)
     }
 
-    /// Validate the staged template against its commitment, emit TemplateSealed (its
+    /// Validate the staged template against its commitment, emit TemplateAnnounced (its
     /// hash, length and buffer; the bytes are already on-chain in the buffer's writes),
     /// then seal it.
     pub fn seal_order_buffer(ctx: Context<SealOrderBuffer>) -> Result<()> {

@@ -3,7 +3,7 @@ use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
 use eco_svm_std::Bytes32;
 
-use crate::events::{OrderAnnounced, TemplateAnnounced, TemplateSealed};
+use crate::events::{OrderAnnounced, TemplateAnnounced};
 use crate::state::escrow_authority_pda;
 use crate::types::{Order, TemplateProgram};
 
@@ -62,10 +62,9 @@ pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> R
     emit_self_cpi(ctx.accounts.event_authority.to_account_info(), data)
 }
 
-/// Records that a template was announced as a durable self-CPI event: its hash and
-/// length, a fixed 44 bytes of event data whatever the template's size. The template
-/// itself is this instruction's own argument, already on the record in the transaction
-/// that carries it, so the event does not copy it a second time.
+/// Records a template by hash and length. The template is this instruction's own argument,
+/// already on the record in the transaction that carries it, so the event does not copy it a
+/// second time.
 ///
 /// Runs the same static validation seal does and keys the record by the same
 /// hash `chain` checks `Order::template_hash` against. Permissionless and
@@ -76,25 +75,26 @@ pub fn announce_template(ctx: Context<AnnounceTemplate>, args: AnnounceTemplateA
     let encoded_len = crate::types::borsh_len(&template)?;
     template.view().validate(encoded_len)?;
     let template_hash = template.hash()?;
-    let mut data = Vec::with_capacity(8 + TemplateAnnounced::DISCRIMINATOR.len() + 32 + 4);
-    data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
-    data.extend_from_slice(TemplateAnnounced::DISCRIMINATOR);
-    TemplateAnnounced::new(template_hash, encoded_len as u32).serialize(&mut data)?;
-    emit_self_cpi(ctx.accounts.event_authority.to_account_info(), data)
+    emit_template_announced(
+        ctx.accounts.event_authority.to_account_info(),
+        template_hash,
+        encoded_len as u32,
+        None,
+    )
 }
 
-/// Records that a staged template was sealed: its hash, length and buffer, a fixed 76
-/// bytes of event data whatever the template's size.
-pub(crate) fn emit_template_sealed(
+/// Records a template as a durable self-CPI event: its hash, length and, for a staged one,
+/// its buffer, at most 77 bytes of event data whatever the template's size.
+pub(crate) fn emit_template_announced(
     authority: AccountInfo,
     template_hash: Bytes32,
     template_len: u32,
-    buffer: Pubkey,
+    buffer: Option<Pubkey>,
 ) -> Result<()> {
-    let mut data = Vec::with_capacity(8 + TemplateSealed::DISCRIMINATOR.len() + 32 + 4 + 32);
+    let mut data = Vec::with_capacity(8 + TemplateAnnounced::DISCRIMINATOR.len() + 32 + 4 + 33);
     data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
-    data.extend_from_slice(TemplateSealed::DISCRIMINATOR);
-    TemplateSealed::new(template_hash, template_len, buffer).serialize(&mut data)?;
+    data.extend_from_slice(TemplateAnnounced::DISCRIMINATOR);
+    TemplateAnnounced::new(template_hash, template_len, buffer).serialize(&mut data)?;
     emit_self_cpi(authority, data)
 }
 

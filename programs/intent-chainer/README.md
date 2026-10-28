@@ -297,19 +297,18 @@ either leaves no way to reconstruct it from the escrow address.
 | Record | Emitted by | Carries |
 | --- | --- | --- |
 | `OrderAnnounced` | `announce_order`, once per order | `template_hash`, `params_hash`, `escrow_authority`, Borsh `Order` |
-| `TemplateAnnounced` | `announce_template` (inline) | `template_hash`, `template_len`; no template bytes |
-| `TemplateSealed` | `seal_order_buffer` (staged) | `template_hash`, `template_len`, the buffer account; no template bytes |
+| `TemplateAnnounced` | `announce_template` (inline) or `seal_order_buffer` (staged) | `template_hash`, `template_len`, `buffer` (`Some` for a staged template, `None` for an inline one); no template bytes |
 
 Join the two on `template_hash`. One `TemplateAnnounced` serves every order that commits
 to that template.
 
-Neither template event carries the template, because it already is on the record. An inline
+`TemplateAnnounced` does not carry the template, because it already is on the record. An inline
 template is the `announce_template` instruction's own argument: read that instruction's data
 (top-level, or inner when another program called it) after its 8-byte discriminator and check
 `sha256` of it against `template_hash`. A staged template: its
 bytes are the `init_order_buffer` and `write_order_buffer` instruction data that filled
 the buffer, and the buffer account itself until it is closed. To recover one, collect those
-chunks by `offset` from the buffer named in `TemplateSealed`, concatenate them, and check
+chunks by `offset` from the buffer named in `TemplateAnnounced.buffer`, concatenate them, and check
 `sha256` of the result against `template_hash`; seal verified exactly that on-chain. Keep a
 buffer open until the orders that commit to its template are done, or persist the template
 elsewhere before closing it. Recording hashes instead of bytes is what lifts a template past
@@ -338,14 +337,11 @@ Anchor EVENT_IX_TAG_LE[8] | OrderAnnounced discriminator[8] |
 template_hash[32] | params_hash[32] | escrow_authority[32] | Borsh Order
 
 Anchor EVENT_IX_TAG_LE[8] | TemplateAnnounced discriminator[8] |
-template_hash[32] | template_len:u32
-
-Anchor EVENT_IX_TAG_LE[8] | TemplateSealed discriminator[8] |
-template_hash[32] | template_len:u32 | buffer[32]
+template_hash[32] | template_len:u32 | buffer: Option<Pubkey>   (1 byte tag, then 32 if Some)
 ```
 
 `OrderAnnounced` is small and fixed-size: the Borsh `Order` is 253 bytes with its single
-reward leg. `TemplateAnnounced` is 44 bytes and `TemplateSealed` 76, whatever the template's size.
+reward leg. `TemplateAnnounced` is 45 bytes inline and 77 staged, whatever the template's size.
 One exactly pre-sized buffer avoids the default event macro's repeated allocations on
 the non-freeing heap. Failure to record the CPI event fails the instruction; exhausting
 ordinary logs does not lose the record.
@@ -404,7 +400,7 @@ execution adapter. Seal records the template; the parameters still need their ow
 `announce_order`.
 
 ```text
-authority A: init(first chunk) → append chunks as needed → seal + TemplateSealed
+authority A: init(first chunk) → append chunks as needed → seal + TemplateAnnounced
                                                                │ read-only
 any payer B:  announce_order (once per order) ……   chain_from_account(order, publish)
 authority A: close separately, in any state → rent returned to A
@@ -422,7 +418,7 @@ arbitrary execution target, and no combined execute-and-close instruction.
 | --- | --- | --- |
 | `init_order_buffer` | authority signer/writable, buffer writable, System | Validate 1..72 KiB template length and <=800-byte first chunk; griefing-resistant allocation of the header plus at most the first 10 KiB window (the runtime's per-instruction growth limit); bind authority, seed and declared `template_hash` |
 | `write_order_buffer` | authority signer/writable, buffer writable, System | Append 1..800 bytes at exactly `written`, within declared length; no overwrite or gaps. Grows the account by at most 10 KiB when a chunk crosses its end, the authority paying the rent top-up as it happens |
-| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode of one `TemplateProgram`; `TemplateProgram::validate`; hash must equal the declared `template_hash`, taken over the buffer's bytes in place; `TemplateSealed` self-CPI (hash, length, buffer: no template bytes); seal atomically |
+| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode of one `TemplateProgram`; `TemplateProgram::validate`; hash must equal the declared `template_hash`, taken over the buffer's bytes in place; `TemplateAnnounced` self-CPI (hash, length, buffer: no template bytes); seal atomically |
 | `chain_from_account` | buffer read-only, then all existing Chain accounts | Require sealed, exact in-place decode (the root route's segments are borrowed from the account, never copied); parameters inline; invoke the SAME chain handler directly, which checks `order.template_hash` against the buffer's, recomputes both halves and checks the supplied escrow before value movement |
 | `close_order_buffer` | authority signer/writable, buffer writable | Close in any state; return rent to original authority; no token movement |
 
