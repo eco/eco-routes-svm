@@ -23,6 +23,12 @@ use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 
+/// The dense shapes below are the largest the program accepted before the root route had
+/// a budget of its own: a 4 KiB template whose root and nodes render at most 2 KiB between
+/// them. They stay valid, and they stay the worst case for a template of many small parts.
+const DENSE_ORDER_BYTES: usize = 4 * 1024;
+const DENSE_RENDERED_BYTES: usize = 2 * 1024;
+
 fn setup(case: &Value) -> (Context, Order, TemplateProgram, u64, Vec<u8>) {
     let mut ctx = Context::default();
     ctx.compute_limit = 1_400_000;
@@ -38,7 +44,6 @@ fn setup(case: &Value) -> (Context, Order, TemplateProgram, u64, Vec<u8>) {
     let template = fixtures::program(&case["program"]);
     order.template_hash = template.hash().unwrap();
     order.destination = 8453;
-    order.require_publish = true;
     (
         ctx,
         order,
@@ -103,7 +108,7 @@ fn chain_instruction(ctx: &Context, c: &ChainedIntent) -> Instruction {
             args: intent_chainer::instructions::ChainArgs {
                 order: c.order.clone(),
                 template: c.template.clone(),
-                publish: false,
+                publish: true,
             },
         }
         .data(),
@@ -123,10 +128,9 @@ fn prefunded_vaults_accept_the_full_transfer_through_both_transports() {
             let mint = Pubkey::new_unique();
             ctx.set_mint_account(&mint);
             let recipient = Pubkey::new_unique();
-            let (mut order, template) =
+            let (order, template) =
                 ctx.intent_chainer()
                     .svm_order(mint, recipient, local_prover::ID, WAD, 1);
-            order.require_publish = true;
             let c = ctx
                 .intent_chainer()
                 .resolve(&order, &template, input, recipient);
@@ -145,10 +149,10 @@ fn prefunded_vaults_accept_the_full_transfer_through_both_transports() {
                     .0
                     .unwrap();
                 let ix =
-                    staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+                    staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
                 staging::send(&mut ctx, &payer, &[ix]).0.unwrap()
             } else {
-                ctx.intent_chainer().chain(&c, false).unwrap()
+                ctx.intent_chainer().chain(&c, true).unwrap()
             };
             assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
             assert_eq!(ctx.token_balance(&c.vault_ata), prefund + input);
@@ -234,10 +238,9 @@ fn transfer_fee_push_shortfall_rolls_back_even_with_prefunding_and_staging() {
                 fee
             );
 
-            let (mut order, template) =
+            let (order, template) =
                 ctx.intent_chainer()
                     .svm_order(mint, recipient_ata, local_prover::ID, WAD, 1);
-            order.require_publish = true;
             let c = ctx
                 .intent_chainer()
                 .resolve(&order, &template, input, recipient_ata);
@@ -261,12 +264,12 @@ fn transfer_fee_push_shortfall_rolls_back_even_with_prefunding_and_staging() {
                     .unwrap();
                 let buffer_before = ctx.get_account(&buffer);
                 let ix =
-                    staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+                    staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
                 let err = staging::send(&mut ctx, &payer, &[ix]).0.unwrap_err();
                 assert_eq!(ctx.get_account(&buffer), buffer_before);
                 err
             } else {
-                ctx.intent_chainer().chain(&c, false).unwrap_err()
+                ctx.intent_chainer().chain(&c, true).unwrap_err()
             };
             assert_eq!(ctx.token_balance(&c.escrow_ata), input);
             assert_eq!(ctx.get_account(&c.escrow_ata), escrow_before);
@@ -341,7 +344,7 @@ fn wide_initial_output_is_scaled_without_narrowing_on_sbf() {
     ));
     let c = resolve(&mut ctx, &order, &template, input, &expected);
     ctx.intent_chainer().seed_escrow(&c, input);
-    let meta = ctx.intent_chainer().chain(&c, false).unwrap();
+    let meta = ctx.intent_chainer().chain(&c, true).unwrap();
     assert!(contains_event(published(&c, expected.clone()))(
         meta.clone()
     ));
@@ -389,11 +392,12 @@ fn all_cross_vm_fixtures_fund_only_the_local_vault_and_publish_exact_bytes() {
             .unwrap_or_else(|e| panic!("{}: {}", case["name"], e.err));
         assert!(contains_cpi_event(TemplateAnnounced::new(
             order.template_hash,
-            template.clone()
+            borsh::to_vec(&template).unwrap().len() as u32,
+            None
         ))(template_announcement));
         let meta = ctx
             .intent_chainer()
-            .chain(&c, false)
+            .chain(&c, true)
             .unwrap_or_else(|e| panic!("{}: {} {:?}", case["name"], e.err, e.meta.logs));
         assert!(contains_event(published(&c, route.clone()))(meta.clone()));
         assert!(contains_event(IntentChained::new(
@@ -435,13 +439,13 @@ fn nested_stale_accounts_fail_atomically_then_the_same_order_retries_after_expir
     ctx.intent_chainer().seed_escrow(&stale, input + 1);
     assert_ne!(stale.vault, current.vault);
     assert_eq!(stale.escrow_ata, current.escrow_ata);
-    let failed = ctx.intent_chainer().chain(&stale, false).unwrap_err();
+    let failed = ctx.intent_chainer().chain(&stale, true).unwrap_err();
     assert!(is_error(ChainerError::InvalidVault)(failed));
     assert_eq!(ctx.token_balance(&stale.escrow_ata), input + 1);
     assert!(ctx.get_account(&stale.vault_ata).is_none());
     assert!(ctx.get_account(&current.vault_ata).is_none());
     ctx.warp_to_timestamp(order.reward.deadline as i64 + 1);
-    let meta = ctx.intent_chainer().chain(&current, false).unwrap();
+    let meta = ctx.intent_chainer().chain(&current, true).unwrap();
     assert!(contains_event(published(&current, new_route.clone()))(meta));
     let creator = order.reward.creator;
     ctx.airdrop_token_ata(&order.base_mint, &creator, 0);
@@ -506,7 +510,7 @@ fn nested_order_mutation_cannot_use_foreign_escrow() {
         }
         assert!(ctx
             .intent_chainer()
-            .chain(&wrong, false)
+            .chain(&wrong, true)
             .is_err_and(is_error(ChainerError::InvalidEscrowAuthority)));
         assert_eq!(ctx.token_balance(&c.escrow_ata), input);
     }
@@ -536,7 +540,7 @@ fn nested_transfer_and_publish_failures_preserve_custody() {
             ctx.set_account(c.escrow_ata, account).unwrap();
         }
         let vault_before = ctx.get_account(&c.vault_ata);
-        let err = ctx.intent_chainer().chain(&c, false).unwrap_err();
+        let err = ctx.intent_chainer().chain(&c, true).unwrap_err();
         // Native staging must reach the identical settlement/transfer/publication
         // failure, with no consumed buffer or custody changes on rollback.
         let payer = ctx.payer.insecure_clone();
@@ -551,7 +555,7 @@ fn nested_transfer_and_publish_failures_preserve_custody() {
             .0
             .unwrap();
         let buffer_before = ctx.get_account(&buffer).unwrap();
-        let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+        let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
         let native_error = staging::send(&mut ctx, &payer, &[ix]).0.unwrap_err();
         match (&err.err, &native_error.err) {
             (
@@ -670,11 +674,16 @@ fn invalid_nested_programs_are_rejected_by_seal_announce_and_chain_before_transf
                 }
             }
             11 => template.vaults[0].reward.segments.push(vec![]),
-            _ => template.vaults[0].reward.segments[0].extend_from_slice(&[0; 1024]),
+            // Each of the two stays inside its own template bound; together the nodes
+            // are over the nested budget.
+            _ => {
+                template.vaults[0].route.segments[0].extend_from_slice(&[0; 1500]);
+                template.vaults[0].reward.segments[0].extend_from_slice(&[0; 1500]);
+            }
         }
         let c = resolve(&mut ctx, &order, &template, input, &route);
         ctx.intent_chainer().seed_escrow(&c, input);
-        let chain_error = ctx.intent_chainer().chain(&c, false).unwrap_err();
+        let chain_error = ctx.intent_chainer().chain(&c, true).unwrap_err();
         let announce_error = ctx
             .intent_chainer()
             .announce_template(&template)
@@ -722,13 +731,13 @@ fn near_maximum_root_with_eight_solana_nodes_publishes_completely() {
     node.route = Template::literal(vec![1]);
     node.reward = Template::literal(vec![2]);
     template.vaults = vec![node; MAX_VAULTS];
-    let root = vec![0xa5; MAX_RENDERED_BYTES - 2 * MAX_VAULTS];
+    let root = vec![0xa5; DENSE_RENDERED_BYTES - 2 * MAX_VAULTS];
     template.route = Template::literal(root.clone());
     let c = resolve(&mut ctx, &order, &template, 1000, &root);
     ctx.intent_chainer().seed_escrow(&c, 1000);
     let meta = ctx
         .intent_chainer()
-        .chain(&c, false)
+        .chain(&c, true)
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_event(published(&c, root))(meta));
     assert_eq!(ctx.token_balance(&c.vault_ata), 1000);
@@ -763,7 +772,7 @@ fn maximum_order(base: &Order) -> (Order, TemplateProgram, Vec<u8>) {
     'fit: for n in 1..MAX_VAULTS {
         for reward in [false, true] {
             for i in 0..MAX_ITEMS {
-                if borsh::to_vec(&template).unwrap().len() <= MAX_ORDER_BYTES {
+                if borsh::to_vec(&template).unwrap().len() <= DENSE_ORDER_BYTES {
                     break 'fit;
                 }
                 let slot = if reward {
@@ -775,7 +784,7 @@ fn maximum_order(base: &Order) -> (Order, TemplateProgram, Vec<u8>) {
             }
         }
     }
-    let pad = MAX_ORDER_BYTES - borsh::to_vec(&template).unwrap().len();
+    let pad = DENSE_ORDER_BYTES - borsh::to_vec(&template).unwrap().len();
     template.route.segments[0] = vec![0x99; pad];
     let length = |t: &Template| {
         t.segments.iter().map(Vec::len).sum::<usize>()
@@ -793,8 +802,8 @@ fn maximum_order(base: &Order) -> (Order, TemplateProgram, Vec<u8>) {
             .iter()
             .map(|n| length(&n.route) + length(&n.reward))
             .sum::<usize>();
-    assert!(used <= MAX_RENDERED_BYTES);
-    let mut remaining = MAX_RENDERED_BYTES - used;
+    assert!(used <= DENSE_RENDERED_BYTES);
+    let mut remaining = DENSE_RENDERED_BYTES - used;
     for node in &mut template.vaults {
         for slot in [&mut node.route, &mut node.reward] {
             for item in &mut slot.items {
@@ -807,7 +816,7 @@ fn maximum_order(base: &Order) -> (Order, TemplateProgram, Vec<u8>) {
         }
     }
     assert_eq!(remaining, 0);
-    assert_eq!(borsh::to_vec(&template).unwrap().len(), MAX_ORDER_BYTES);
+    assert_eq!(borsh::to_vec(&template).unwrap().len(), DENSE_ORDER_BYTES);
     template.validate().unwrap();
     order.template_hash = template.hash().unwrap();
     let mut root = vec![0x99; pad];
@@ -838,7 +847,8 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         order.template_hash,
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32,
+        None
     ))(template_record));
     // Intentionally exhaust normal logs BEFORE the large announcement. The CPI
     // event must remain byte-exact in recorded inner instruction data, not a
@@ -882,7 +892,8 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
     );
     assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32,
+        Some(buffer)
     ))(meta.clone()));
     let event_bytes = meta
         .inner_instructions
@@ -893,7 +904,7 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         .map_or(0, Vec::len);
     println!(
         "max announcement: template={} event={} CU={} logs={}",
-        MAX_ORDER_BYTES,
+        DENSE_ORDER_BYTES,
         event_bytes,
         meta.compute_units_consumed,
         meta.logs.iter().map(String::len).sum::<usize>()
@@ -909,8 +920,8 @@ fn maximum_nested_shape_executes_and_its_full_announcement_survives_exhausted_lo
         "max nested: nodes={} items/template={} aggregate={} template={} CU={} logs={}",
         MAX_VAULTS,
         MAX_ITEMS,
-        MAX_RENDERED_BYTES,
-        MAX_ORDER_BYTES,
+        DENSE_RENDERED_BYTES,
+        DENSE_ORDER_BYTES,
         meta.compute_units_consumed,
         meta.logs.iter().map(String::len).sum::<usize>()
     );
@@ -975,7 +986,6 @@ fn template_560(ctx: &mut Context) -> (Order, TemplateProgram) {
         segments: vec![bytes[..cut].to_vec(), vec![], vec![]],
         items: vec![Item::Amount(Amount::output(8, true)), Item::Vault(0)],
     };
-    order.require_publish = true;
     order.template_hash = template.hash().unwrap();
     // The template is the half that has to be transported; parameters ride inline.
     assert_eq!(borsh::to_vec(&template).unwrap().len(), 560);
@@ -1050,7 +1060,8 @@ fn native_staging_560_byte_template_fits_both_prepare_phases_and_chain() {
     );
     assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
-        template.clone()
+        bytes.len() as u32,
+        Some(buffer)
     ))(sealed.unwrap()));
     ctx.intent_chainer().seed_escrow(&c, input);
     let (executed, chain_size) = staging::send(
@@ -1060,7 +1071,7 @@ fn native_staging_560_byte_template_fits_both_prepare_phases_and_chain() {
             direct_chain,
             buffer,
             c.order.clone(),
-            false,
+            true,
         )],
     );
     assert!(contains_event(published(&c, route))(executed.unwrap()));
@@ -1068,7 +1079,7 @@ fn native_staging_560_byte_template_fits_both_prepare_phases_and_chain() {
     assert_eq!(ctx.token_balance(&c.vault_ata), input);
     // Execute grew because the parameters now ride inline with it; init shrank by
     // more, because the buffer carries only the template.
-    assert_eq!((first_size, second_size, chain_size), (929, 499, 848));
+    assert_eq!((first_size, second_size, chain_size), (929, 499, 847));
     println!("560-byte template: old prepare={old_prepare_size}, old chain={old_chain_size}; init={first_size}, seal+ATA={second_size}, chain_from_account={chain_size}");
 }
 
@@ -1097,7 +1108,7 @@ fn native_staging_substitution_and_wrong_declared_commitment_move_no_value() {
         .0
         .unwrap_err()
     ));
-    let unsealed = staging::execute(chain_instruction(&ctx, &c), bad, c.order.clone(), false);
+    let unsealed = staging::execute(chain_instruction(&ctx, &c), bad, c.order.clone(), true);
     assert!(is_error(ChainerError::OrderBufferNotSealed)(
         staging::send(&mut ctx, &authority, &[unsealed])
             .0
@@ -1123,7 +1134,7 @@ fn native_staging_substitution_and_wrong_declared_commitment_move_no_value() {
         chain_instruction(&ctx, &c),
         foreign_buffer,
         c.order.clone(),
-        false,
+        true,
     );
     assert!(is_error(ChainerError::TemplateCommitmentMismatch)(
         staging::send(&mut ctx, &authority, &[ix]).0.unwrap_err()
@@ -1171,7 +1182,7 @@ fn native_staging_write_by_a_execute_by_b_and_separate_rent_reclamation() {
         .0
         .unwrap_err()
     ));
-    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
     assert!(!ix.accounts[0].is_writable && !ix.accounts[0].is_signer);
     assert!(!ix.accounts.iter().any(|m| m.pubkey == authority.pubkey()));
     let owner_balance = ctx.get_balance(&authority.pubkey()).unwrap();
@@ -1195,7 +1206,7 @@ fn native_staging_write_by_a_execute_by_b_and_separate_rent_reclamation() {
         chain_instruction(&ctx, &new_escrow),
         buffer,
         new_escrow.order.clone(),
-        false,
+        true,
     );
     assert_ne!(new_escrow.escrow_authority, c.escrow_authority);
     staging::send(&mut ctx, &payer, &[replay]).0.unwrap();
@@ -1224,7 +1235,7 @@ fn native_staging_close_recreate_cannot_redirect_a_pending_execution() {
     staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
         .0
         .unwrap();
-    let pending = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+    let pending = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
     staging::send(&mut ctx, &payer, &[staging::close(payer.pubkey(), buffer)])
         .0
         .unwrap();
@@ -1279,7 +1290,7 @@ fn native_staging_maximum_nested_orders_hold_under_stock_heap_and_publish_fully(
     node.route = Template::literal(vec![1]);
     node.reward = Template::literal(vec![2]);
     large_template.vaults = vec![node; MAX_VAULTS];
-    let root = vec![0xa5; MAX_RENDERED_BYTES - 2 * MAX_VAULTS];
+    let root = vec![0xa5; DENSE_RENDERED_BYTES - 2 * MAX_VAULTS];
     large_template.route = Template::literal(root.clone());
     large_root.template_hash = large_template.hash().unwrap();
     let payer = ctx.payer.insecure_clone();
@@ -1302,10 +1313,11 @@ fn native_staging_maximum_nested_orders_hold_under_stock_heap_and_publish_fully(
                 .unwrap();
         assert!(contains_cpi_event(TemplateAnnounced::new(
             template.hash().unwrap(),
-            template.clone()
+            bytes.len() as u32,
+            Some(buffer)
         ))(announcement));
         ctx.intent_chainer().seed_escrow(&c, 1);
-        let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+        let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
         let result = staging::send(&mut ctx, &payer, &[ix]).0.unwrap();
         assert!(contains_event(published(&c, route.clone()))(result.clone()));
         assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
@@ -1459,14 +1471,14 @@ fn native_staging_exact_decode_and_validation_parity_even_with_a_forged_sealed_h
         let mut header = OrderBuffer::try_deserialize(&mut &original.data[..]).unwrap();
         assert!(!header.sealed);
         // Test-only state injection. No public instruction can create this state:
-        // prove execute revalidates instead of trusting the earlier seal check.
+        // prove execute re-hashes the buffer instead of trusting the earlier seal check.
         header.sealed = true;
         let mut forged = original;
         header
             .try_serialize(&mut &mut forged.data[..OrderBuffer::HEADER_LEN])
             .unwrap();
         ctx.set_account(buffer, forged).unwrap();
-        let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+        let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
         assert_eq!(
             code(&staging::send(&mut ctx, &payer, &[ix]).0.unwrap_err()),
             expected_code
@@ -1496,7 +1508,7 @@ fn native_staging_stale_accounts_fail_atomically_and_retry_remeasures() {
         .0
         .unwrap();
     let before = ctx.get_account(&buffer).unwrap();
-    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
     assert!(is_error(ChainerError::InvalidVault)(
         staging::send(&mut ctx, &payer, &[ix]).0.unwrap_err()
     ));
@@ -1509,7 +1521,7 @@ fn native_staging_stale_accounts_fail_atomically_and_retry_remeasures() {
         chain_instruction(&ctx, &updated),
         buffer,
         updated.order.clone(),
-        false,
+        true,
     );
     assert!(contains_event(published(&updated, updated_route))(
         staging::send(&mut ctx, &payer, &[ix]).0.unwrap()
@@ -1548,7 +1560,7 @@ fn native_staging_rejects_foreign_owner_wrong_pda_and_wrong_discriminator() {
             }
         };
         ctx.set_account(address, account).unwrap();
-        let ix = staging::execute(chain_instruction(&ctx, &c), address, c.order.clone(), false);
+        let ix = staging::execute(chain_instruction(&ctx, &c), address, c.order.clone(), true);
         let error = staging::send(&mut ctx, &payer, &[ix]).0.unwrap_err();
         let expected = match invalid {
             0 => anchor_lang::error::ErrorCode::AccountOwnedByWrongProgram,
@@ -1560,4 +1572,142 @@ fn native_staging_rejects_foreign_owner_wrong_pda_and_wrong_discriminator() {
         assert!(ctx.get_account(&c.vault_ata).is_none());
         ctx.set_account(buffer, original.clone()).unwrap();
     }
+}
+
+/// A staged order whose template is one literal root route of `len` bytes, resolved and
+/// ready to chain: the buffer is uploaded and sealed, the escrow funded.
+fn staged_literal_root(
+    ctx: &mut Context,
+    base: &Order,
+    len: usize,
+) -> (ChainedIntent, Pubkey, Vec<u8>, Vec<u8>) {
+    let root = vec![0xa5; len];
+    let template = TemplateProgram {
+        vaults: vec![],
+        route: Template::literal(root.clone()),
+    };
+    let c = resolve(ctx, base, &template, 1, &root);
+    let bytes = borsh::to_vec(&template).unwrap();
+    let payer = ctx.payer.insecure_clone();
+    let buffer = staging::upload(
+        ctx,
+        &payer,
+        Pubkey::new_unique().to_bytes(),
+        template.hash().unwrap(),
+        &bytes,
+    );
+    (c, buffer, bytes, root)
+}
+
+fn chained_event(c: &ChainedIntent, route: &[u8], published: bool) -> IntentChained {
+    IntentChained::new(
+        c.intent_hash,
+        c.order.template_hash,
+        c.params_hash,
+        c.vault,
+        c.order.base_mint,
+        1,
+        c.amount_out,
+        c.order.destination,
+        keccak(route),
+        published,
+    )
+}
+
+/// The headline: a root route at its cap, 64 KiB, stages, seals and chains, and the
+/// `route_hash` it commits is the keccak of the route its bytes render, although the
+/// route is never rendered into memory.
+#[test]
+fn native_staging_a_root_at_the_cap_chains_and_commits_its_hash() {
+    let (mut ctx, base, _, _, _) = setup(&fixtures::nested()["cases"][6]);
+    let payer = ctx.payer.insecure_clone();
+    let (c, buffer, bytes, root) = staged_literal_root(&mut ctx, &base, MAX_ROUTE_LEN);
+    assert!(bytes.len() <= MAX_ORDER_BYTES);
+
+    let sealed = staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+        .0
+        .unwrap();
+    let seal_cu = sealed.compute_units_consumed;
+    assert!(contains_cpi_event(TemplateAnnounced::new(
+        c.order.template_hash,
+        bytes.len() as u32,
+        Some(buffer)
+    ))(sealed));
+    ctx.intent_chainer().seed_escrow(&c, 1);
+    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+    let result = staging::send(&mut ctx, &payer, &[ix]).0.unwrap();
+    assert!(contains_event(chained_event(&c, &root, false))(
+        result.clone()
+    ));
+    assert_eq!(ctx.token_balance(&c.escrow_ata), 0);
+    assert_eq!(ctx.token_balance(&c.vault_ata), 1);
+    println!(
+        "root at the cap: template={} root={} seal CU={} chain CU={}",
+        bytes.len(),
+        root.len(),
+        seal_cu,
+        result.compute_units_consumed
+    );
+}
+
+/// One byte over the root cap is refused where the template is first read in full, at
+/// seal, with the exact error: nothing past the cap can be sealed, so nothing past it
+/// can be chained.
+#[test]
+fn native_staging_a_root_one_byte_over_the_cap_cannot_be_sealed() {
+    let (mut ctx, base, _, _, _) = setup(&fixtures::nested()["cases"][6]);
+    let payer = ctx.payer.insecure_clone();
+    let (_, buffer, bytes, _) = staged_literal_root(&mut ctx, &base, MAX_ROUTE_LEN + 1);
+    assert!(bytes.len() <= MAX_ORDER_BYTES);
+
+    let sealed = staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)]).0;
+    assert!(sealed.is_err_and(is_error(ChainerError::RouteTooLong)));
+}
+
+/// A root at the publish cap publishes a complete, byte-exact `IntentPublished` through a
+/// staged order, with the log budget intact.
+#[test]
+fn native_staging_publishes_a_root_at_the_publish_cap_byte_exact() {
+    let (mut ctx, base, _, _, _) = setup(&fixtures::nested()["cases"][6]);
+    let payer = ctx.payer.insecure_clone();
+    let (c, buffer, _, root) = staged_literal_root(&mut ctx, &base, MAX_PUBLISHED_ROUTE_LEN);
+    staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+        .0
+        .unwrap();
+    ctx.intent_chainer().seed_escrow(&c, 1);
+    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
+    let result = staging::send(&mut ctx, &payer, &[ix]).0.unwrap();
+    assert!(
+        contains_event(published(&c, root.clone()))(result.clone()),
+        "IntentPublished must be present and byte-exact at MAX_PUBLISHED_ROUTE_LEN"
+    );
+    assert!(contains_event(chained_event(&c, &root, true))(
+        result.clone()
+    ));
+    let log_bytes: usize = result.logs.iter().map(String::len).sum();
+    assert!(log_bytes < 10_000, "log budget: {log_bytes} bytes");
+}
+
+/// One byte over the publish cap, a publish is refused with its own error, and the same
+/// escrow then chains without one: the order does not commit to publishing, so the refusal
+/// is always recoverable.
+#[test]
+fn native_staging_a_publish_one_byte_over_the_cap_is_refused() {
+    let (mut ctx, base, _, _, _) = setup(&fixtures::nested()["cases"][6]);
+    let payer = ctx.payer.insecure_clone();
+    let (c, buffer, _, root) = staged_literal_root(&mut ctx, &base, MAX_PUBLISHED_ROUTE_LEN + 1);
+    staging::send(&mut ctx, &payer, &[staging::seal(payer.pubkey(), buffer)])
+        .0
+        .unwrap();
+    ctx.intent_chainer().seed_escrow(&c, 1);
+
+    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), true);
+    let refused = staging::send(&mut ctx, &payer, &[ix]).0;
+    assert!(refused.is_err_and(is_error(ChainerError::PublishRouteTooLong)));
+    assert_eq!(ctx.token_balance(&c.escrow_ata), 1, "custody intact");
+
+    let ix = staging::execute(chain_instruction(&ctx, &c), buffer, c.order.clone(), false);
+    let chained = staging::send(&mut ctx, &payer, &[ix]).0.unwrap();
+    assert!(contains_event(chained_event(&c, &root, false))(chained));
+    assert_eq!(ctx.token_balance(&c.vault_ata), 1);
 }

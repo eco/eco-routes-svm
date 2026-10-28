@@ -27,7 +27,7 @@ use intent_chainer::instructions::{ChainerError, MAX_ORDER_CHUNK_BYTES};
 use intent_chainer::state::vault_pda;
 use intent_chainer::types::{
     Amount, Derivation, EvmDerivation, Item, Template, TemplateProgram, Vault, MAX_ITEMS,
-    MAX_ORDER_BYTES, MAX_ROUTE_LEN, WAD,
+    MAX_ORDER_BYTES, MAX_PUBLISHED_ROUTE_LEN, MAX_RENDERED_BYTES, WAD,
 };
 use litesvm::types::TransactionMetadata;
 use portal::state::{
@@ -666,15 +666,14 @@ fn chain_rejects_a_native_reward() {
 fn chain_late_transfer_preserves_portal_refund_deadline() {
     for offset in [-301, -300, -299, -60, -1, 0, 1, 3600] {
         let (mut ctx, base_mint, recipient_ata) = setup();
-        let (mut order, template) = ctx.intent_chainer().svm_order(
+        let (order, template) = ctx.intent_chainer().svm_order(
             base_mint,
             recipient_ata,
             local_prover::ID,
             IDENTITY_SCALE,
             1,
         );
-        // Required publication must remain possible even after expiry.
-        order.require_publish = true;
+        // A requested publication must remain possible even after expiry.
         let chained = ctx
             .intent_chainer()
             .resolve(&order, &template, DELIVERED, recipient_ata);
@@ -687,7 +686,7 @@ fn chain_late_transfer_preserves_portal_refund_deadline() {
         ctx.warp_to_timestamp(chained.reward.deadline as i64 + offset);
         let result = ctx
             .intent_chainer()
-            .chain(&chained, false)
+            .chain(&chained, true)
             .unwrap_or_else(|err| panic!("chain at deadline{offset:+} failed: {err:?}"));
         assert!(
             contains_event(portal::events::IntentPublished::new(
@@ -1607,104 +1606,58 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
 
 /// The scariest failure mode in the design, pinned so it cannot go silent.
 ///
-/// `portal::publish` re-emits the whole route through `emit!`, base64-encoded
-/// into a single `Program data:` line, and the runtime's `LogCollector` **drops**
-/// any message that would cross the 10,000-byte per-transaction budget — without
-/// failing the transaction. A route that is too long therefore publishes
-/// "successfully" while its event vanishes, and every solver misses intent2.
-///
-/// A carefully chosen `MAX_ROUTE_LEN` is not enough on its own, because the
-/// constant will drift and an arithmetic assertion drifts with it. This asserts
-/// the *event itself* is present and byte-exact at the ceiling, so raising the cap
-/// past what the budget allows fails here rather than in production.
+/// The other half of the pair: a publish of a route past the cap is refused outright,
+/// rather than published into an event nobody will ever see, and the same escrow then
+/// chains without one. The order does not commit to publishing, so the refusal is always
+/// recoverable.
 #[test]
-fn published_event_survives_the_log_budget_at_max_route_len() {
+fn a_publish_past_the_cap_is_refused_and_the_escrow_still_chains_unpublished() {
     let (mut ctx, base_mint, _) = setup();
-    let (order, template) =
-        ctx.intent_chainer()
-            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let (order, template) = ctx.intent_chainer().large_route_order(
+        base_mint,
+        local_prover::ID,
+        MAX_PUBLISHED_ROUTE_LEN + 1,
+    );
     let chained = ctx
         .intent_chainer()
         .resolve(&order, &template, DELIVERED, Pubkey::new_unique());
     ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-    let route = chained
-        .order
-        .build_route(&chained.template, DELIVERED)
-        .unwrap();
-    assert_eq!(
-        route.len(),
-        MAX_ROUTE_LEN,
-        "the test must exercise the ceiling"
-    );
-
-    let expected = portal::events::IntentPublished::new(
-        chained.intent_hash,
-        CHAIN_ID,
-        route,
-        chained.reward.clone(),
-    );
-
-    // Publishing at the cap costs ~750k CU, above the harness default, so the
-    // caller raises its own limit — which is exactly what a real caller must do.
-    let meta = ctx
-        .intent_chainer()
-        .chain_with_compute_limit(&chained, true, 900_000)
-        .expect("publish at the cap must succeed");
-
-    // `contains_event` compares the full base64-encoded payload, so this fails if
-    // the runtime truncated or dropped the message — not merely if the tx reverted.
-    assert!(
-        contains_event(expected)(meta.clone()),
-        "IntentPublished must be present and byte-exact at MAX_ROUTE_LEN"
-    );
-
-    // And pin the two ceilings that actually bind, so raising MAX_ROUTE_LEN
-    // without re-measuring fails here rather than in production.
-    let log_bytes: usize = meta.logs.iter().map(|line| line.len()).sum();
-    assert!(
-        log_bytes < 10_000,
-        "transaction log budget exceeded: {log_bytes} bytes"
-    );
-    assert!(
-        meta.compute_units_consumed < 1_400_000,
-        "publish at the cap must fit a transaction's maximum compute request: {} CU",
-        meta.compute_units_consumed
-    );
-}
-
-/// The other half of the pair: a route past the ceiling is refused outright,
-/// rather than published into an event nobody will ever see.
-#[test]
-fn a_route_past_the_ceiling_is_refused_not_silently_dropped() {
-    let (mut ctx, base_mint, _) = setup();
-    let (_, over) =
-        ctx.intent_chainer()
-            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN + 1);
-    let (valid, template) =
-        ctx.intent_chainer()
-            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
-    let mut chained =
-        ctx.intent_chainer()
-            .resolve(&valid, &template, DELIVERED, Pubkey::new_unique());
-    chained.order.template_hash = over.hash().unwrap();
-    chained.template = over;
-    ctx.intent_chainer().rebind_escrow(&mut chained);
-    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
-
-    // Still the parser, not the route cap: the template's own bound rejects the
-    // encoded input before any of it is allocated or hashed.
     assert!(ctx
         .intent_chainer()
         .chain(&chained, true)
-        .is_err_and(is_error(
-            anchor_lang::error::ErrorCode::InstructionDidNotDeserialize
-        )));
+        .is_err_and(is_error(ChainerError::PublishRouteTooLong)));
     assert_eq!(
         ctx.token_balance(&chained.escrow_ata),
         DELIVERED,
-        "a rejected route must leave the escrow untouched"
+        "a refused publish must leave the escrow untouched"
     );
+
+    let route_hash = common::intent_chainer_context::keccak(
+        &chained
+            .order
+            .build_route(&chained.template, DELIVERED)
+            .unwrap(),
+    );
+    let expected = IntentChained::new(
+        chained.intent_hash,
+        chained.order.template_hash,
+        chained.params_hash,
+        chained.vault,
+        base_mint,
+        DELIVERED,
+        chained.amount_out,
+        CHAIN_ID,
+        route_hash,
+        false,
+    );
+    let meta = ctx
+        .intent_chainer()
+        .chain_with_compute_limit(&chained, false, 900_000)
+        .expect("the same escrow chains without publishing");
+    assert!(contains_event(expected)(meta));
+    assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
 }
 
 // ===========================================================================
@@ -1946,15 +1899,17 @@ fn chain_rejects_a_template_announce_could_never_record() {
 /// This is the instruction whose entire purpose is durable recovery, and the
 /// budget is per-transaction and fails **silently**: `LogCollector` drops the
 /// overflow while the transaction succeeds, so the recovery record would vanish
-/// with nothing to show for it. `MAX_ROUTE_LEN` was measured for the *publish*
+/// with nothing to show for it. `MAX_PUBLISHED_ROUTE_LEN` was measured for the *publish*
 /// path, which is not the same path, so it is asserted separately here.
 #[test]
 fn announced_event_survives_the_log_budget_beside_intent1s_publish() {
     let (mut ctx, base_mint, _) = setup();
     ctx.compute_limit = 900_000;
-    let (order, _template) =
-        ctx.intent_chainer()
-            .large_route_order(base_mint, local_prover::ID, MAX_ROUTE_LEN);
+    let (order, _template) = ctx.intent_chainer().large_route_order(
+        base_mint,
+        local_prover::ID,
+        MAX_PUBLISHED_ROUTE_LEN,
+    );
     let params_hash = order.params_hash().unwrap();
     let escrow_authority =
         intent_chainer::state::escrow_authority_pda(&order.template_hash, &params_hash).0;
@@ -2050,16 +2005,28 @@ fn announce_template_records_the_hash_chain_checks() {
         .intent_chainer()
         .resolve(&order, &template, DELIVERED, recipient_ata);
 
-    let meta = ctx
-        .intent_chainer()
-        .announce_template(&template)
-        .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
+    // As the solver sends it: a top-level transaction, whose instruction data IS the
+    // template's record. The event holds only the hash and length.
+    let payer = ctx.payer.insecure_clone();
+    let instruction = announce_template_instruction(&template);
+    let recorded = instruction.data[8..].to_vec();
+    let (meta, _) = staging::send(&mut ctx, &payer, &[instruction]);
+    let meta = meta.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     let announced = decode_template_announced(&meta);
     assert_eq!(announced.template_hash, order.template_hash);
+    assert_eq!(recorded.len() as u32, announced.template_len);
+    assert_eq!(
+        TemplateProgram::try_from_slice(&recorded)
+            .unwrap()
+            .hash()
+            .unwrap(),
+        announced.template_hash,
+        "the instruction data is the template the event's hash names"
+    );
 
-    // Execute inline from the recorded preimage, not the one the test built.
+    // Execute inline from the recovered preimage, not the one the test built.
     let recovered = ChainedIntent {
-        template: announced.template,
+        template: TemplateProgram::try_from_slice(&recorded).unwrap(),
         ..chained.clone()
     };
     ctx.intent_chainer().seed_escrow(&recovered, DELIVERED);
@@ -2105,7 +2072,8 @@ fn announce_template_needs_only_the_fee_payer_and_matches_the_documented_abi() {
         .unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         template.hash().unwrap(),
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32,
+        None
     ))(meta));
 }
 
@@ -2184,11 +2152,12 @@ fn announce_template_refuses_an_over_rendered_template_as_seal_and_chain_do() {
     );
 }
 
-/// Over the encoded cap, every field bound holds but the whole does not. The
-/// template reader caps input at `MAX_ORDER_BYTES`, so `announce_template` refuses
-/// it before validation runs, as `chain` does; the staged path refuses the same
-/// bytes earlier still, at `init_order_buffer`, which never lets seal see them.
-/// Too large for a packet either way, so the announcement here arrives by CPI.
+/// An inline template over a single template's bound is refused while it is still being
+/// decoded, so no allocation runs ahead of the data that backs it: `announce_template`
+/// refuses it as `chain` does. The encoded cap itself is a staged-buffer bound, tested
+/// where staging is (`chain_nested.rs`): an inline template cannot reach it, because a
+/// packet is far smaller. Too large for a packet either way, so the announcement here
+/// arrives by CPI.
 #[test]
 fn announce_template_refuses_a_template_over_the_byte_cap() {
     let (mut ctx, base_mint, recipient_ata) = setup();
@@ -2206,7 +2175,7 @@ fn announce_template_refuses_a_template_over_the_byte_cap() {
     let oversized = TemplateProgram {
         vaults: vec![Vault {
             destination: 8453,
-            route: Template::literal(vec![0xaa; 2000]),
+            route: Template::literal(vec![0xaa; MAX_RENDERED_BYTES + 1]),
             reward: Template::literal(vec![0xbb; 200]),
             derivation: Derivation::Evm(EvmDerivation {
                 portal: [1; 20],
@@ -2218,7 +2187,7 @@ fn announce_template_refuses_a_template_over_the_byte_cap() {
         route: Template::literal(vec![0xcc; 2000]),
     };
     let bytes = borsh::to_vec(&oversized).unwrap();
-    assert!(bytes.len() > MAX_ORDER_BYTES);
+    assert!(bytes.len() <= MAX_ORDER_BYTES);
     let malformed = with_template(&mut ctx, &chained, oversized);
 
     let did_not_deserialize =
@@ -2240,7 +2209,7 @@ fn announce_template_refuses_a_template_over_the_byte_cap() {
             payer.pubkey(),
             Pubkey::new_unique().to_bytes(),
             malformed.order.template_hash,
-            bytes.len(),
+            MAX_ORDER_BYTES + 1,
             &bytes[..MAX_ORDER_CHUNK_BYTES],
         )],
     );
@@ -2307,7 +2276,8 @@ fn inline_announcements_fit_wherever_the_inline_chain_fits() {
     let paired = paired.unwrap_or_else(|e| panic!("{} {:?}", e.err, e.meta.logs));
     assert!(contains_cpi_event(TemplateAnnounced::new(
         order.template_hash,
-        template.clone()
+        borsh::to_vec(&template).unwrap().len() as u32,
+        None
     ))(paired.clone()));
     assert!(contains_cpi_event(OrderAnnounced::new(
         order.template_hash,

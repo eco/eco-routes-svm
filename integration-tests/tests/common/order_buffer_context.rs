@@ -49,6 +49,7 @@ pub fn write(authority: Pubkey, buffer: Pubkey, offset: u32, bytes: &[u8]) -> In
         accounts: intent_chainer::accounts::WriteOrderBuffer {
             authority,
             order_buffer: buffer,
+            system_program: anchor_lang::system_program::ID,
         }
         .to_account_metas(None),
         data: intent_chainer::instruction::WriteOrderBuffer {

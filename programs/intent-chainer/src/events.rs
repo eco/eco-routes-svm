@@ -55,22 +55,30 @@ pub struct OrderAnnounced {
     pub order: crate::types::Order,
 }
 
-/// The complete template preimage, recorded as an Anchor self-CPI event by
-/// [`crate::instructions::announce_template`] (inline) or `seal_order_buffer`
-/// (staged). Recovering a funded escrow needs this AND the order's
-/// [`OrderAnnounced`].
+/// A template was validated and recorded, by hash and length: no template bytes. They are
+/// already on-chain, whole, and the event says where:
+///
+/// - **Inline** (`buffer` is `None`, from `announce_template`): the template is that
+///   instruction's own argument, at the top level of its transaction or as an inner
+///   instruction when another program called it. Read the `template_len` bytes of its
+///   data after the 8-byte discriminator; anything after them is padding.
+/// - **Staged** (`buffer` is `Some`, from `seal_order_buffer`): the template is the buffer
+///   account's data and, until it is closed, the `init_order_buffer` and
+///   `write_order_buffer` instructions that filled it. Collect their chunks by `offset`.
+///
+/// Either way, `sha256` the bytes and compare with `template_hash`: the program verified
+/// exactly that on-chain, so a copy that matches the hash is the template. Recovering a
+/// funded escrow needs the template AND the order's [`OrderAnnounced`].
 #[event]
 #[derive(derive_new::new)]
 pub struct TemplateAnnounced {
     /// `sha256(borsh(template))` — one half of the escrow authority's seeds.
     pub template_hash: Bytes32,
-    /// The complete nested preimage, including every remote configuration.
-    ///
-    /// The escrow authority is not derivable from this alone: it also needs the
-    /// order's `params_hash`, which rides inline in the transaction that executes
-    /// it. A template is reusable across orders, which is the point of announcing
-    /// it separately — the bytes are published once, not once per order.
-    pub template: crate::types::TemplateProgram,
+    /// The Borsh length of the template: the length of the instruction argument, or of the
+    /// buffer's payload.
+    pub template_len: u32,
+    /// The sealed buffer whose writes carry the template; `None` for an inline template.
+    pub buffer: Option<Pubkey>,
 }
 
 impl IntentChained {

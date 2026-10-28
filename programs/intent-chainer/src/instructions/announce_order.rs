@@ -37,7 +37,7 @@ pub struct AnnounceTemplate {}
 /// Records an order's parameters, both commitment halves and the escrow
 /// authority they derive as a durable self-CPI event. This is half of the
 /// record: recovering a funded escrow also needs the template preimage, which
-/// [`announce_template`] or `seal_order_buffer` records. Publish both before
+/// [`announce_template`] or `seal_order_buffer` points to. Publish both before
 /// funding intent1 or retain the preimages elsewhere: the escrow address cannot
 /// be inverted to recover either half.
 ///
@@ -62,9 +62,9 @@ pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> R
     emit_self_cpi(ctx.accounts.event_authority.to_account_info(), data)
 }
 
-/// Records a template preimage as a durable self-CPI event — the inline
-/// counterpart of `seal_order_buffer`'s announcement, for a template small enough
-/// to travel in one transaction.
+/// Records a template by hash and length. The template is this instruction's own argument,
+/// already on the record in the transaction that carries it, so the event does not copy it a
+/// second time.
 ///
 /// Runs the same static validation seal does and keys the record by the same
 /// hash `chain` checks `Order::template_hash` against. Permissionless and
@@ -72,26 +72,29 @@ pub fn announce_order(ctx: Context<AnnounceOrder>, args: AnnounceOrderArgs) -> R
 pub fn announce_template(ctx: Context<AnnounceTemplate>, args: AnnounceTemplateArgs) -> Result<()> {
     let AnnounceTemplateArgs { template } = args;
 
-    template.validate()?;
+    let encoded_len = crate::types::borsh_len(&template)?;
+    template.view().validate(encoded_len)?;
     let template_hash = template.hash()?;
-    emit_template_announcement(
+    emit_template_announced(
         ctx.accounts.event_authority.to_account_info(),
-        template,
         template_hash,
+        encoded_len as u32,
+        None,
     )
 }
 
-pub(crate) fn emit_template_announcement(
+/// Records a template as a durable self-CPI event: its hash, length and, for a staged one,
+/// its buffer, at most 77 bytes of event data whatever the template's size.
+pub(crate) fn emit_template_announced(
     authority: AccountInfo,
-    template: TemplateProgram,
     template_hash: Bytes32,
+    template_len: u32,
+    buffer: Option<Pubkey>,
 ) -> Result<()> {
-    let mut data = Vec::with_capacity(
-        8 + TemplateAnnounced::DISCRIMINATOR.len() + 32 + crate::types::borsh_len(&template)?,
-    );
+    let mut data = Vec::with_capacity(8 + TemplateAnnounced::DISCRIMINATOR.len() + 32 + 4 + 33);
     data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
     data.extend_from_slice(TemplateAnnounced::DISCRIMINATOR);
-    TemplateAnnounced::new(template_hash, template).serialize(&mut data)?;
+    TemplateAnnounced::new(template_hash, template_len, buffer).serialize(&mut data)?;
     emit_self_cpi(authority, data)
 }
 

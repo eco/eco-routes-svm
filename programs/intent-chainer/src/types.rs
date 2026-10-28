@@ -35,8 +35,6 @@ pub struct Order {
     /// Initial Output = ceil(Input * scale / WAD), in the u128 domain.
     pub scale: u128,
     pub min_amount_in: u64,
-    /// Callers can strengthen this with publish=true, never weaken it.
-    pub require_publish: bool,
 }
 
 impl Order {
@@ -121,7 +119,6 @@ impl AnchorDeserialize for Order {
             reward: deserialize_reward(reader)?,
             scale: u128::deserialize_reader(reader)?,
             min_amount_in: u64::deserialize_reader(reader)?,
-            require_publish: bool::deserialize_reader(reader)?,
         })
     }
 }
@@ -229,7 +226,6 @@ mod tests {
             },
             scale: WAD,
             min_amount_in: 1,
-            require_publish: false,
         }
     }
 
@@ -590,26 +586,108 @@ mod tests {
         assert_ne!(reward.params_hash().unwrap(), baseline);
     }
 
-    /// The log budget is no longer the binding ceiling (see [`MAX_ROUTE_LEN`]),
-    /// but it is the one that fails *silently*, so keep asserting the cap sits
-    /// inside it. The integration suite additionally proves the event is present
-    /// and byte-exact at the cap.
+    /// The log budget is the one ceiling that fails *silently*, so the cap a publish is
+    /// held to must sit inside it. The integration suite additionally proves the event is
+    /// present and byte-exact at the cap, and that a route one byte over is refused.
+    const _: () = assert!(MAX_PUBLISHED_ROUTE_LEN <= MAX_ROUTE_LEN);
+
     #[test]
-    fn route_len_bounds_are_within_the_log_budget() {
+    fn published_route_len_bound_is_within_the_log_budget() {
         const LOG_MESSAGES_BYTES_LIMIT: usize = 10 * 1000;
 
         // `IntentPublished { intent_hash, destination, route, reward }` plus the
         // 8-byte discriminator and Borsh length prefixes, generously over-counted.
         let event_overhead = 8 + 32 + 8 + 4 + 200;
-        let base64 = (MAX_ROUTE_LEN + event_overhead).div_ceil(3) * 4;
+        let base64 = (MAX_PUBLISHED_ROUTE_LEN + event_overhead).div_ceil(3) * 4;
         // "Program data: " prefix and the surrounding log lines.
         let headroom = 512;
 
         assert!(
             base64 + headroom < LOG_MESSAGES_BYTES_LIMIT,
-            "MAX_ROUTE_LEN={MAX_ROUTE_LEN} expands to {base64} base64 bytes, \
+            "MAX_PUBLISHED_ROUTE_LEN={MAX_PUBLISHED_ROUTE_LEN} expands to {base64} base64 bytes, \
              which does not fit the {LOG_MESSAGES_BYTES_LIMIT}-byte log budget"
         );
+    }
+
+    /// A template read in place from its Borsh bytes is the template the owned decode gives,
+    /// and hashes, validates and renders identically.
+    #[test]
+    fn a_template_read_in_place_matches_the_owned_one() {
+        let owned = TemplateProgram {
+            vaults: vec![],
+            route: Template {
+                segments: vec![vec![1, 2, 3], vec![4], vec![]],
+                items: vec![
+                    Item::Amount(Amount::output(8, true)),
+                    Item::Amount(Amount::output(4, false)),
+                ],
+            },
+        };
+        let bytes = borsh::to_vec(&owned).unwrap();
+        let view = TemplateProgramView::parse(&bytes).unwrap();
+        let context = AmountContext {
+            input: 7,
+            output: 9,
+        };
+
+        let root_len = view.validate(bytes.len()).unwrap();
+        assert_eq!(root_len, owned.validate().unwrap());
+        let recipients = view.recipients(context).unwrap();
+        let rendered = view.render(context, &recipients, root_len).unwrap();
+        assert_eq!(rendered, owned.render(context).unwrap());
+        assert_eq!(
+            view.route_hash(context, &recipients).unwrap(),
+            solana_keccak_hasher::hashv(&[&rendered]).to_bytes(),
+            "hashing the segments where they lie is hashing the rendered route"
+        );
+        assert_eq!(
+            Bytes32::from(solana_sha256_hasher::hashv(&[&bytes]).to_bytes()),
+            owned.hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_template_read_in_place_refuses_anything_but_one_canonical_template() {
+        let owned = template(vec![vec![1, 2], vec![3]], vec![Amount::output(8, true)]);
+        let mut bytes = borsh::to_vec(&owned).unwrap();
+        assert!(TemplateProgramView::parse(&bytes).is_ok());
+
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(TemplateProgramView::parse(&trailing).is_err());
+        assert!(TemplateProgramView::parse(&bytes[..bytes.len() - 1]).is_err());
+
+        // A segment length past the end of the data is refused, not allocated.
+        let first_segment_len = 4 + 4;
+        bytes[first_segment_len..first_segment_len + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(TemplateProgramView::parse(&bytes).is_err());
+    }
+
+    /// The root route has its own budget; the nested nodes keep theirs.
+    #[test]
+    fn the_root_and_the_nested_nodes_have_separate_budgets() {
+        let node = |literal: usize| Vault {
+            destination: 1,
+            route: Template::literal(vec![0; literal]),
+            reward: Template::literal(vec![]),
+            derivation: Derivation::Solana(SolanaDerivation {
+                portal: Pubkey::new_unique(),
+                token_program: Pubkey::new_unique(),
+                mint: Pubkey::new_unique(),
+            }),
+        };
+        let program = |vault: Option<Vault>, root: usize| TemplateProgram {
+            vaults: vault.into_iter().collect(),
+            route: Template::literal(vec![0; root]),
+        };
+
+        assert!(program(Some(node(MAX_RENDERED_BYTES)), MAX_ROUTE_LEN)
+            .validate()
+            .is_ok());
+        assert!(program(Some(node(MAX_RENDERED_BYTES + 1)), 1)
+            .validate()
+            .is_err());
+        assert!(program(None, MAX_ROUTE_LEN + 1).validate().is_err());
     }
 }
 
