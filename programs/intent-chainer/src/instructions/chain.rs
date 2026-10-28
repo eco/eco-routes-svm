@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke;
-use anchor_lang::InstructionData;
+use anchor_lang::Discriminator;
 use anchor_spl::associated_token::{self, get_associated_token_address_with_program_id};
 use anchor_spl::{token, token_2022};
 use eco_svm_std::Bytes32;
@@ -10,7 +10,10 @@ use portal::types::{intent_hash, TokenTransferAccounts};
 use crate::events::IntentChained;
 use crate::instructions::ChainerError;
 use crate::state::{escrow_authority_pda, vault_pda, ESCROW_SEED};
-use crate::types::{scale_amount, AmountContext, Order, TemplateProgram};
+use crate::types::{
+    scale_amount, AmountContext, Order, TemplateProgram, TemplateProgramView,
+    MAX_PUBLISHED_ROUTE_LEN,
+};
 
 /// Args for [`chain_intent`].
 #[derive(AnchorSerialize, AnchorDeserialize)]
@@ -86,46 +89,68 @@ pub struct Chain<'info> {
 /// Retries must preserve the committed order; correcting a stale account list
 /// does not authorize changing the order or its deadline.
 pub fn chain_intent<'info>(ctx: Context<'info, Chain<'info>>, args: ChainArgs) -> Result<()> {
-    chain_order(ctx, args, None)
+    let ChainArgs {
+        order,
+        template,
+        publish,
+    } = args;
+    let hash = template.hash()?;
+    let encoded_len = crate::types::borsh_len(&template)?;
+
+    chain_order(
+        ctx,
+        order,
+        PresentedTemplate {
+            view: template.view(),
+            hash,
+            encoded_len,
+        },
+        publish,
+    )
+}
+
+/// A template as `chain` is handed it, read in place, with its commitment and its
+/// Borsh length already known: computed from the instruction's owned template for an
+/// inline order, taken from the buffer account for a staged one.
+pub(crate) struct PresentedTemplate<'a> {
+    pub(crate) view: TemplateProgramView<'a>,
+    pub(crate) hash: Bytes32,
+    pub(crate) encoded_len: usize,
 }
 
 /// One validation/value-movement path for both transports. A staged invocation
 /// also checks the immutable buffer's declared commitment, hashing only once.
 pub(crate) fn chain_order<'info>(
     ctx: Context<'info, Chain<'info>>,
-    args: ChainArgs,
-    buffered_commitment: Option<Bytes32>,
+    order: Order,
+    template: PresentedTemplate<'_>,
+    publish: bool,
 ) -> Result<()> {
-    let ChainArgs {
-        order,
-        template,
-        publish,
-    } = args;
     // The caller may strengthen the author's choice, never weaken it.
     let publish = publish || order.require_publish;
 
-    validate_order(&order, &template)?;
-    // The buffer transports the TEMPLATE, so what it attests is the template
-    // commitment. Seal already bound its immutable bytes to this value; this
-    // check is what stops a sealed buffer being paired with an order that
-    // commits to a different template.
-    if let Some(expected) = buffered_commitment {
-        require!(
-            order.template_hash == expected,
-            ChainerError::TemplateCommitmentMismatch
-        );
-    }
+    let root_len = validate_order(&order, &template)?;
+    // Portal logs a published route whole, and the runtime truncates a log past its
+    // budget without an error. Refuse before anything moves, so a refused publish
+    // leaves the escrow chainable without one.
+    require!(
+        !publish || root_len <= MAX_PUBLISHED_ROUTE_LEN,
+        ChainerError::PublishRouteTooLong
+    );
     let params_hash = order.params_hash()?;
     let escrow = validate_escrow(&ctx, &order, &params_hash)?;
 
     let amount_in = measure(&ctx, &order)?;
     let amount_out = scale_amount(amount_in as u128, order.scale)?;
 
-    let route = template.render(AmountContext {
+    // The route is committed by hash from where its segments lie. It is rendered into
+    // memory only to publish it.
+    let context = AmountContext {
         input: amount_in,
         output: amount_out,
-    })?;
-    let route_hash = keccak(&route);
+    };
+    let recipients = template.view.recipients(context)?;
+    let route_hash: Bytes32 = template.view.route_hash(context, &recipients)?.into();
     let mut reward = order.reward.clone();
     reward.tokens[0].amount = amount_in;
 
@@ -135,6 +160,7 @@ pub(crate) fn chain_order<'info>(
     push(&ctx, &order, &params_hash, escrow, amount_in)?;
 
     if publish {
+        let route = template.view.render(context, &recipients, root_len)?;
         publish_intent(&ctx, order.destination, route, reward)?;
     }
 
@@ -158,14 +184,14 @@ pub(crate) fn chain_order<'info>(
 }
 
 /// Rejects a malformed order before anything is measured or moved.
-pub(crate) fn validate_order(order: &Order, template: &TemplateProgram) -> Result<()> {
+pub(crate) fn validate_order(order: &Order, template: &PresentedTemplate<'_>) -> Result<usize> {
     order.validate_params()?;
     // The template is supplied, not committed inline, so bind it before use.
     require!(
-        template.hash()? == order.template_hash,
+        template.hash == order.template_hash,
         ChainerError::TemplateCommitmentMismatch
     );
-    template.validate()?;
+    let root_len = template.view.validate(template.encoded_len)?;
 
     require!(order.scale > 0, ChainerError::InvalidScale);
 
@@ -202,7 +228,7 @@ pub(crate) fn validate_order(order: &Order, template: &TemplateProgram) -> Resul
     // decide whether the funded reward is refundable or claimable. Deadline
     // headroom belongs in the builder's admission checks, before intent1 is funded.
 
-    Ok(())
+    Ok(root_len)
 }
 
 /// Escrow custody, resolved from the order commitment.
@@ -406,17 +432,23 @@ fn publish_intent(
     route: Vec<u8>,
     reward: portal::types::Reward,
 ) -> Result<()> {
+    // Built into one buffer of exactly its length: `InstructionData::data` starts at 256
+    // bytes and doubles as the route and reward are written, and this program's
+    // allocator never gives the discarded buffers back.
+    let args = portal::instructions::PublishArgs {
+        destination,
+        route,
+        reward,
+    };
+    let mut data = Vec::with_capacity(
+        portal::instruction::Publish::DISCRIMINATOR.len() + crate::types::borsh_len(&args)?,
+    );
+    data.extend_from_slice(portal::instruction::Publish::DISCRIMINATOR);
+    args.serialize(&mut data)?;
     let instruction = Instruction {
         program_id: ctx.accounts.portal_program.key(),
         accounts: vec![],
-        data: portal::instruction::Publish {
-            args: portal::instructions::PublishArgs {
-                destination,
-                route,
-                reward,
-            },
-        }
-        .data(),
+        data,
     };
 
     invoke(
@@ -439,11 +471,4 @@ fn transfer_accounts<'info>(
         &ctx.accounts.base_mint.to_account_info(),
     ]
     .try_into()
-}
-
-fn keccak(bytes: &[u8]) -> Bytes32 {
-    // Keccak, not SHA-256: this feeds `portal::types::intent_hash`, which is the
-    // cross-chain ABI. The syscall, not tiny_keccak — the in-program hasher cost
-    // ~130 CU/byte and the bytes are already contiguous here.
-    solana_keccak_hasher::hashv(&[bytes]).to_bytes().into()
 }

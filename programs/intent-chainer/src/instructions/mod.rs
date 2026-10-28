@@ -15,7 +15,8 @@ pub enum ChainerError {
     SegmentCountMismatch,
     /// `items.len()` exceeds [`crate::types::MAX_ITEMS`].
     TooManyItems,
-    /// The spliced route exceeds [`crate::types::MAX_ROUTE_LEN`].
+    /// A root route exceeds [`crate::types::MAX_ROUTE_LEN`], or a nested node's route or
+    /// reward exceeds [`crate::types::MAX_RENDERED_BYTES`].
     RouteTooLong,
     /// The reward does not carry exactly one leg.
     InvalidRewardLegCount,
@@ -66,7 +67,7 @@ pub enum ChainerError {
     TooManyVaults,
     /// A self, forward or missing vault reference (also excludes cycles).
     InvalidVaultReference,
-    /// Aggregate node route/reward plus root output exceeds the rendering cap.
+    /// The nested nodes' routes and rewards together exceed [`crate::types::MAX_RENDERED_BYTES`].
     RenderedBytesExceeded,
     /// Canonical Borsh preimage exceeds MAX_ORDER_BYTES.
     OrderTooLarge,
@@ -89,4 +90,8 @@ pub enum ChainerError {
     OrderCommitmentMismatch,
     /// The supplied template does not hash to the order's committed `template_hash`.
     TemplateCommitmentMismatch,
+    /// A publish was asked of a root route over [`crate::types::MAX_PUBLISHED_ROUTE_LEN`],
+    /// which Portal would log past the runtime's log budget and lose. Nothing moved: chain
+    /// the escrow without publishing.
+    PublishRouteTooLong,
 }

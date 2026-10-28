@@ -3,7 +3,7 @@ use anchor_lang::solana_program::instruction::Instruction;
 use anchor_lang::solana_program::program::invoke_signed;
 use eco_svm_std::Bytes32;
 
-use crate::events::{OrderAnnounced, TemplateAnnounced};
+use crate::events::{OrderAnnounced, TemplateAnnounced, TemplateSealed};
 use crate::state::escrow_authority_pda;
 use crate::types::{Order, TemplateProgram};
 
@@ -92,6 +92,21 @@ pub(crate) fn emit_template_announcement(
     data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
     data.extend_from_slice(TemplateAnnounced::DISCRIMINATOR);
     TemplateAnnounced::new(template_hash, template).serialize(&mut data)?;
+    emit_self_cpi(authority, data)
+}
+
+/// Records that a staged template was sealed: its hash, length and buffer, a fixed 76
+/// bytes of event data whatever the template's size.
+pub(crate) fn emit_template_sealed(
+    authority: AccountInfo,
+    template_hash: Bytes32,
+    template_len: u32,
+    buffer: Pubkey,
+) -> Result<()> {
+    let mut data = Vec::with_capacity(8 + TemplateSealed::DISCRIMINATOR.len() + 32 + 4 + 32);
+    data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
+    data.extend_from_slice(TemplateSealed::DISCRIMINATOR);
+    TemplateSealed::new(template_hash, template_len, buffer).serialize(&mut data)?;
     emit_self_cpi(authority, data)
 }
 

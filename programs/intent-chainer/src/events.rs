@@ -73,6 +73,25 @@ pub struct TemplateAnnounced {
     pub template: crate::types::TemplateProgram,
 }
 
+/// A staged template was validated and sealed. Carries no template bytes: they are
+/// already on-chain, whole, as the buffer account's data and, until it is closed, as the
+/// `init_order_buffer` and `write_order_buffer` instructions that filled it.
+///
+/// To recover a template, collect those instructions' chunks by `offset` and check the
+/// result against `template_hash`. The seal verified exactly that on-chain, so a copy
+/// that matches the hash is the template. An inline template is announced in full by
+/// [`TemplateAnnounced`] instead, because it has no buffer to read it from.
+#[event]
+#[derive(derive_new::new)]
+pub struct TemplateSealed {
+    /// `sha256(borsh(template))` — one half of the escrow authority's seeds.
+    pub template_hash: Bytes32,
+    /// The Borsh length of the template, which is the length of the buffer's payload.
+    pub template_len: u32,
+    /// The buffer account whose writes carry the template.
+    pub buffer: Pubkey,
+}
+
 impl IntentChained {
     /// Hand-written rather than `derive_new`: nine fields trips
     /// `clippy::too_many_arguments`, and the lint is worth silencing explicitly

@@ -420,27 +420,47 @@ fn geometry_dependencies_cycles_and_every_work_bound_are_rejected() {
     }
     .validate()
     .is_err());
-    let mut program = TemplateProgram {
-        vaults: vec![node()],
-        route: Template::literal(vec![0; MAX_RENDERED_BYTES - 2]),
+    // The root and the nested nodes are budgeted apart: a root at its cap beside nodes at
+    // theirs is valid, and either one byte over is not.
+    let program = |nodes: usize, root: usize| {
+        let mut node = node();
+        node.route = Template::literal(vec![0; nodes]);
+        TemplateProgram {
+            vaults: vec![node],
+            route: Template::literal(vec![0; root]),
+        }
     };
-    assert!(program.validate().is_ok());
-    program.route.segments[0].push(0);
-    assert!(program.validate().is_err());
-    // Bound serialization independently of rendered size: small values with many items.
-    let tiny = Template {
+    assert!(program(MAX_RENDERED_BYTES - 1, MAX_ROUTE_LEN)
+        .validate()
+        .is_ok());
+    assert!(program(MAX_RENDERED_BYTES, MAX_ROUTE_LEN)
+        .validate()
+        .is_err());
+    assert!(program(0, MAX_ROUTE_LEN + 1).validate().is_err());
+    // The byte cap holds the largest template its parts allow: a root and eight nodes at
+    // their budgets, every template at its most segments and items, every derivation its
+    // widest.
+    let full = Template {
         segments: vec![vec![]; MAX_ITEMS + 1],
         items: vec![Item::Amount(Amount::output(1, true)); MAX_ITEMS],
     };
     let mut node = node();
-    node.route = tiny.clone();
-    node.reward = tiny.clone();
-    let template = TemplateProgram {
+    node.route = full.clone();
+    node.reward = full.clone();
+    node.derivation = Derivation::Solana(SolanaDerivation {
+        portal: portal::ID,
+        token_program: anchor_spl::token::ID,
+        mint: portal::ID,
+    });
+    let mut template = TemplateProgram {
         vaults: vec![node; MAX_VAULTS],
-        route: tiny,
+        route: full,
     };
-    assert!(encode(&template).len() > MAX_ORDER_BYTES);
-    assert!(template.validate().is_err());
+    for vault in &mut template.vaults {
+        vault.route.segments[0] = vec![0; MAX_RENDERED_BYTES / (2 * MAX_VAULTS) - MAX_ITEMS];
+    }
+    template.route.segments[0] = vec![0; MAX_ROUTE_LEN - MAX_ITEMS];
+    assert!(encode(&template).len() <= MAX_ORDER_BYTES);
 }
 
 #[test]

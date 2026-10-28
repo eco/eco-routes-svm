@@ -297,17 +297,27 @@ either leaves no way to reconstruct it from the escrow address.
 | Record | Emitted by | Carries |
 | --- | --- | --- |
 | `OrderAnnounced` | `announce_order`, once per order | `template_hash`, `params_hash`, `escrow_authority`, Borsh `Order` |
-| `TemplateAnnounced` | `announce_template` (inline) or `seal_order_buffer` (staged) | `template_hash`, Borsh `TemplateProgram` |
+| `TemplateAnnounced` | `announce_template` (inline) | `template_hash`, Borsh `TemplateProgram` |
+| `TemplateSealed` | `seal_order_buffer` (staged) | `template_hash`, `template_len`, the buffer account; no template bytes |
 
 Join the two on `template_hash`. One `TemplateAnnounced` serves every order that commits
 to that template.
+
+A staged template is not announced by value, because it already is on the record: its
+bytes are the `init_order_buffer` and `write_order_buffer` instruction data that filled
+the buffer, and the buffer account itself until it is closed. To recover one, collect those
+chunks by `offset` from the buffer named in `TemplateSealed`, concatenate them, and check
+`sha256` of the result against `template_hash`; seal verified exactly that on-chain. Keep a
+buffer open until the orders that commit to its template are done, or persist the template
+elsewhere before closing it. This is what lifts the template past the 10,240-byte
+inner-instruction data limit that a by-value announcement would hit at about 10 KB.
 
 Both are **Anchor self-CPI events**, not ordinary `Program data:` logs. `announce_order`
 and `announce_template` are permissionless and custody-free. Each requires exactly two
 read-only accounts, the chainer's `PDA([b"__event_authority"])` and the chainer program,
 and no signer beyond the fee payer. The event authority signs the self-CPI.
 `announce_template` runs the same static validation as `seal_order_buffer`
-(`TemplateProgram::validate`, including the 4096-byte cap) and keys its record by the
+(`TemplateProgram::validate`) and keys its record by the
 same hash `chain` checks. A template over the cap is refused while it is still being
 deserialized (`InstructionDidNotDeserialize`), as in `chain`; the staged path refuses
 the same bytes at `init_order_buffer` (`OrderTooLarge`). Instruction ABI:
@@ -329,7 +339,7 @@ template_hash[32] | Borsh TemplateProgram
 ```
 
 `OrderAnnounced` is small and fixed-size: the Borsh `Order` is 253 bytes with its single
-reward leg. `TemplateAnnounced` at the 4096-byte template cap is a measured 4144 bytes.
+reward leg. `TemplateAnnounced` adds 48 bytes of framing to the template, so an inline template is always far below the 10,240-byte limit.
 One exactly pre-sized buffer avoids the default event macro's repeated allocations on
 the non-freeing heap. Failure to record the CPI event fails the instruction; exhausting
 ordinary logs does not lose the preimage.
@@ -388,7 +398,7 @@ execution adapter. Seal records the template; the parameters still need their ow
 `announce_order`.
 
 ```text
-authority A: init(first chunk) → append chunks as needed → seal + TemplateAnnounced
+authority A: init(first chunk) → append chunks as needed → seal + TemplateSealed
                                                                │ read-only
 any payer B:  announce_order (once per order) ……   chain_from_account(order, publish)
 authority A: close separately, in any state → rent returned to A
@@ -404,10 +414,10 @@ arbitrary execution target, and no combined execute-and-close instruction.
 
 | Instruction | Accounts (in order) | Behavior |
 | --- | --- | --- |
-| `init_order_buffer` | authority signer/writable, buffer writable, System | Validate 1..4096-byte template length and <=800-byte first chunk; griefing-resistant allocation; bind authority, seed and declared `template_hash` |
-| `write_order_buffer` | authority signer, buffer writable | Append 1..800 bytes at exactly `written`, within declared length; no overwrite or gaps |
-| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode of one `TemplateProgram`; `TemplateProgram::validate`; hash must equal the declared `template_hash`; full `TemplateAnnounced` self-CPI; seal atomically |
-| `chain_from_account` | buffer read-only, then all existing Chain accounts | Require sealed, exact decode; parameters inline; invoke the SAME chain handler directly, which checks `order.template_hash` against the buffer's, recomputes both halves and checks the supplied escrow before value movement |
+| `init_order_buffer` | authority signer/writable, buffer writable, System | Validate 1..72 KiB template length and <=800-byte first chunk; griefing-resistant allocation of the header plus at most the first 10 KiB window (the runtime's per-instruction growth limit); bind authority, seed and declared `template_hash` |
+| `write_order_buffer` | authority signer/writable, buffer writable, System | Append 1..800 bytes at exactly `written`, within declared length; no overwrite or gaps. Grows the account by at most 10 KiB when a chunk crosses its end, the authority paying the rent top-up as it happens |
+| `seal_order_buffer` | authority signer, buffer writable, event authority, chainer program | Require complete bytes; exact bounded Borsh decode of one `TemplateProgram`; `TemplateProgram::validate`; hash must equal the declared `template_hash`, taken over the buffer's bytes in place; `TemplateSealed` self-CPI (hash, length, buffer: no template bytes); seal atomically |
+| `chain_from_account` | buffer read-only, then all existing Chain accounts | Require sealed, exact in-place decode (the root route's segments are borrowed from the account, never copied); parameters inline; invoke the SAME chain handler directly, which checks `order.template_hash` against the buffer's, recomputes both halves and checks the supplied escrow before value movement |
 | `close_order_buffer` | authority signer/writable, buffer writable | Close in any state; return rent to original authority; no token movement |
 
 All buffer consumers check program ownership, discriminator and its authority/seed PDA.
@@ -469,7 +479,7 @@ submit these legacy packets with a blockhash, CU limit **and CU price**, no ALT:
 Prepare is explicitly **two transactions**, not one, plus `announce_order` for the
 parameters. Clients must still size their own final signed transactions. No stage packet
 carries an authority signature into execution. For a 4096-byte template, upload is init
-with 800 bytes plus five append transactions; then seal/announce and execute. Init at
+with 800 bytes plus five append transactions; then seal and execute. A template at the 72 KiB cap is init plus about ninety appends. Init at
 800 bytes is 1169 bytes, each full append 1072 bytes, standalone seal 297 bytes.
 Execution is 848 bytes whatever the template size, because only the parameters ride
 with it. Every submitted native-path test packet is checked against 1232 bytes.
@@ -498,69 +508,57 @@ Client changes (solver implementation remains out of scope):
 | --- | --- |
 | Vault nodes | 8 |
 | Items per template | 8 (up to 136 over 17 templates) |
-| Aggregate rendered node routes + rewards + root | 2048 bytes |
-| Root route | 2048 bytes, within the aggregate bound |
-| Borsh template preimage | 4096 bytes |
+| Nested nodes' rendered routes + rewards, in total (`MAX_RENDERED_BYTES`) | 2048 bytes, and 2048 for any one template |
+| Root route (`MAX_ROUTE_LEN`), its own budget | 65,536 bytes |
+| Borsh template preimage (`MAX_ORDER_BYTES`) | 73,728 bytes: a literal root at its cap, nodes at theirs, and the Borsh framing of every template, derivation and item at its widest |
+| Root route a `publish` may carry (`MAX_PUBLISHED_ROUTE_LEN`) | 5,000 bytes |
 
 Do not substitute EVM's 32 KiB rendered cap. Deserialization bounds vector counts and
-segment lengths before allocation and limits the template reader to 4096 bytes. Shape,
-configuration, references and aggregate output are validated before rendering. Recipient
-results use a fixed array; downstream templates feed borrowed segments and stack-encoded
-items into native scatter/gather Keccak, without allocating route/reward bodies. The
-final root is pre-sized once. The only full-template copy is the one contiguous
-preimage the SHA-256 syscall hashes. Success-path arithmetic does not allocate discarded
-Anchor errors. The stock allocator remains 32 KiB; no custom heap or heap-frame request
-is required.
+segment lengths before allocation. Shape, configuration, references and each budget are
+validated before anything is rendered.
+
+**The root route is never copied.** A staged template is read in place: the root's literal
+segments are slices of the buffer account's data, the buffer's own bytes are the preimage
+the SHA-256 syscall hashes for the commitment, and the route hash is one scatter/gather
+Keccak over those slices and the stack-encoded items. A route of any size therefore costs
+the same heap, which is why the root cap is a rule about size and not about memory. Only a
+`publish` renders the route into memory, into one buffer of its exact length, and builds
+Portal's instruction data into another of its exact length; a route to publish is held to
+`MAX_PUBLISHED_ROUTE_LEN`. The nested nodes (at most 2048 rendered bytes in all) are small
+enough to be owned, and recipients use a fixed array. Success-path arithmetic does not
+allocate discarded Anchor errors. The stock allocator remains 32 KiB, and a transaction
+that ever needed more could request a larger heap frame; none of the measured cases does.
 
 Fresh SBF/LiteSVM measurements (Anchor 1.1.2, platform-tools v1.52 / rustc 1.89.0-dev,
 LiteSVM 0.16.0). CU is the range over three uninstrumented runs; heap peaks come from a
-separate `resource-metrics` build, read before the metrics log:
+separate `resource-metrics` build, read before the metrics log. Every row is the native
+path (buffer → seal → `chain_from_account`) on the real SBF artifact, with
+<=1232-byte packets:
 
-| Case | Template bytes | Root bytes | Chain CU (observed) | Chainer heap peak |
-| --- | ---: | ---: | ---: | ---: |
-| EVM / Worldchain / TRON CCTP route, one nested node | 1624 | 928 | 280–322k | 9977 |
-| Solana remote vault, Borsh reward | 1507 | 928 | 278–317k | 9721 |
-| Three levels, shared references, mixed VMs | 1078 | 109 | 205–222k | 5741 |
-| Eight nodes, eight items in every template, both byte caps | 4096 | 8 | 512–529k | 15341 |
-| Eight Solana nodes, near-maximum root | 3096 | 2032 | 551–563k | 18153 |
-| Maximum template announcement, `seal_order_buffer` | 4096 | — | 108k | 17498 |
-| Maximum template announcement, `announce_template` by CPI | 4096 | — | 107k | 17114 |
+| Case | Template bytes | Root bytes | Chain CU | Chain heap | Seal heap |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **Root at its cap**, unpublished | 65,552 | 65,536 | 106–115k | **2517** | 758 |
+| Root at the publish cap, published | 5,016 | 5,000 | not recorded | 12,661 | 758 |
+| 560-byte nested template | 560 | — | not recorded | 3887 | 1590 |
+| Eight nodes, eight items in every template | 4096 | 8 | 462–476k | 11,189 | 9270 |
+| Eight Solana nodes, near-maximum root, published | 3096 | 2032 | 451–459k | 8901 | 2934 |
+
+Sealing a 64 KiB template costs 40,809 CU and 758 bytes of heap; its event carries 76 bytes.
+Against the previous design, the dense 4096-byte case fell from 15,461 to 11,189 bytes of
+heap and about 510k to about 470k CU, and its seal from 17,498 to 9,270 bytes.
 
 The parameters are a fixed 253 bytes in every row. PDA bumps make CU vary; these are
 measurements, not an upper bound for every possible configuration. Request up to 1.4M
-CU for dense cases and simulate the exact submission. Every row dropped against the
-pre-split figures, mostly because both commitments moved from in-program keccak to the
-SHA-256 syscall. The `announce_template` row is a CPI from the test-only generic buffer,
-since a 4096-byte template cannot be a packet; its CU includes that caller.
-The tests also cover root-only 2048-byte publication and deliberately exhausted logs
-before a full 4096-byte template announcement.
+CU for dense cases and simulate the exact submission.
 
-**Runtime acceptance is not packet transport.** The earlier claim that a ~960-byte route
-fits one ordinary chain transaction was incorrect: LiteSVM can execute oversized
-transactions. Tests now count actual wire bytes and submit only <=1232-byte packets.
+**Runtime acceptance is not packet transport.** LiteSVM can execute oversized
+transactions, so the tests count actual wire bytes and submit only <=1232-byte packets.
 
-The historical test-only generic buffer remains for inline ABI/CPI/log-pressure
-regressions; it is not deployed or required by the native path. Production clients
-should use the native path above. An ALT only compresses account keys, not template data.
-
-Native-path measurements retain the same 4096/2048 limits. A 4 KiB **encoded template**
-does not authorize 4 KiB of rendered output. Native execution borrows the account's
-payload and deserializes one bounded template, with no staging copy or extra execution
-CPI. Measured stock-heap peaks before the optional metrics log:
-
-| Native case | Chain CU (observed) | Chain heap | Seal/announcement heap |
-| --- | ---: | ---: | ---: |
-| 560-byte nested template | 166–174k | 4821 | 2618 |
-| 4096-byte template, 8 nodes/136 items, 2048 aggregate rendered | 514–517k | 15461 | 17498 |
-| 3096-byte template, 8 Solana nodes, 2032-byte root | 545–563k | 18273 | 11130 |
-| 417-byte template, inline `chain` and `announce_template` | 81–91k | 3629 | 1581 |
-
-Sealing the dense 4096-byte template uses about 108k CU and records all 4144 event bytes.
-These tests use the real SBF artifact and <=1232-byte native submissions, not host
-renderer calls or a generic-buffer execution shortcut. Keep both bounds: there is
-measured stock-32-KiB headroom, but no evidence here justifies larger limits. Native
-PDA search is input-dependent; simulate exact orders and request an adequate CU limit
-(up to 1.4M for dense cases). Do not interpret observations as a universal CU guarantee.
+Native execution borrows the account's payload and decodes one bounded template in place,
+with no staging copy or extra execution CPI. A larger template needs more upload
+transactions, not more of anything per transaction. PDA search is input-dependent;
+simulate exact orders and request an adequate CU limit (up to 1.4M for dense cases). Do
+not interpret observations as a universal CU guarantee.
 
 ## Build, validation and release
 
