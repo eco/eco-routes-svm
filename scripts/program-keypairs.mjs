@@ -2,7 +2,7 @@
 // Derives a release's Eco-prefixed program keypairs from the release secret.
 //
 //   PROGRAM_KEYPAIR_SECRET=<hex> node program-keypairs.mjs release <placeholder-dir> <program>...
-//   PROGRAM_KEYPAIR_SECRET=<hex> node program-keypairs.mjs deploy <program-ids.json> <out-dir>
+//   PROGRAM_KEYPAIR_SECRET=<hex> node program-keypairs.mjs deploy <program-ids.json> <out-dir> [<programs>|all]
 //
 // A program's keypair is derived from the secret, its lib name and a seed. The seed hashes
 // the program's salt (program-salts.json), its bytecode built with the committed placeholder
@@ -11,14 +11,14 @@
 // and, through their seeds, everything that depends on it.
 //
 // `release` (CI) reads <placeholder-dir>/<cluster>/<program>.so and prints the
-// program-ids.json manifest; it writes no keys. `deploy` re-derives the keypairs from that
-// manifest, checks every address, and writes <out-dir>/<program>-keypair.json.
+// program-ids.json manifest; it writes no keys. `deploy` re-derives only selected keypairs,
+// checks their addresses and deployment policy, and writes <out-dir>/<program>-keypair.json.
 // Anyone holding the secret can deploy at a release's addresses. Zero dependencies; Node 22.
 
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac, createPrivateKey, createPublicKey } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ADDRESS_PREFIX = "Eco";
@@ -36,7 +36,7 @@ const SECRET_VARIABLE = "PROGRAM_KEYPAIR_SECRET";
 const SALTS = fileURLToPath(new URL("./program-salts.json", import.meta.url));
 const USAGE = [
   "usage: program-keypairs.mjs release <placeholder-dir> <program>...",
-  "       program-keypairs.mjs deploy <program-ids.json> <out-dir>",
+  "       program-keypairs.mjs deploy <program-ids.json> <out-dir> [<programs>|all]",
 ].join("\n");
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 // RFC 8410 PKCS#8 wrapping of a raw 32-byte Ed25519 seed.
@@ -263,12 +263,41 @@ const release = (secret, [placeholderDir, ...programs]) => {
   console.log(JSON.stringify(Object.fromEntries(manifest), null, 2));
 };
 
-const deploy = (secret, [manifestPath, outDir]) => {
-  if (!manifestPath || !outDir) {
+const deploy = (secret, [manifestPath, outDir, selection = "all", ...extra]) => {
+  if (!manifestPath || !outDir || extra.length) {
     throw new Error(USAGE);
   }
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const keypairs = Object.entries(manifest).map(([program, { address, seed }]) => {
+  const selected = selection === "all" ? Object.keys(manifest) : selection.split(",");
+  if (!selected.length || selected.some((program) => program === "")) {
+    throw new Error("empty program selection");
+  }
+  if (new Set(selected).size !== selected.length) {
+    throw new Error("duplicate program selection");
+  }
+  selected.forEach((program) => {
+    parseProgram(program);
+    if (!Object.hasOwn(manifest, program)) {
+      throw new Error(`unknown program ${program}`);
+    }
+  });
+  const policyPath = join(dirname(manifestPath), "deployment-policy.json");
+  const policy = existsSync(policyPath) ? JSON.parse(readFileSync(policyPath, "utf8")) : { nondeployable_programs: [] };
+  const nondeployable = policy?.nondeployable_programs;
+  if (
+    !Array.isArray(nondeployable) ||
+    nondeployable.some((program) => typeof program !== "string" || !Object.hasOwn(manifest, program)) ||
+    new Set(nondeployable).size !== nondeployable.length
+  ) {
+    throw new Error("invalid deployment policy");
+  }
+  selected.forEach((program) => {
+    if (nondeployable.includes(program)) {
+      throw new Error(`${program}: not deployable under release deployment policy`);
+    }
+  });
+  const keypairs = selected.map((program) => {
+    const { address, seed } = manifest[program];
     const programKeypair = derive(secret, parseProgram(program), parseSeed(seed));
     if (programKeypair.address !== address) {
       throw new Error(`${program}: derived ${programKeypair.address}, manifest has ${address}; wrong secret?`);

@@ -617,6 +617,9 @@ dist/program/devnet/<program>.devnet.so      dist/idl/devnet/<program>.devnet.js
 
 plus `program-ids.json`, recording each program's `address`, `seed`, `salt` and `dependencies` (the released programs whose IDs it compiles in, plus the aggregator's members; see [Program IDs](#program-ids)).
 
+Mixed releases also attach `deployment-policy.json`, for example `{"nondeployable_programs":["portal"]}`. Listed programs are inherited artifacts: keep their existing manifest entries and binaries unchanged. Inherited release IDLs may update only `metadata.version` to the new release version; their existing on-chain IDLs remain untouched. Selecting an inherited program, explicitly or through `all`, fails before deployment or key derivation. A missing policy preserves legacy all-program behavior. Keep the full `program-ids.json`; dependencies must remain available for read-only compatibility checks.
+The same restriction applies to Finalize and Close: on a mixed release, name only new programs such as `intent_chainer`; `all` is refused.
+
 `<program>` is each of `portal`, `intent_chainer`, `hyper_prover`, `local_prover`, `aggregator_prover`, `flash_fulfiller`, `proof_helper`, `polymer_prover`, `layerzero_prover` and `cctp_prover`. Every program's bytecode depends on the `mainnet` feature, so deploy the `.mainnet.so` to mainnet and the `.devnet.so` to devnet. The `hyper_prover`, `polymer_prover` and `proof_helper` IDLs embed feature-gated addresses (Hyperlane mailbox, Polymer program, IGP); the other IDLs are identical across clusters but are published under both names for uniformity.
 
 Assets are attached flat, so the downloadable names are the basenames above (e.g. `polymer_prover.mainnet.so`); the `.mainnet` / `.devnet` infix is what keeps the two sets from colliding.
@@ -651,7 +654,7 @@ Runs on one cluster never overlap: a dispatch waits while another run on that cl
 
 | Workflow | Does |
 |---|---|
-| `Deploy` (`deploy.yml`) | deploys, initializes, reads back and verifies every new program, and leaves them upgradeable for testing |
+| `Deploy` (`deploy.yml`) | deploys, initializes, reads back and verifies selected programs, and leaves new programs upgradeable for testing |
 | `Finalize` (`finalize.yml`) | makes the tested programs immutable, dependencies first |
 | `Close` (`close.yml`) | closes the upgradeable programs of an abandoned release, returning their rent |
 
@@ -670,6 +673,7 @@ Runs on one cluster never overlap: a dispatch waits while another run on that cl
 |---|---|
 | `version` | Release version, no `v` |
 | `cluster` | `devnet` or `mainnet`; selects the Alchemy endpoint |
+| `programs` | `all` (default) or comma-separated lib names, e.g. `intent_chainer`. Unknown, duplicate, empty and policy-forbidden selections fail. Dependencies are validated read-only, never added to the write set |
 | `hyper_senders` | Comma-separated EVM addresses (`0x` + 20 bytes) of the EVM HyperProver |
 | `polymer_emitters` | Comma-separated EVM addresses of the EVM PolymerProver |
 | `layerzero` | JSON, see below |
@@ -677,7 +681,7 @@ Runs on one cluster never overlap: a dispatch waits while another run on that cl
 | `hyper_reserve_lamports`, `layerzero_reserve_lamports` | Top-ups for each prover's `pda_payer`, default `0`. Only the shortfall is sent; a balance is never reduced. The plan fails unless the LayerZero reserve covers the endpoint and ULN accounts its paths still need (about 0.036 SOL per peer) and stays rent-exempt; the summary shows both |
 | `compute_unit_price` | Micro-lamports per compute unit, default `0` (none). Program deploys take it per compute unit; `apply` turns it into each v1 transaction's priority fee, price × 1.4M compute units. Part of the plan hash, and the funding estimate includes the priority fees it adds; deploy and `apply` take it from the plan |
 
-Inputs for a program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any input the program's own `init` would: more than 20 hyper senders or Polymer emitters, a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses, and a CCTP peer set that `cctp_prover`'s `init` would refuse (see `cctp` below).
+Only selected programs require configuration inputs. Inputs for a selected program that is already live are not written, but are still hashed and compared with its on-chain config. The plan also rejects any selected input the program's own `init` would: more than 20 hyper senders or Polymer emitters, a LayerZero peer with a zero `eid`, `chain_id` or address, or a `chain_id` another peer already uses, and a CCTP peer set that `cctp_prover`'s `init` would refuse (see `cctp` below).
 
 `layerzero` lists one peer per EVM chain. `required_dvn_count` must equal `required_dvns`; `optional_dvn_count` `255` means no optional DVNs (`0` would fall back to LayerZero's defaults and is rejected). DVN lists must be strictly ascending by public key, or the plan is rejected:
 
@@ -734,7 +738,7 @@ The addresses above are placeholders; use the DVN and executor addresses LayerZe
 }
 ```
 
-**1. Plan.** Dispatch the workflow with the inputs. The `plan` job checks the release (each `declare_id!` and IDL `address` against `program-ids.json`), refuses an RPC whose genesis hash is not the selected cluster's (devnet and mainnet share program IDs), classifies every program against the chain and writes the plan to the job summary, followed by the deployer's address, balance and estimated cost. Nothing is written on chain. A deployer short of SOL fails the job after printing the plan, and the approval never appears; fund it and dispatch again. Its balance is not part of the hash.
+**1. Plan.** Dispatch the workflow with the inputs and `programs`. The `plan` job checks selected release assets against `program-ids.json`, refuses an RPC whose genesis hash differs from the selected cluster's, and validates selected programs plus their dependency closure against the chain. Unselected dependencies must already be deployed with matching bytecode; a missing or incompatible dependency fails before any write. The summary shows selected actions, the deployer's address, balance and estimated cost. Nothing is written on chain. Insufficient funding fails before approval; fund the deployer and dispatch again.
 
 **2. Review the summary** of the `plan` job. Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify). Statuses:
 
@@ -746,17 +750,17 @@ The addresses above are placeholders; use the DVN and executor addresses LayerZe
 | Closed | the program account, its programdata closed | the run fails: the address is burned (see [Recovery](#recovery)) |
 | Foreign | anything else, including lamports someone sent to the program or programdata address | the run fails: someone else holds the address, and the other programs would trust it |
 
-The hash covers the release, the binaries, the cluster's genesis hash, the deployer's key, the inputs and the on-chain facts the plan used.
+The hash covers the canonical `selected` names, deployment policy, observed release metadata and binaries, the cluster's genesis hash, the deployer's key, selected inputs and on-chain facts. `apply`, IDL uploads and verification cannot expand that selection.
 
 **3. Approve** the `deploy` job, or reject it to stop. Once approved it plans again and fails without writing if the hash differs from the approved plan's (the chain changed while it waited); otherwise it:
 
-1. derives the program keypairs and deploys each new program (upgrade authority: the deployer);
-2. funds the reserves, then runs the `init` steps, each skipped when its account already exists and matches: `hyper_prover`, `polymer_prover`, `cctp_prover` (`init` with every peer), `aggregator_prover` (members `hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover`, taken from the release), then LayerZero (`init` with every peer, `init_path` and `set_path_config` per peer, the lookup table, `set_alt`). Every `init` needs the upgrade authority, so none can run after a program is final;
-3. reads every config back and compares it with the inputs; any difference fails the run with every program still upgradeable;
-4. verifies each program with `solana-verify` (and submits the remote job on mainnet), while the deployer can still sign the verification record, and fails unless the rebuild matches the deployed bytecode;
+1. derives only selected program keypairs and deploys each selected new program (upgrade authority: the deployer); dependency keys are never derived;
+2. funds selected reserves and runs selected `init` steps, skipping accounts already equal to the inputs. Every `init` needs the upgrade authority, so none can run after that program is final;
+3. reads selected configs back and compares them with the inputs, then uploads selected canonical IDLs; any difference fails the run;
+4. verifies only selected programs with `solana-verify` (and submits the remote job on mainnet), while the deployer can sign the verification record, and fails unless the rebuild matches deployed bytecode;
 5. deletes the keys and uploads the deploy record (`plan.json` and the logs; `apply.log` lists every config as read back) as artifact `deploy-v<version>-<cluster>`.
 
-Every program stays upgradeable after the run, so the provers can be tested end to end first.
+New programs stay upgradeable after the run, so they can be tested end to end first. Unselected programs receive no deploy, init, reserve, IDL or verification writes.
 
 #### Finalizing
 
@@ -773,9 +777,10 @@ After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separ
 
 #### Recovery
 
-- **Failed or cancelled run.** Programs stay upgradeable. A deploy that died part-way leaves a buffer holding its rent; the run closes every buffer the deployer owns before it deploys and again at the end, whatever the outcome, returning the rent to the deployer. Fix the cause and dispatch again for a fresh plan: the earlier one covered state that has since changed. Every step is idempotent, so the new plan only contains what is left.
+- **Failed or cancelled run.** Programs stay upgradeable. Selected deploys use fresh, explicit upload buffers in a directory unique to the workflow run and attempt; the final cleanup closes only those buffer addresses, skipping buffers already consumed by successful uploads. Legacy `all` runs without a deployment policy retain deployer-wide buffer cleanup before and after deployment. Both paths delete program and buffer key files after cleanup. Fix the cause and dispatch again for a fresh reviewed plan: previous chain state has changed.
+- **Buffer cleanup RPC failure.** Before each selected upload, `out/buffers.txt` records the program name and fresh buffer's public address. That public record survives key deletion in the uploaded deploy artifact, so a cleanup failure does not lose the buffer's identity. It contains no private key material.
 - **Burned address.** If a program has a wrong config (or a config was set by someone else), or someone sent lamports to a new program's address or its programdata address (the loader then cannot create the account), the address is unusable. Close it if it is still upgradeable, raise its salt in `scripts/program-salts.json` and cut a new release; that moves it and everything depending on it. A wrong LayerZero path on an upgradeable `layerzero_prover` can instead be corrected in place; see [Administration and finalization](#administration-and-finalization).
-- **Interrupted `solana program deploy` in the manual fallback.** It leaves a buffer account holding the upload's rent. Reclaim every buffer of the deployer with `solana program close --buffers -u <rpc> -k <deployer-keypair> --authority <deployer-keypair>`; the program itself does not exist yet, so the next plan lists it as new.
+- **Interrupted `solana program deploy` in the manual fallback.** It leaves an upload buffer holding rent. Close only that upload's recorded buffer address with `solana program close <buffer-address> -u <rpc> -k <deployer-keypair> --authority <deployer-keypair>`; do not close unrelated buffers.
 - **Abandoned deployment.** Run `Close` for its upgradeable programs; see [Closing](#closing).
 
 #### Limits
@@ -792,19 +797,19 @@ Use this only when the workflow cannot run. Every block runs under `set -euo pip
 
 The examples deploy to mainnet. For devnet, use a devnet RPC, the `.devnet.` assets, and drop every `-- --features mainnet`. Pass `-u <rpc>` to every command: mainnet and devnet share addresses.
 
-**1. Get the release and derive its keypairs.** `deploy/v<version>` is the release commit plus its real `declare_id!`s; run the script from that checkout, never from a downloaded copy.
+**1. Get the release and derive selected keypairs.** `deploy/v<version>` is the release commit plus its real `declare_id!`s; run the script from that checkout, never from a downloaded copy. Keep any `deployment-policy.json` beside the manifest.
 
 ```bash
 git clone https://github.com/eco/eco-routes-svm && cd eco-routes-svm
 git checkout deploy/v<version>
-gh release download v<version> --pattern program-ids.json --pattern '*.mainnet.so' --pattern '*.mainnet.json'
+gh release download v<version> --pattern program-ids.json --pattern deployment-policy.json --pattern '*.mainnet.so' --pattern '*.mainnet.json'
 export PROGRAM_KEYPAIR_SECRET=<from the vault>
-node scripts/program-keypairs.mjs deploy program-ids.json keys
+node scripts/program-keypairs.mjs deploy program-ids.json keys intent_chainer
 ```
 
-The script refuses to write anything unless every derived address matches `program-ids.json`, then writes `keys/<program>-keypair.json` (`/keys` is gitignored). The `.so` files are the release's verifiable builds: deploy them as they are.
+Replace `intent_chainer` with comma-separated program lib names, or `all` for a legacy release (also the default when omitted). The script checks the policy and every selected derived address before writing `keys/<program>-keypair.json`; it neither derives dependency keys nor filters the manifest. The `.so` files are the release's verifiable builds: deploy them as they are. Apply steps 3–6 only to selected programs; inspect their dependencies read-only.
 
-**2. Classify every program.** For each, with `address=$(jq -r ".${program}.address" program-ids.json)`, compare `solana program show -u <rpc> "$address"` and `solana-verify get-program-hash -u <rpc> "$address"` with `solana-verify get-executable-hash <program>.mainnet.so`:
+**2. Classify selected programs and their dependencies.** For each, with `address=$(jq -r ".${program}.address" program-ids.json)`, compare `solana program show -u <rpc> "$address"` and `solana-verify get-program-hash -u <rpc> "$address"` with `solana-verify get-executable-hash <program>.mainnet.so`. Unselected dependencies must already be executable and match their release binary; stop if any are missing or differ. Do not deploy or modify them.
 
 | On chain | Meaning | Action |
 |---|---|---|

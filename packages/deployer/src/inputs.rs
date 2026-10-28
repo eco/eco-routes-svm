@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -9,6 +9,10 @@ use layerzero_prover::instructions::PathConfig;
 use layerzero_prover::layerzero::{ExecutorConfig, UlnConfig};
 use layerzero_prover::state::{Peer, Store, MAX_PEERS};
 use serde::{de, Deserialize, Deserializer, Serialize};
+
+use crate::plan::{
+    CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER, POLYMER_PROVER, PROGRAMS_WITH_INIT,
+};
 
 const EVM_ADDRESS_LEN: usize = 20;
 /// eco-svm-std's mainnet and devnet `CHAIN_ID`. The deployer is one build for both clusters, so
@@ -109,6 +113,13 @@ pub enum ParseCctpSenderError {
 
 impl Inputs {
     pub fn parse(raw: RawInputs) -> Result<Self, Error> {
+        Self::parse_selected(
+            raw,
+            &PROGRAMS_WITH_INIT.into_iter().map(Into::into).collect(),
+        )
+    }
+
+    pub fn parse_selected(raw: RawInputs, selected: &BTreeSet<String>) -> Result<Self, Error> {
         let RawInputs {
             hyper_senders,
             polymer_emitters,
@@ -119,33 +130,54 @@ impl Inputs {
             compute_unit_price,
         } = raw;
 
-        let hyper_senders = parse_address_list(HYPER_SENDERS, &hyper_senders)?;
-        hyper_prover::state::Config::new(hyper_senders.iter().map(Into::into).collect()).map_err(
-            |reason| Error::RejectedByProgram {
-                input: HYPER_SENDERS,
-                reason,
-            },
-        )?;
-        let polymer_emitters = parse_address_list(POLYMER_EMITTERS, &polymer_emitters)?;
-        polymer_prover::state::Config::new(polymer_emitters.iter().map(Into::into).collect())
-            .map_err(|reason| Error::RejectedByProgram {
+        let hyper_senders = if selected.contains(HYPER_PROVER) {
+            parse_address_list(HYPER_SENDERS, &hyper_senders)?
+        } else {
+            Vec::new()
+        };
+        if selected.contains(HYPER_PROVER) {
+            hyper_prover::state::Config::new(hyper_senders.iter().map(Into::into).collect())
+                .map_err(|reason| Error::RejectedByProgram {
+                    input: HYPER_SENDERS,
+                    reason,
+                })?;
+        }
+        let polymer_emitters = if selected.contains(POLYMER_PROVER) {
+            parse_address_list(POLYMER_EMITTERS, &polymer_emitters)?
+        } else {
+            Vec::new()
+        };
+        if selected.contains(POLYMER_PROVER) {
+            polymer_prover::state::Config::new(polymer_emitters.iter().map(Into::into).collect())
+                .map_err(|reason| Error::RejectedByProgram {
                 input: POLYMER_EMITTERS,
                 reason,
             })?;
+        }
 
         Ok(Self {
             hyper_senders,
             polymer_emitters,
-            layerzero_peers: parse_layerzero_peers(&layerzero)?,
-            cctp_peers: parse_cctp_peers(&cctp)?,
-            hyper_reserve_lamports: parse_lamports(
-                HYPER_RESERVE_LAMPORTS,
-                &hyper_reserve_lamports,
-            )?,
-            layerzero_reserve_lamports: parse_lamports(
-                LAYERZERO_RESERVE_LAMPORTS,
-                &layerzero_reserve_lamports,
-            )?,
+            layerzero_peers: selected
+                .contains(LAYERZERO_PROVER)
+                .then(|| parse_layerzero_peers(&layerzero))
+                .transpose()?
+                .unwrap_or_default(),
+            cctp_peers: selected
+                .contains(CCTP_PROVER)
+                .then(|| parse_cctp_peers(&cctp))
+                .transpose()?
+                .unwrap_or_default(),
+            hyper_reserve_lamports: selected
+                .contains(HYPER_PROVER)
+                .then(|| parse_lamports(HYPER_RESERVE_LAMPORTS, &hyper_reserve_lamports))
+                .transpose()?
+                .unwrap_or_default(),
+            layerzero_reserve_lamports: selected
+                .contains(LAYERZERO_PROVER)
+                .then(|| parse_lamports(LAYERZERO_RESERVE_LAMPORTS, &layerzero_reserve_lamports))
+                .transpose()?
+                .unwrap_or_default(),
             compute_unit_price: compute_unit_price.trim().parse().map_err(|_| {
                 Error::InvalidComputeUnitPrice {
                     value: compute_unit_price.clone(),

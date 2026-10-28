@@ -138,6 +138,7 @@ fn release<const N: usize>(programs: [(&str, Pubkey); N]) -> Release {
     Release {
         version: "0.0.1".into(),
         cluster: Cluster::Devnet,
+        nondeployable_programs: Default::default(),
         programs: programs
             .into_iter()
             .map(|(name, address)| {

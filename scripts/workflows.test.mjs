@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -88,7 +88,7 @@ test("deploy workflow rejects a malformed compute_unit_price before anything run
   const validates = (computeUnitPrice) =>
     spawnSync("bash", ["-c", script], {
       encoding: "utf8",
-      env: { ...process.env, DEPLOYER: "Deployer", VERSION: "1.2.3", COMPUTE_UNIT_PRICE: computeUnitPrice },
+      env: { ...process.env, DEPLOYER: "Deployer", VERSION: "1.2.3", PROGRAMS: "all", COMPUTE_UNIT_PRICE: computeUnitPrice },
     }).status === 0;
 
   ["0", "5", "9999999999999999999"].forEach((value) => assert.ok(validates(value), value));
@@ -97,7 +97,7 @@ test("deploy workflow rejects a malformed compute_unit_price before anything run
   );
   const unset = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
-    env: { ...process.env, DEPLOYER: "", VERSION: "1.2.3", COMPUTE_UNIT_PRICE: "0" },
+    env: { ...process.env, DEPLOYER: "", VERSION: "1.2.3", PROGRAMS: "all", COMPUTE_UNIT_PRICE: "0" },
   });
   assert.notEqual(unset.status, 0);
   assert.match(unset.stderr, /DEPLOYER_ADDRESS/);
@@ -176,7 +176,11 @@ const deployCalls = (price) => {
   });
   writeFileSync(join(bin, "deployer"), `#!/usr/bin/env bash\necho portal\n`, { mode: 0o755 });
   writeFileSync(join(bin, "program-ids.json"), '{"portal":{"address":"PortalAddress"}}');
-  writeFileSync(join(bin, "plan.json"), JSON.stringify({ inputs: { compute_unit_price: price } }));
+  writeFileSync(join(bin, "plan.json"), JSON.stringify({
+    inputs: { compute_unit_price: price },
+    selected: ["portal"],
+    release: { programs: { portal: {} } },
+  }));
 
   const { status, stderr } = spawnSync("bash", [script, "deploy"], {
     encoding: "utf8",
@@ -219,6 +223,99 @@ test("deploy takes the compute-unit price from the reviewed plan, not the enviro
   );
 });
 
+test("release check requires assets only for selected programs and preserves the full manifest", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const directory = mkdtempSync(join(tmpdir(), "selected-release-"));
+  mkdirSync(join(directory, "programs", "intent-chainer", "src"), { recursive: true });
+  writeFileSync(join(directory, "programs", "intent-chainer", "src", "lib.rs"), 'declare_id!("Chainer");');
+  writeFileSync(join(directory, "intent_chainer.devnet.json"), '{"address":"Chainer"}');
+  writeFileSync(join(directory, "intent_chainer.devnet.so"), "binary");
+  const manifest = '{"intent_chainer":{"address":"Chainer"},"portal":{"address":"OldPortal"}}';
+  writeFileSync(join(directory, "program-ids.json"), manifest);
+  const result = spawnSync("bash", [script, "check"], {
+    cwd: directory,
+    encoding: "utf8",
+    env: { ...process.env, ASSETS: directory, CLUSTER: "devnet", PROGRAMS: "intent_chainer" },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "ok intent_chainer Chainer\n");
+  assert.equal(readFileSync(join(directory, "program-ids.json"), "utf8"), manifest);
+  rmSync(directory, { recursive: true });
+});
+
+test("selected deploys use fresh explicit buffers and clean only those buffers after a failed upload", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const directory = mkdtempSync(join(tmpdir(), "selected-deploy-"));
+  const calls = join(directory, "calls");
+  const buffers = join(directory, "buffers");
+  const stub = (name, body) =>
+    writeFileSync(join(directory, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+  stub("deployer", "echo intent_chainer");
+  stub("solana-keygen", `[ "$1" = new ] || { echo FreshBuffer; exit; }
+while [ "$1" != --outfile ]; do shift; done
+printf 'buffer-key' > "$2"`);
+  stub("solana", `echo "solana $*" >> "${calls}"
+if [ "$2" = deploy ]; then
+  [ "$(cat "${directory}/buffers.txt")" = "intent_chainer FreshBuffer" ] || exit 2
+  exit 1
+fi`);
+  writeFileSync(join(directory, "program-ids.json"), '{"intent_chainer":{"address":"Chainer"},"portal":{"address":"OldPortal"}}');
+  writeFileSync(join(directory, "deployment-policy.json"), '{"nondeployable_programs":["portal"]}');
+  writeFileSync(join(directory, "plan.json"), '{"inputs":{"compute_unit_price":0},"selected":["intent_chainer"],"release":{"programs":{"intent_chainer":{},"portal":{}}}}');
+  const env = {
+    ...process.env,
+    PATH: `${directory}:${process.env.PATH}`,
+    ASSETS: directory,
+    PLAN: join(directory, "plan.json"),
+    KEYPAIR: "deployer.json",
+    RPC_URL: "http://rpc",
+    CLUSTER: "mainnet",
+    KEYS_DIR: directory,
+    BUFFER_DIR: buffers,
+  };
+  const deployed = spawnSync("bash", [script, "deploy"], { encoding: "utf8", env });
+  assert.equal(deployed.status, 1, deployed.stderr);
+  const cleaned = spawnSync("bash", [script, "close-buffers"], { encoding: "utf8", env });
+  assert.equal(cleaned.status, 0, cleaned.stderr);
+  const sent = readFileSync(calls, "utf8");
+  assert.match(sent, new RegExp(`--buffer ${buffers}/intent_chainer-buffer-keypair.json`));
+  assert.match(sent, /solana program close FreshBuffer -u http:\/\/rpc -k deployer.json --authority deployer.json/);
+  assert.doesNotMatch(sent, /--buffers|OldPortal/);
+  stub("solana", 'echo "RPC unavailable" >&2; exit 1');
+  const failedCleanup = spawnSync("bash", [script, "close-buffers"], { encoding: "utf8", env });
+  assert.equal(failedCleanup.status, 1);
+  rmSync(buffers, { recursive: true });
+  const record = readFileSync(join(directory, "buffers.txt"), "utf8");
+  assert.equal(record, "intent_chainer FreshBuffer\n");
+  assert.doesNotMatch(record, /buffer-key|OldPortal/);
+  rmSync(directory, { recursive: true });
+});
+
+test("selected buffer cleanup skips consumed buffers but fails on RPC errors", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const directory = mkdtempSync(join(tmpdir(), "selected-buffers-"));
+  const calls = join(directory, "calls");
+  writeFileSync(join(directory, "intent_chainer-buffer-keypair.json"), "buffer-key");
+  writeFileSync(join(directory, "deployment-policy.json"), '{"nondeployable_programs":["portal"]}');
+  writeFileSync(join(directory, "solana-keygen"), "#!/usr/bin/env bash\necho FreshBuffer\n", { mode: 0o755 });
+  const env = {
+    ...process.env,
+    PATH: `${directory}:${process.env.PATH}`,
+    ASSETS: directory,
+    BUFFER_DIR: directory,
+    KEYPAIR: "deployer.json",
+    RPC_URL: "http://rpc",
+  };
+  ["Unable to find the account FreshBuffer", "RPC unavailable"].forEach((message) => {
+    writeFileSync(join(directory, "solana"),
+      `#!/usr/bin/env bash\necho "$*" >> "${calls}"\necho "${message}" >&2\nexit 1\n`, { mode: 0o755 });
+    const result = spawnSync("bash", [script, "close-buffers"], { encoding: "utf8", env });
+    assert.equal(result.status, message.startsWith("Unable") ? 0 : 1, result.stderr);
+  });
+  assert.doesNotMatch(readFileSync(calls, "utf8"), /close/);
+  rmSync(directory, { recursive: true });
+});
+
 const firstStepScript = (text) => {
   const steps = text.slice(text.indexOf("    steps:\n"));
   const first = steps.match(/^ {6}- name: (.+)\n(?: {8}.*\n| *\n)*?(?= {6}- name:)/m);
@@ -227,13 +324,13 @@ const firstStepScript = (text) => {
   return first[0].slice(first[0].indexOf("        run: |\n") + "        run: |\n".length).replace(/^ {10}/gm, "");
 };
 
-for (const name of ["finalize.yml", "close.yml"]) {
+for (const name of ["deploy.yml", "finalize.yml", "close.yml"]) {
   test(`${name} rejects a malformed programs input before anything runs`, () => {
     const script = firstStepScript(workflow(name));
     const validates = (programs) =>
       spawnSync("bash", ["-c", script], {
         encoding: "utf8",
-        env: { ...process.env, DEPLOYER: "Deployer", VERSION: "1.2.3", PROGRAMS: programs },
+        env: { ...process.env, DEPLOYER: "Deployer", VERSION: "1.2.3", PROGRAMS: programs, COMPUTE_UNIT_PRICE: "0" },
       }).status === 0;
 
     ["all", "hyper_prover", "aggregator_prover,hyper_prover"].forEach((value) => assert.ok(validates(value), value));

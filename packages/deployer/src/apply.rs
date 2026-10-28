@@ -8,8 +8,8 @@ use solana_sdk::signer::Signer;
 use crate::chain::{self, Chain};
 use crate::config::{self, Configs};
 use crate::plan::{
-    self, Plan, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER, LAYERZERO_PROVER,
-    POLYMER_PROVER,
+    self, Action, Plan, AGGREGATOR_MEMBERS, AGGREGATOR_PROVER, CCTP_PROVER, HYPER_PROVER,
+    LAYERZERO_PROVER, POLYMER_PROVER,
 };
 use crate::{cctp, funding, layerzero};
 
@@ -57,25 +57,54 @@ pub fn apply<C: Chain>(
     deployer: &Keypair,
     observe: &mut impl FnMut(&Step),
 ) -> Result<(), Error> {
-    plan.verify_configs(&config::read(chain, &plan.release)?)?;
-    let prover_steps: [StepFn<C>; 6] = [
-        fund_hyper_reserve,
-        fund_layerzero_reserve,
-        init_hyper,
-        init_polymer,
-        init_cctp,
-        init_aggregator,
+    plan.verify_configs(&config::read_selected(
+        chain,
+        &plan.release,
+        &plan.selected,
+    )?)?;
+    let reserve_steps: [(&str, StepFn<C>); 2] = [
+        (HYPER_PROVER, fund_hyper_reserve),
+        (LAYERZERO_PROVER, fund_layerzero_reserve),
+    ];
+    reserve_steps
+        .into_iter()
+        .filter(|(name, _)| plan.selected.contains(*name))
+        .try_for_each(|(_, run)| {
+            observe(&run(chain, plan, deployer)?);
+
+            Ok::<_, Error>(())
+        })?;
+    let prover_steps: [(&str, StepFn<C>); 4] = [
+        (HYPER_PROVER, init_hyper),
+        (POLYMER_PROVER, init_polymer),
+        (CCTP_PROVER, init_cctp),
+        (AGGREGATOR_PROVER, init_aggregator),
     ];
 
-    prover_steps.into_iter().try_for_each(|run| {
-        observe(&run(chain, plan, deployer)?);
+    prover_steps
+        .into_iter()
+        .filter(|(name, _)| {
+            plan.programs
+                .get(*name)
+                .is_some_and(|program| program.actions.contains(&Action::Init))
+        })
+        .try_for_each(|(_, run)| {
+            observe(&run(chain, plan, deployer)?);
 
-        Ok::<_, Error>(())
-    })?;
+            Ok::<_, Error>(())
+        })?;
 
-    Ok(layerzero::apply(chain, plan, deployer, &mut |action| {
-        observe(&step(LAYERZERO_PROVER, action.name, action.signature))
-    })?)
+    if plan
+        .programs
+        .get(LAYERZERO_PROVER)
+        .is_some_and(|program| program.actions.contains(&Action::Init))
+    {
+        layerzero::apply(chain, plan, deployer, &mut |action| {
+            observe(&step(LAYERZERO_PROVER, action.name, action.signature))
+        })?;
+    }
+
+    Ok(())
 }
 
 fn fund_hyper_reserve(
@@ -330,6 +359,7 @@ fn aggregator_init_instruction(
 fn plan_address(plan: &Plan, program: &'static str) -> Result<Pubkey, Error> {
     plan.programs
         .get(program)
+        .or_else(|| plan.dependencies.get(program))
         .map(|planned| planned.state.address)
         .ok_or(Error::UnplannedProgram { program })
 }
