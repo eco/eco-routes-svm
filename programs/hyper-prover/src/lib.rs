@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use eco_svm_std::prover;
 
-declare_id!("EcoHjwFYKtiHp5ZuFQBc87GDikm9Lc5EYapKywjNAQQF");
+declare_id!("Eco8nUaVtNw3pXDVn8dtyjE5fhe47D4RQ6pykQ3Q5n6o");
 
 pub mod hyperlane;
 pub mod instructions;
