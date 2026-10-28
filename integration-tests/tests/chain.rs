@@ -666,15 +666,14 @@ fn chain_rejects_a_native_reward() {
 fn chain_late_transfer_preserves_portal_refund_deadline() {
     for offset in [-301, -300, -299, -60, -1, 0, 1, 3600] {
         let (mut ctx, base_mint, recipient_ata) = setup();
-        let (mut order, template) = ctx.intent_chainer().svm_order(
+        let (order, template) = ctx.intent_chainer().svm_order(
             base_mint,
             recipient_ata,
             local_prover::ID,
             IDENTITY_SCALE,
             1,
         );
-        // Required publication must remain possible even after expiry.
-        order.require_publish = true;
+        // A requested publication must remain possible even after expiry.
         let chained = ctx
             .intent_chainer()
             .resolve(&order, &template, DELIVERED, recipient_ata);
@@ -687,7 +686,7 @@ fn chain_late_transfer_preserves_portal_refund_deadline() {
         ctx.warp_to_timestamp(chained.reward.deadline as i64 + offset);
         let result = ctx
             .intent_chainer()
-            .chain(&chained, false)
+            .chain(&chained, true)
             .unwrap_or_else(|err| panic!("chain at deadline{offset:+} failed: {err:?}"));
         assert!(
             contains_event(portal::events::IntentPublished::new(
@@ -1608,69 +1607,57 @@ fn dispatcher_and_proof_closer_are_untouched_by_chaining() {
 /// The scariest failure mode in the design, pinned so it cannot go silent.
 ///
 /// The other half of the pair: a publish of a route past the cap is refused outright,
-/// rather than published into an event nobody will ever see — whether the caller asked for
-/// the publish or the order did — and the escrow can then be chained without one.
+/// rather than published into an event nobody will ever see, and the same escrow then
+/// chains without one. The order does not commit to publishing, so the refusal is always
+/// recoverable.
 #[test]
 fn a_publish_past_the_cap_is_refused_and_the_escrow_still_chains_unpublished() {
-    for require_publish in [false, true] {
-        let (mut ctx, base_mint, _) = setup();
-        let (mut order, template) = ctx.intent_chainer().large_route_order(
-            base_mint,
-            local_prover::ID,
-            MAX_PUBLISHED_ROUTE_LEN + 1,
-        );
-        order.require_publish = require_publish;
-        let chained =
-            ctx.intent_chainer()
-                .resolve(&order, &template, DELIVERED, Pubkey::new_unique());
-        ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
+    let (mut ctx, base_mint, _) = setup();
+    let (order, template) = ctx.intent_chainer().large_route_order(
+        base_mint,
+        local_prover::ID,
+        MAX_PUBLISHED_ROUTE_LEN + 1,
+    );
+    let chained = ctx
+        .intent_chainer()
+        .resolve(&order, &template, DELIVERED, Pubkey::new_unique());
+    ctx.intent_chainer().seed_escrow(&chained, DELIVERED);
 
-        // The caller asks for the publish when the order did not; when the order did,
-        // the caller's `false` cannot withdraw it.
-        assert!(ctx
-            .intent_chainer()
-            .chain(&chained, !require_publish)
-            .is_err_and(is_error(ChainerError::PublishRouteTooLong)));
-        assert_eq!(
-            ctx.token_balance(&chained.escrow_ata),
-            DELIVERED,
-            "a refused publish must leave the escrow untouched"
-        );
-        if require_publish {
-            // Nothing the caller passes changes a committed publish.
-            assert!(ctx
-                .intent_chainer()
-                .chain(&chained, false)
-                .is_err_and(is_error(ChainerError::PublishRouteTooLong)));
-            continue;
-        }
+    assert!(ctx
+        .intent_chainer()
+        .chain(&chained, true)
+        .is_err_and(is_error(ChainerError::PublishRouteTooLong)));
+    assert_eq!(
+        ctx.token_balance(&chained.escrow_ata),
+        DELIVERED,
+        "a refused publish must leave the escrow untouched"
+    );
 
-        let route_hash = common::intent_chainer_context::keccak(
-            &chained
-                .order
-                .build_route(&chained.template, DELIVERED)
-                .unwrap(),
-        );
-        let expected = IntentChained::new(
-            chained.intent_hash,
-            chained.order.template_hash,
-            chained.params_hash,
-            chained.vault,
-            base_mint,
-            DELIVERED,
-            chained.amount_out,
-            CHAIN_ID,
-            route_hash,
-            false,
-        );
-        let meta = ctx
-            .intent_chainer()
-            .chain_with_compute_limit(&chained, false, 900_000)
-            .expect("the same escrow chains without publishing");
-        assert!(contains_event(expected)(meta));
-        assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
-        assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
-    }
+    let route_hash = common::intent_chainer_context::keccak(
+        &chained
+            .order
+            .build_route(&chained.template, DELIVERED)
+            .unwrap(),
+    );
+    let expected = IntentChained::new(
+        chained.intent_hash,
+        chained.order.template_hash,
+        chained.params_hash,
+        chained.vault,
+        base_mint,
+        DELIVERED,
+        chained.amount_out,
+        CHAIN_ID,
+        route_hash,
+        false,
+    );
+    let meta = ctx
+        .intent_chainer()
+        .chain_with_compute_limit(&chained, false, 900_000)
+        .expect("the same escrow chains without publishing");
+    assert!(contains_event(expected)(meta));
+    assert_eq!(ctx.token_balance(&chained.escrow_ata), 0);
+    assert_eq!(ctx.token_balance(&chained.vault_ata), DELIVERED);
 }
 
 // ===========================================================================

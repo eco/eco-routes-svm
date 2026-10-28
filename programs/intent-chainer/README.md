@@ -152,7 +152,7 @@ There are no opaque config blobs, padding/default fields, or bump fields.
 ```text
 Order =
   portal[32] | base_mint[32] | destination:u64 | template_hash[32] |
-  Reward | scale:u128 | min_amount_in:u64 | require_publish:bool
+  Reward | scale:u128 | min_amount_in:u64
 
 TemplateProgram = vault_count:u32 | Vault[vault_count] | Template(root)
 Vault = destination:u64 | Template(route) | Template(reward) | Derivation
@@ -211,7 +211,7 @@ needs only the child's two 32-byte hashes; the child's template bytes never ente
 parent's preimage.
 
 The template is the large, reusable half. Many orders can share one template, and the
-parameters (the half that tells one order from another, 253 bytes with the single
+parameters (the half that tells one order from another, 252 bytes with the single
 reward leg) ride inline in every transaction that executes an order. `chain` binds the
 template it is handed to `Order.template_hash` (`TemplateCommitmentMismatch`) before
 using it.
@@ -233,8 +233,9 @@ using it.
   multiple Portal deployments. It is distinct from Portals in remote configurations.
 - The local reward must have exactly one base-mint token authored at amount zero and
   native amount zero. The runtime measured Input fills that token amount.
-- Callers may strengthen publication, never weaken it:
-  `effective_publish = order.require_publish || call.publish`.
+- Publication is the caller's choice alone (`call.publish`); the order does not commit to it.
+  A publish of a root over `MAX_PUBLISHED_ROUTE_LEN` is refused with `PublishRouteTooLong`
+  and the same escrow then chains with `publish: false`.
 - Local account checks apply regardless of publication. The child's `WithdrawnMarker`
   is deliberately **not** consulted, though the EVM chainer does check Portal status.
   The difference is where the balance sits when the check runs, not the two portals'
@@ -303,8 +304,9 @@ Join the two on `template_hash`. One `TemplateAnnounced` serves every order that
 to that template.
 
 `TemplateAnnounced` does not carry the template, because it already is on the record. An inline
-template is the `announce_template` instruction's own argument: read that instruction's data
-(top-level, or inner when another program called it) after its 8-byte discriminator and check
+template is the `announce_template` instruction's own argument: read the `template_len` bytes of
+that instruction's data (top-level, or inner when another program called it) after its 8-byte
+discriminator, ignoring any padding after them, and check
 `sha256` of it against `template_hash`. A staged template: its
 bytes are the `init_order_buffer` and `write_order_buffer` instruction data that filled
 the buffer, and the buffer account itself until it is closed. To recover one, collect those
@@ -340,7 +342,7 @@ Anchor EVENT_IX_TAG_LE[8] | TemplateAnnounced discriminator[8] |
 template_hash[32] | template_len:u32 | buffer: Option<Pubkey>   (1 byte tag, then 32 if Some)
 ```
 
-`OrderAnnounced` is small and fixed-size: the Borsh `Order` is 253 bytes with its single
+`OrderAnnounced` is small and fixed-size: the Borsh `Order` is 252 bytes with its single
 reward leg. `TemplateAnnounced` is 45 bytes inline and 77 staged, whatever the template's size.
 One exactly pre-sized buffer avoids the default event macro's repeated allocations on
 the non-freeing heap. Failure to record the CPI event fails the instruction; exhausting
@@ -475,7 +477,7 @@ submit these legacy packets with a blockhash, CU limit **and CU price**, no ALT:
 | Inline chain (not submitted) | 1375, too large |
 | Prepare 1: init + all 560 template bytes | **929** |
 | Prepare 2: seal/announce + idempotent escrow ATA creation | **499** |
-| Execute: chain_from_account, parameters inline | **848** |
+| Execute: chain_from_account, parameters inline | **847** |
 | Close separately | 263 |
 
 Prepare is explicitly **two transactions**, not one, plus `announce_order` for the
@@ -483,7 +485,7 @@ parameters. Clients must still size their own final signed transactions. No stag
 carries an authority signature into execution. For a 4096-byte template, upload is init
 with 800 bytes plus five append transactions; then seal and execute. A template at the 72 KiB cap is init plus about ninety appends. Init at
 800 bytes is 1169 bytes, each full append 1072 bytes, standalone seal 297 bytes.
-Execution is 848 bytes whatever the template size, because only the parameters ride
+Execution is 847 bytes whatever the template size, because only the parameters ride
 with it. Every submitted native-path test packet is checked against 1232 bytes.
 
 Client changes (solver implementation remains out of scope):
@@ -539,17 +541,17 @@ path (buffer → seal → `chain_from_account`) on the real SBF artifact, with
 
 | Case | Template bytes | Root bytes | Chain CU | Chain heap | Seal heap |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| **Root at its cap**, unpublished | 65,552 | 65,536 | 106–115k | **2517** | 758 |
+| **Root at its cap**, unpublished | 65,552 | 65,536 | 131–144k | **2517** | 758 |
 | Root at the publish cap, published | 5,016 | 5,000 | not recorded | 12,661 | 758 |
 | 560-byte nested template | 560 | — | not recorded | 3887 | 1590 |
-| Eight nodes, eight items in every template | 4096 | 8 | 462–476k | 11,189 | 9270 |
-| Eight Solana nodes, near-maximum root, published | 3096 | 2032 | 451–459k | 8901 | 2934 |
+| Eight nodes, eight items in every template | 4096 | 8 | 464–482k | 11,189 | 9270 |
+| Eight Solana nodes, near-maximum root, published | 3096 | 2032 | 451–469k | 8901 | 2934 |
 
-Sealing a 64 KiB template costs 40,809 CU and 758 bytes of heap; its event carries 76 bytes.
+Sealing a 64 KiB template costs 40,083 CU and 758 bytes of heap; its event carries 77 bytes.
 Against the previous design, the dense 4096-byte case fell from 15,461 to 11,189 bytes of
 heap and about 510k to about 470k CU, and its seal from 17,498 to 9,270 bytes.
 
-The parameters are a fixed 253 bytes in every row. PDA bumps make CU vary; these are
+The parameters are a fixed 252 bytes in every row. PDA bumps make CU vary; these are
 measurements, not an upper bound for every possible configuration. Request up to 1.4M
 CU for dense cases and simulate the exact submission.
 

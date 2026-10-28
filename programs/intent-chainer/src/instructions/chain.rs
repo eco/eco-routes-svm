@@ -29,9 +29,8 @@ pub struct ChainArgs {
     /// Whether to also CPI `portal::publish` so intent2 appears in portal's own
     /// `IntentPublished` stream.
     ///
-    /// Only ever *strengthens* [`Order::require_publish`]: the effective decision
-    /// is `publish || order.require_publish`, so a caller can add discoverability
-    /// but never remove it. See that field for why it is committed.
+    /// The caller's choice alone: the order does not commit to it, so a publish refused
+    /// as too long ([`ChainerError::PublishRouteTooLong`]) is retried without one.
     ///
     /// Publication does not control the local settlement checks: those always
     /// run. A published route is carried in Portal's full IntentPublished event.
@@ -126,9 +125,6 @@ pub(crate) fn chain_order<'info>(
     template: PresentedTemplate<'_>,
     publish: bool,
 ) -> Result<()> {
-    // The caller may strengthen the author's choice, never weaken it.
-    let publish = publish || order.require_publish;
-
     let root_len = validate_order(&order, &template)?;
     // Portal logs a published route whole, and the runtime truncates a log past its
     // budget without an error. Refuse before anything moves, so a refused publish

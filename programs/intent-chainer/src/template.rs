@@ -542,7 +542,9 @@ fn read_bytes(reader: &mut impl Read, max: usize) -> io::Result<Vec<u8>> {
             "template bound exceeded",
         ));
     }
-    let mut bytes = Vec::new();
+    // Presized up to the nested budget: `read_to_end` alone doubles from 32 bytes,
+    // and SBF's bump allocator keeps every discarded buffer.
+    let mut bytes = Vec::with_capacity(len.min(MAX_RENDERED_BYTES));
     reader.take(len as u64).read_to_end(&mut bytes)?;
     if bytes.len() != len {
         return Err(io::ErrorKind::UnexpectedEof.into());

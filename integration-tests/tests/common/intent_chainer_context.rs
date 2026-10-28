@@ -101,7 +101,6 @@ impl IntentChainer<'_> {
             },
             scale,
             min_amount_in,
-            require_publish: false,
         };
         (order, template)
     }
@@ -557,7 +556,6 @@ impl IntentChainer<'_> {
             },
             scale: WAD,
             min_amount_in: 1,
-            require_publish: false,
         };
         (order, template)
     }

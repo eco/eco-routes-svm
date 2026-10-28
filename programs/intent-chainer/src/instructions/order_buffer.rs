@@ -246,11 +246,17 @@ pub fn chain_from_account<'info>(
     let data = info.try_borrow_data()?;
     let bytes = template_bytes(&ctx.accounts.order_buffer, &data)?;
     // Read in place: the root route's segments are never copied out of the account.
-    // Seal already bound these immutable bytes to the header's `template_hash`, so the
-    // commitment is the header's, not a second pass over the payload.
+    let view = parse_template(bytes)?;
+    // Seal bound these bytes to the header's `template_hash`; hashing them again (about
+    // 1 CU per 2 bytes) keeps execution from resting on that invariant alone.
+    let hash: Bytes32 = solana_sha256_hasher::hashv(&[bytes]).to_bytes().into();
+    require!(
+        hash == ctx.accounts.order_buffer.template_hash,
+        ChainerError::TemplateCommitmentMismatch
+    );
     let template = PresentedTemplate {
-        view: parse_template(bytes)?,
-        hash: ctx.accounts.order_buffer.template_hash,
+        view,
+        hash,
         encoded_len: bytes.len(),
     };
     // Delegate every custody/template/measurement/settlement check to the same

@@ -76,7 +76,6 @@ fn order(template: TemplateProgram) -> Order {
         },
         scale: WAD,
         min_amount_in: 1,
-        require_publish: true,
     }
 }
 
@@ -524,7 +523,6 @@ fn every_nested_field_changes_both_commitment_and_custody() {
     changed!(destination, base.destination + 1);
     changed!(scale, base.scale + 1);
     changed!(min_amount_in, 2);
-    changed!(require_publish, false);
     for field in 0..6 {
         let mut o = base.clone();
         match field {

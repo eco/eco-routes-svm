@@ -60,8 +60,8 @@ pub struct OrderAnnounced {
 ///
 /// - **Inline** (`buffer` is `None`, from `announce_template`): the template is that
 ///   instruction's own argument, at the top level of its transaction or as an inner
-///   instruction when another program called it. Read its data after the 8-byte
-///   discriminator.
+///   instruction when another program called it. Read the `template_len` bytes of its
+///   data after the 8-byte discriminator; anything after them is padding.
 /// - **Staged** (`buffer` is `Some`, from `seal_order_buffer`): the template is the buffer
 ///   account's data and, until it is closed, the `init_order_buffer` and
 ///   `write_order_buffer` instructions that filled it. Collect their chunks by `offset`.

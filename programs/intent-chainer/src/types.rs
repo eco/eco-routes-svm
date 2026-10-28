@@ -35,8 +35,6 @@ pub struct Order {
     /// Initial Output = ceil(Input * scale / WAD), in the u128 domain.
     pub scale: u128,
     pub min_amount_in: u64,
-    /// Callers can strengthen this with publish=true, never weaken it.
-    pub require_publish: bool,
 }
 
 impl Order {
@@ -121,7 +119,6 @@ impl AnchorDeserialize for Order {
             reward: deserialize_reward(reader)?,
             scale: u128::deserialize_reader(reader)?,
             min_amount_in: u64::deserialize_reader(reader)?,
-            require_publish: bool::deserialize_reader(reader)?,
         })
     }
 }
@@ -229,7 +226,6 @@ mod tests {
             },
             scale: WAD,
             min_amount_in: 1,
-            require_publish: false,
         }
     }
 
