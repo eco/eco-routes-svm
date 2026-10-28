@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::mem;
@@ -80,6 +80,8 @@ pub enum Error {
     InvalidAddress { program: String, value: String },
     #[error("{program}: dependency {dependency:?} in program-ids.json is not a released program")]
     UnknownDependency { program: String, dependency: String },
+    #[error("deployment-policy.json differs from the reviewed release policy")]
+    PolicyChanged,
     /// Never carries the parser's error: it can quote the file, which holds the secret key.
     #[error("cannot read deployer keypair {path}: {reason}")]
     Keypair { path: PathBuf, reason: &'static str },
@@ -114,6 +116,12 @@ struct ProgramId {
     dependencies: Vec<String>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentPolicy {
+    nondeployable_programs: BTreeSet<String>,
+}
+
 type Binaries = BTreeMap<String, Vec<u8>>;
 
 pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
@@ -126,7 +134,9 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
         Command::Apply(args) => {
             let deployer = read_keypair(&args.chain.deployer_keypair)?;
             let file: PlanFile = read_json(&args.plan)?;
-            let price = Inputs::parse(file.document.inputs)?.compute_unit_price;
+            file.validate()?;
+            let price = Inputs::parse_selected(file.document.inputs, &file.document.selected)?
+                .compute_unit_price;
             let mut chain =
                 RpcChain::new(args.chain.rpc_url.clone()).with_compute_unit_price(price);
 
@@ -145,14 +155,17 @@ pub fn run(command: &Command, out: &mut impl Write) -> Result<(), Error> {
         Command::Actions(args) => actions(args, out),
         Command::Idl(args) => {
             let deployer = read_keypair(&args.chain.deployer_keypair)?;
-            let PlanFile { document, .. } = read_json(&args.plan)?;
-            let price = Inputs::parse(document.inputs)?.compute_unit_price;
+            let file: PlanFile = read_json(&args.plan)?;
+            file.validate()?;
+            let price =
+                Inputs::parse_selected(file.document.inputs.clone(), &file.document.selected)?
+                    .compute_unit_price;
             let mut chain =
                 RpcChain::new(args.chain.rpc_url.clone()).with_compute_unit_price(price);
 
             idl(
                 &mut chain,
-                &document.release,
+                &file,
                 &args.assets,
                 &deployer,
                 IDL_RETRY_BACKOFF,
@@ -186,7 +199,14 @@ pub fn plan(
         inputs,
         ..
     } = args;
-    let (release, binaries) = release(version, *cluster, program_ids, assets)?;
+    let (release, binaries, selected) = release_selected(
+        version,
+        *cluster,
+        program_ids,
+        assets,
+        &args.programs.parse()?,
+        false,
+    )?;
     let raw = RawInputs {
         hyper_senders: inputs.hyper_senders.clone(),
         polymer_emitters: inputs.polymer_emitters.clone(),
@@ -199,9 +219,10 @@ pub fn plan(
     let document = PlanDocument {
         release,
         inputs: raw.clone(),
+        selected,
     };
     let plan = build(chain, &document, &binaries, deployer, &BTreeMap::new())?;
-    let idls = read_idls(&plan.release, assets)?;
+    let idls = read_idls(&plan.release, assets, |name| plan.selected.contains(name))?;
     let funding = Funding::estimate(chain, &plan, &binaries, &idls, deployer)?;
 
     write_json(plan_path, &plan.file(raw))?;
@@ -253,9 +274,10 @@ pub fn plan_selection(
         programs,
         ..
     } = args;
-    let (release, binaries) = release(version, *cluster, program_ids, assets)?;
     let selected: Programs = programs.parse()?;
-    let idls = read_idls(&release, assets)?;
+    let (release, binaries, _) =
+        release_selected(version, *cluster, program_ids, assets, &selected, true)?;
+    let idls = read_idls(&release, assets, |_| true)?;
     let observed = selection::observe(chain, &release, &binaries, &idls, deployer)?;
     let selection = Selection::build(operation, &selected, release, *deployer, observed)?;
 
@@ -272,7 +294,35 @@ pub fn plan_selection(
 /// dependencies, or before them for `close`, so a run that stops part-way never leaves a final
 /// program depending on an upgradeable one, nor a program depending on a closed one.
 pub fn actions(args: &ActionsArgs, out: &mut impl Write) -> Result<(), Error> {
-    let ActionsFile { release, programs } = read_json(&args.plan)?;
+    let value: serde_json::Value = read_json(&args.plan)?;
+    let invalid = |source| Error::Json {
+        path: args.plan.clone(),
+        source,
+    };
+    let (release, programs) = if value.get("operation").is_none() {
+        let file: PlanFile = serde_json::from_value(value).map_err(invalid)?;
+        file.validate()?;
+
+        (file.document.release, file.programs)
+    } else {
+        let file: selection::SelectionFile = serde_json::from_value(value).map_err(invalid)?;
+        let expected = match file.operation {
+            Operation::Finalize => Action::Finalize,
+            Operation::Close => Action::Close,
+        };
+        if file
+            .programs
+            .values()
+            .any(|program| program.actions.iter().any(|action| *action != expected))
+        {
+            return Err(plan::Error::Selection {
+                reason: "action does not match plan operation".into(),
+            }
+            .into());
+        }
+
+        (file.release, file.programs)
+    };
     let action = args.action.into();
     let dependencies_first = release.dependency_order();
     let order = match action {
@@ -290,68 +340,119 @@ pub fn actions(args: &ActionsArgs, out: &mut impl Write) -> Result<(), Error> {
         .try_for_each(|name| writeln!(out, "{name}").map_err(|source| Error::Output { source }))
 }
 
-/// Uploads each release program's IDL from `assets` as its canonical metadata, dependencies
-/// first. Which programs it writes to comes from the chain: those still upgradeable by the
-/// deployer with the release bytecode (`Partial`). A final one (`Live`) can no longer change its
-/// IDL, so it is reported and left alone; anything else is refused. Stops at the first failure;
-/// a rerun skips what already matches and resumes a half-written upload.
+/// Writes IDLs only for the reviewed deployment selection, after checking its hash and dependencies.
 pub fn idl(
     chain: &mut impl Chain,
-    release: &Release,
+    file: &PlanFile,
     assets: &Path,
     deployer: &Keypair,
     backoff: Duration,
     out: &mut impl Write,
 ) -> Result<(), Error> {
-    release.dependency_order().into_iter().try_for_each(|name| {
-        let address = release.programs[name].address;
-        let path = idl_path(assets, name, release.cluster);
-        let idl = read_idl(&path, name, &address)?;
-        let canonical = idl::canonical_address(&address);
-
-        match upgradeable(chain, release, assets, name, deployer)? {
-            false => {
-                let state = match idl::matches(chain.account(&canonical)?.as_ref(), &address, &idl)
-                {
-                    true => "matches the release",
-                    false => "differs from the release and can no longer change",
-                };
-                line(
-                    out,
-                    format!("{name} idl final, left as is: {canonical} {state}"),
-                )
+    file.validate()?;
+    require_policy(&file.document.release, assets)?;
+    let binaries = read_binaries(&file.document.release, assets)?;
+    file.document
+        .release
+        .cluster
+        .require_genesis(chain.genesis_hash()?)?;
+    file.dependencies.keys().try_for_each(|name| {
+        let address = file.document.release.programs[name].address;
+        let state = classify(chain, &address, &binaries[name], &deployer.pubkey())?;
+        if !chain
+            .account(&address)?
+            .is_some_and(|account| account.executable)
+            || state.data_hash != Some(classify::executable_hash(&binaries[name]))
+        {
+            return Err(plan::Error::DependencyNotDeployed {
+                program: "IDL upload".into(),
+                dependency: name.clone(),
             }
-            true => {
-                let mut printed = Ok(());
-                let outcome = idl::upload(
-                    chain,
-                    name,
-                    &address,
-                    &programdata_of(&address),
-                    deployer,
-                    &idl,
-                    backoff,
-                    &mut |step, signature| {
-                        printed = mem::replace(&mut printed, Ok(()))
-                            .and_then(|()| line(out, format!("{name} idl {step} {signature}")));
-                    },
-                );
-                printed?;
-                let outcome = match outcome? {
-                    Outcome::Unchanged => "unchanged",
-                    Outcome::Uploaded => "uploaded",
-                };
-                line(
-                    out,
-                    format!(
-                        "{name} idl {outcome}: {canonical} holds {} ({} bytes)",
-                        path.display(),
-                        idl.len()
-                    ),
-                )
-            }
+            .into());
         }
-    })
+
+        Ok::<_, Error>(())
+    })?;
+    if file.deployer != deployer.pubkey().to_string() {
+        return Err(plan::Error::Selection {
+            reason: "deployer differs from reviewed plan".into(),
+        }
+        .into());
+    }
+
+    idl_selected(
+        chain,
+        &file.document.release,
+        &file.document.selected,
+        assets,
+        deployer,
+        backoff,
+        out,
+    )
+}
+
+fn idl_selected(
+    chain: &mut impl Chain,
+    release: &Release,
+    selected: &BTreeSet<String>,
+    assets: &Path,
+    deployer: &Keypair,
+    backoff: Duration,
+    out: &mut impl Write,
+) -> Result<(), Error> {
+    release
+        .dependency_order()
+        .into_iter()
+        .filter(|name| selected.contains(*name))
+        .try_for_each(|name| {
+            let address = release.programs[name].address;
+            let path = idl_path(assets, name, release.cluster);
+            let idl = read_idl(&path, name, &address)?;
+            let canonical = idl::canonical_address(&address);
+
+            match upgradeable(chain, release, assets, name, deployer)? {
+                false => {
+                    let state =
+                        match idl::matches(chain.account(&canonical)?.as_ref(), &address, &idl) {
+                            true => "matches the release",
+                            false => "differs from the release and can no longer change",
+                        };
+                    line(
+                        out,
+                        format!("{name} idl final, left as is: {canonical} {state}"),
+                    )
+                }
+                true => {
+                    let mut printed = Ok(());
+                    let outcome = idl::upload(
+                        chain,
+                        name,
+                        &address,
+                        &programdata_of(&address),
+                        deployer,
+                        &idl,
+                        backoff,
+                        &mut |step, signature| {
+                            printed = mem::replace(&mut printed, Ok(()))
+                                .and_then(|()| line(out, format!("{name} idl {step} {signature}")));
+                        },
+                    );
+                    printed?;
+                    let outcome = match outcome? {
+                        Outcome::Unchanged => "unchanged",
+                        Outcome::Uploaded => "uploaded",
+                    };
+                    line(
+                        out,
+                        format!(
+                            "{name} idl {outcome}: {canonical} holds {} ({} bytes)",
+                            path.display(),
+                            idl.len()
+                        ),
+                    )
+                }
+            }
+        })
 }
 
 /// Closes the IDL accounts of every program the close plan closes, dependents first, returning
@@ -480,6 +581,8 @@ fn rebuild(
     deployer: &Pubkey,
 ) -> Result<(Plan, PlanHash), Error> {
     let file: PlanFile = read_json(&args.plan)?;
+    file.validate()?;
+    require_policy(&file.document.release, &args.assets)?;
     let expected: PlanHash = file.hash.parse()?;
     let binaries = read_binaries(&file.document.release, &args.assets)?;
     let live = build(chain, &file.document, &binaries, deployer, &file.programs)?;
@@ -500,24 +603,49 @@ fn build(
     deployer: &Pubkey,
     planned: &BTreeMap<String, PlannedProgramFile>,
 ) -> Result<Plan, Error> {
-    let PlanDocument { release, inputs } = document;
+    let PlanDocument {
+        release,
+        inputs,
+        selected,
+    } = document;
+    release.require_selection(selected)?;
     let states = release
         .programs
         .iter()
         .map(|(name, program)| {
             let state = classify(chain, &program.address, &binaries[name], deployer)?;
+            if !selected.contains(name)
+                && (!chain
+                    .account(&program.address)?
+                    .is_some_and(|account| account.executable)
+                    || state.data_hash != Some(classify::executable_hash(&binaries[name])))
+            {
+                let dependent = release
+                    .programs
+                    .iter()
+                    .find(|(_, program)| program.dependencies.contains(name))
+                    .map(|(name, _)| name.clone())
+                    .unwrap_or_default();
+
+                return Err(plan::Error::DependencyNotDeployed {
+                    program: dependent,
+                    dependency: name.clone(),
+                }
+                .into());
+            }
 
             Ok((name.clone(), as_planned(state, planned.get(name))))
         })
         .collect::<Result<BTreeMap<_, _>, Error>>()?;
-    let live_configs = config::read(chain, release)?;
-    let built = Plan::build(
+    let live_configs = config::read_selected(chain, release, selected)?;
+    let built = Plan::build_selected(
         release.clone(),
         chain.genesis_hash()?,
         *deployer,
         states,
         live_configs,
-        Inputs::parse(inputs.clone())?,
+        Inputs::parse_selected(inputs.clone(), selected)?,
+        selected.clone(),
     )?;
     // After `Plan::build`, so a wrong cluster is reported as that, not as a missing worker.
     layerzero::check_workers(chain, &built).map_err(plan::Error::from)?;
@@ -540,19 +668,72 @@ fn as_planned(state: ProgramState, planned: Option<&PlannedProgramFile>) -> Prog
     }
 }
 
-fn release(
+fn release_selected(
     version: &str,
     cluster: Cluster,
     program_ids: &Path,
     assets: &Path,
-) -> Result<(Release, Binaries), Error> {
+    requested: &Programs,
+    observe_all: bool,
+) -> Result<(Release, Binaries, BTreeSet<String>), Error> {
     let ids: BTreeMap<String, ProgramId> = read_json(program_ids)?;
-    let binaries = ids
-        .keys()
+    let selected = requested.resolve(&ids.keys().cloned().collect())?;
+    let policy = read_policy(assets)?;
+    if let Some(program) = policy
+        .nondeployable_programs
+        .iter()
+        .find(|name| !ids.contains_key(*name))
+    {
+        return Err(selection::Error::UnknownProgram {
+            program: program.clone(),
+        }
+        .into());
+    }
+    if let Some(program) = selected.intersection(&policy.nondeployable_programs).next() {
+        return Err(plan::Error::InheritedProgram {
+            program: program.clone(),
+        }
+        .into());
+    }
+    let mut observed = if observe_all {
+        ids.keys().cloned().collect()
+    } else {
+        selected.clone()
+    };
+    loop {
+        let dependencies = observed
+            .iter()
+            .flat_map(|name| &ids[name].dependencies)
+            .map(|dependency| {
+                if !ids.contains_key(dependency) {
+                    let program = observed
+                        .iter()
+                        .find(|name| ids[*name].dependencies.contains(dependency))
+                        .expect("an observed program names the dependency")
+                        .clone();
+
+                    return Err(Error::UnknownDependency {
+                        program,
+                        dependency: dependency.clone(),
+                    });
+                }
+
+                Ok(dependency.clone())
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let before = observed.len();
+        observed.extend(dependencies);
+        if observed.len() == before {
+            break;
+        }
+    }
+    let binaries = observed
+        .iter()
         .map(|name| Ok((name.clone(), read(&asset_path(assets, name, cluster))?)))
         .collect::<Result<Binaries, Error>>()?;
     let programs = ids
         .into_iter()
+        .filter(|(name, _)| observed.contains(name))
         .map(
             |(
                 name,
@@ -587,9 +768,26 @@ fn release(
         version: version.into(),
         cluster,
         programs,
+        nondeployable_programs: policy.nondeployable_programs,
     };
 
-    Ok((release, binaries))
+    Ok((release, binaries, selected))
+}
+
+fn read_policy(assets: &Path) -> Result<DeploymentPolicy, Error> {
+    let path = assets.join("deployment-policy.json");
+    match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|source| Error::Json { path, source }),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(DeploymentPolicy::default()),
+        Err(source) => Err(Error::Read { path, source }),
+    }
+}
+
+fn require_policy(release: &Release, assets: &Path) -> Result<(), Error> {
+    match read_policy(assets)?.nondeployable_programs == release.nondeployable_programs {
+        true => Ok(()),
+        false => Err(Error::PolicyChanged),
+    }
 }
 
 /// The binaries must be the ones the plan hashed: classification compares them to the chain.
@@ -623,10 +821,15 @@ fn idl_path(assets: &Path, program: &str, cluster: Cluster) -> PathBuf {
     assets.join(format!("{program}.{cluster}.json"))
 }
 
-fn read_idls(release: &Release, assets: &Path) -> Result<BTreeMap<String, Vec<u8>>, Error> {
+fn read_idls(
+    release: &Release,
+    assets: &Path,
+    selected: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, Vec<u8>>, Error> {
     release
         .programs
         .keys()
+        .filter(|name| selected(name))
         .map(|name| {
             Ok((
                 name.clone(),
@@ -796,6 +999,7 @@ mod tests {
             );
 
             PlanArgs {
+                programs: "all".into(),
                 version: "0.0.1".into(),
                 cluster: Cluster::Devnet,
                 program_ids: self.path("ids.json"),
@@ -846,6 +1050,13 @@ mod tests {
         /// its IDL uploaded, and verified unless named in `unverified`.
         fn tested_chain(&self, unverified: &[&str]) -> RecordingChain {
             let mut chain = full_setup(&testing::plan(5_000_000)).chain;
+            chain.accounts.insert(
+                self.deployer.pubkey(),
+                Account {
+                    lamports: DEPLOYER_LAMPORTS,
+                    ..Account::default()
+                },
+            );
             PROGRAMS.iter().for_each(|name| {
                 self.deploy(&mut chain, name);
                 let program = release_address(name);
@@ -981,11 +1192,11 @@ mod tests {
     impl Env {
         /// Runs `idl` for the release in `plan.json` against `chain` and returns what it printed.
         fn idl(&self, chain: &mut RecordingChain) -> Result<String, Error> {
-            let ActionsFile { release, .. } = read_json(&self.path("plan.json"))?;
+            let file: PlanFile = read_json(&self.path("plan.json"))?;
             let mut out = Vec::new();
             idl(
                 chain,
-                &release,
+                &file,
                 self.directory.path(),
                 &self.deployer,
                 Duration::ZERO,
@@ -1044,6 +1255,469 @@ mod tests {
                 ..Account::default()
             },
         );
+    }
+
+    fn chainer_args(env: &Env) -> PlanArgs {
+        let portal = Pubkey::new_unique();
+        let chainer = Pubkey::new_unique();
+        let mut ids: serde_json::Value = read_json(&env.path("ids.json")).unwrap();
+        ids["portal"] = serde_json::json!({"address": portal.to_string(), "dependencies": []});
+        ids["intent_chainer"] = serde_json::json!({
+            "address": chainer.to_string(), "dependencies": ["portal"]
+        });
+        write_json(&env.path("ids.json"), &ids).unwrap();
+        ["portal", "intent_chainer"].into_iter().for_each(|name| {
+            fs::write(env.path(&format!("{name}.devnet.so")), binary(name)).unwrap();
+            write_json(
+                &env.path(&format!("{name}.devnet.json")),
+                &serde_json::json!({"address": ids[name]["address"], "metadata": {"name": name}}),
+            )
+            .unwrap();
+        });
+        PROGRAMS.iter().for_each(|name| {
+            fs::remove_file(env.path(&format!("{name}.devnet.so"))).unwrap();
+            fs::remove_file(env.path(&format!("{name}.devnet.json"))).unwrap();
+        });
+        PlanArgs {
+            programs: "intent_chainer".into(),
+            inputs: InputArgs {
+                hyper_senders: "not required".into(),
+                polymer_emitters: String::new(),
+                layerzero: "not JSON".into(),
+                cctp: String::new(),
+                hyper_reserve_lamports: "not a number".into(),
+                layerzero_reserve_lamports: String::new(),
+                compute_unit_price: "0".into(),
+            },
+            ..env.plan_args()
+        }
+    }
+
+    fn install_program(
+        chain: &mut RecordingChain,
+        address: Pubkey,
+        name: &str,
+        authority: Option<Pubkey>,
+    ) {
+        let programdata = programdata_of(&address);
+        chain.accounts.insert(
+            address,
+            Account {
+                owner: solana_sdk_ids::bpf_loader_upgradeable::id(),
+                executable: true,
+                data: bincode::serialize(&UpgradeableLoaderState::Program {
+                    programdata_address: programdata,
+                })
+                .unwrap(),
+                ..Account::default()
+            },
+        );
+        let mut data = bincode::serialize(&UpgradeableLoaderState::ProgramData {
+            slot: 1,
+            upgrade_authority_address: authority,
+        })
+        .unwrap();
+        data.resize(UpgradeableLoaderState::size_of_programdata_metadata(), 0);
+        data.extend(binary(name));
+        chain.accounts.insert(
+            programdata,
+            Account {
+                owner: solana_sdk_ids::bpf_loader_upgradeable::id(),
+                data,
+                ..Account::default()
+            },
+        );
+    }
+
+    #[test]
+    fn selected_chainer_leaves_inherited_programs_and_configs_untouched() {
+        let env = Env::new();
+        let args = chainer_args(&env);
+        let ids: BTreeMap<String, ProgramId> = read_json(&args.program_ids).unwrap();
+        let portal = ids["portal"].address.parse().unwrap();
+        let chainer = ids["intent_chainer"].address.parse().unwrap();
+        let mut chain = env.chain();
+        install_program(&mut chain, portal, "portal", Some(Pubkey::new_unique()));
+        install_program(
+            &mut chain,
+            release_address(LOCAL_PROVER),
+            LOCAL_PROVER,
+            None,
+        );
+        chain
+            .accounts
+            .insert(release_address(HYPER_PROVER), Account::default());
+        plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).unwrap();
+        let file: PlanFile = read_json(&args.out).unwrap();
+        assert_eq!(
+            file.document.selected,
+            BTreeSet::from(["intent_chainer".into()])
+        );
+        assert_eq!(
+            file.programs.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["intent_chainer"]
+        );
+        assert_eq!(
+            file.programs["intent_chainer"].actions,
+            [Action::Deploy, Action::Verify]
+        );
+        let mut output = Vec::new();
+        actions(
+            &ActionsArgs {
+                plan: args.out.clone(),
+                action: ActionKind::Deploy,
+            },
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, b"intent_chainer\n");
+        output.clear();
+        actions(
+            &ActionsArgs {
+                plan: args.out.clone(),
+                action: ActionKind::Verify,
+            },
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, b"intent_chainer\n");
+        install_program(
+            &mut chain,
+            chainer,
+            "intent_chainer",
+            Some(env.deployer.pubkey()),
+        );
+        let inherited = chain.accounts.clone();
+        apply(
+            &mut chain,
+            &env.apply_args(),
+            &env.deployer,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(chain.accounts, inherited);
+        let metadata = read(&env.path("intent_chainer.devnet.json")).unwrap();
+        chain.accounts.insert(
+            idl::canonical_address(&chainer),
+            idl::uploaded_account(&chainer, &metadata),
+        );
+        let mut output = Vec::new();
+        idl(
+            &mut chain,
+            &file,
+            &args.assets,
+            &env.deployer,
+            Duration::ZERO,
+            &mut output,
+        )
+        .unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("intent_chainer idl unchanged"), "{output}");
+        assert!(!output.contains("portal"), "{output}");
+        assert!(chain.sent.is_empty());
+        assert!(chain
+            .accounts
+            .contains_key(&idl::canonical_address(&chainer)));
+        assert!(!chain
+            .accounts
+            .contains_key(&idl::canonical_address(&portal)));
+    }
+
+    #[test]
+    fn selected_chainer_refuses_missing_dependency_and_invalid_selection() {
+        let env = Env::new();
+        let mut args = chainer_args(&env);
+        let chain = env.chain();
+        let error = plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).unwrap_err();
+        assert!(error.to_string().contains("dependency portal"), "{error}");
+        assert!(chain.sent.is_empty());
+        args.programs = "unknown".into();
+        assert!(plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new())
+            .unwrap_err()
+            .to_string()
+            .contains("not a program"));
+        args.programs = "intent_chainer,intent_chainer".into();
+        assert!(plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).is_err());
+        args.programs = "intent_chainer,".into();
+        assert!(plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).is_err());
+    }
+
+    #[test]
+    fn selected_plan_scope_and_hash_tampering_refuse_before_writes() {
+        let env = Env::new();
+        let args = chainer_args(&env);
+        let ids: BTreeMap<String, ProgramId> = read_json(&args.program_ids).unwrap();
+        let mut chain = env.chain();
+        install_program(
+            &mut chain,
+            ids["portal"].address.parse().unwrap(),
+            "portal",
+            None,
+        );
+        plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).unwrap();
+        let original: PlanFile = read_json(&args.out).unwrap();
+        let mut file = original.clone();
+        file.document.selected.insert(LOCAL_PROVER.into());
+        write_json(&args.out, &file).unwrap();
+        assert!(apply(
+            &mut chain,
+            &env.apply_args(),
+            &env.deployer,
+            &mut Vec::new()
+        )
+        .is_err());
+        assert!(actions(
+            &ActionsArgs {
+                plan: args.out.clone(),
+                action: ActionKind::Deploy
+            },
+            &mut Vec::new()
+        )
+        .is_err());
+        assert!(idl(
+            &mut chain,
+            &file,
+            &args.assets,
+            &env.deployer,
+            Duration::ZERO,
+            &mut Vec::new()
+        )
+        .is_err());
+        file = original.clone();
+        file.document.selected.insert("portal".into());
+        let mut portal = file.dependencies.remove("portal").unwrap();
+        portal.actions = vec![Action::Deploy, Action::Verify];
+        file.programs.insert("portal".into(), portal);
+        write_json(&args.out, &file).unwrap();
+        assert!(actions(
+            &ActionsArgs {
+                plan: args.out.clone(),
+                action: ActionKind::Deploy
+            },
+            &mut Vec::new()
+        )
+        .is_err());
+        assert!(idl(
+            &mut chain,
+            &file,
+            &args.assets,
+            &env.deployer,
+            Duration::ZERO,
+            &mut Vec::new()
+        )
+        .is_err());
+        let mut disguised = serde_json::to_value(&file).unwrap();
+        disguised["operation"] = serde_json::json!("close");
+        write_json(&args.out, &disguised).unwrap();
+        assert!(actions(
+            &ActionsArgs {
+                plan: args.out.clone(),
+                action: ActionKind::Deploy
+            },
+            &mut Vec::new()
+        )
+        .is_err());
+        file = original;
+        file.hash = "00".repeat(32);
+        assert!(idl(
+            &mut chain,
+            &file,
+            &args.assets,
+            &env.deployer,
+            Duration::ZERO,
+            &mut Vec::new()
+        )
+        .is_err());
+        write_json(&args.out, &file).unwrap();
+        assert!(apply(
+            &mut chain,
+            &env.apply_args(),
+            &env.deployer,
+            &mut Vec::new()
+        )
+        .is_err());
+        assert!(chain.sent.is_empty());
+    }
+
+    #[test]
+    fn inherited_selection_refuses_before_inputs_or_assets_are_required() {
+        let env = Env::new();
+        let mut args = chainer_args(&env);
+        write_json(
+            &env.path("deployment-policy.json"),
+            &serde_json::json!({
+                "nondeployable_programs": [LOCAL_PROVER, "portal"]
+            }),
+        )
+        .unwrap();
+        args.programs = LOCAL_PROVER.into();
+        let error = plan(&env.chain(), &args, &env.deployer.pubkey(), &mut Vec::new()).unwrap_err();
+        assert!(
+            matches!(error, Error::Plan(plan::Error::InheritedProgram { program }) if program == LOCAL_PROVER)
+        );
+        assert!(!args.out.exists());
+    }
+
+    #[test]
+    fn selected_plan_discloses_dependency_authority_and_inherited_policy() {
+        let env = Env::new();
+        let args = chainer_args(&env);
+        let ids: BTreeMap<String, ProgramId> = read_json(&args.program_ids).unwrap();
+        let portal = ids["portal"].address.parse().unwrap();
+        let authority = Pubkey::new_unique();
+        let mut chain = env.chain();
+        install_program(&mut chain, portal, "portal", Some(authority));
+        write_json(
+            &env.path("deployment-policy.json"),
+            &serde_json::json!({
+                "nondeployable_programs": ["portal", LOCAL_PROVER]
+            }),
+        )
+        .unwrap();
+        plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).unwrap();
+        let summary = fs::read_to_string(env.path("summary.md")).unwrap();
+        assert!(summary.contains("### Read-only dependencies"), "{summary}");
+        assert!(
+            summary.contains(&format!(
+                "| portal | `{portal}` | `{authority}` | foreign | read-only |"
+            )),
+            "{summary}"
+        );
+        assert!(
+            summary.contains(
+                "Inherited programs (no deploy, finalize, or close): local_prover, portal."
+            ),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_plans_refuse_inherited_names_and_all_before_loading_assets() {
+        let env = Env::new();
+        chainer_args(&env);
+        write_json(
+            &env.path("deployment-policy.json"),
+            &serde_json::json!({
+                "nondeployable_programs": [LOCAL_PROVER, "portal"]
+            }),
+        )
+        .unwrap();
+        [Operation::Finalize, Operation::Close]
+            .into_iter()
+            .for_each(|operation| {
+                ["all", LOCAL_PROVER, "portal"]
+                    .into_iter()
+                    .for_each(|programs| {
+                        let chain = env.chain();
+                        let error = env.plan_selection(&chain, operation, programs).unwrap_err();
+                        assert!(
+                            matches!(error, Error::Plan(plan::Error::InheritedProgram { .. })),
+                            "{error}"
+                        );
+                        assert!(chain.sent.is_empty());
+                        assert!(!env.path("plan.json").exists());
+                    });
+            });
+    }
+
+    #[test]
+    fn new_chainer_can_finalize_against_inherited_final_portal() {
+        let env = Env::new();
+        let args = chainer_args(&env);
+        let mut ids: BTreeMap<String, ProgramId> = read_json(&args.program_ids).unwrap();
+        ids.retain(|name, _| name == "portal" || name == "intent_chainer");
+        let manifest: BTreeMap<_, _> = ids.iter().map(|(name, program)| {
+            (name.clone(), serde_json::json!({"address": program.address, "dependencies": program.dependencies}))
+        }).collect();
+        write_json(&args.program_ids, &manifest).unwrap();
+        write_json(
+            &env.path("deployment-policy.json"),
+            &serde_json::json!({
+                "nondeployable_programs": ["portal"]
+            }),
+        )
+        .unwrap();
+        let portal = ids["portal"].address.parse().unwrap();
+        let chainer = ids["intent_chainer"].address.parse().unwrap();
+        let mut chain = env.chain();
+        install_program(&mut chain, portal, "portal", None);
+        install_program(
+            &mut chain,
+            chainer,
+            "intent_chainer",
+            Some(env.deployer.pubkey()),
+        );
+        chain.accounts.insert(
+            selection::verification_record(&env.deployer.pubkey(), &chainer),
+            Account {
+                owner: VERIFY_PROGRAM_ID,
+                ..Account::default()
+            },
+        );
+        let metadata = read(&env.path("intent_chainer.devnet.json")).unwrap();
+        chain.accounts.insert(
+            idl::canonical_address(&chainer),
+            idl::uploaded_account(&chainer, &metadata),
+        );
+        env.plan_selection(&chain, Operation::Finalize, "intent_chainer")
+            .unwrap();
+        assert_eq!(env.actions(ActionKind::Finalize), ["intent_chainer"]);
+        assert!(chain.sent.is_empty());
+    }
+
+    #[test]
+    fn selected_initialized_immutable_hyper_still_tops_up_its_reserve() {
+        let env = Env::new();
+        let args = PlanArgs {
+            programs: HYPER_PROVER.into(),
+            ..env.plan_args()
+        };
+        let mut chain = env.chain();
+        install_program(
+            &mut chain,
+            release_address(HYPER_PROVER),
+            HYPER_PROVER,
+            None,
+        );
+        install_hyper_config(&mut chain);
+        plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).unwrap();
+        let file: PlanFile = read_json(&args.out).unwrap();
+        assert!(file.programs[HYPER_PROVER].actions.is_empty());
+        apply(
+            &mut chain,
+            &env.apply_args(),
+            &env.deployer,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let reserve = Pubkey::find_program_address(
+            &[hyper_prover::state::PDA_PAYER_SEED],
+            &release_address(HYPER_PROVER),
+        )
+        .0;
+        assert_eq!(
+            chain.sent,
+            [solana_system_interface::instruction::transfer(
+                &env.deployer.pubkey(),
+                &reserve,
+                1_000_000,
+            )]
+        );
+    }
+
+    #[test]
+    fn dependency_mismatch_and_nonexecutable_dependency_refuse_before_writes() {
+        let env = Env::new();
+        let args = chainer_args(&env);
+        let ids: BTreeMap<String, ProgramId> = read_json(&args.program_ids).unwrap();
+        let portal = ids["portal"].address.parse().unwrap();
+        let mut chain = env.chain();
+        install_program(&mut chain, portal, "different", None);
+        assert!(plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).is_err());
+        install_program(&mut chain, portal, "portal", None);
+        chain.accounts.get_mut(&portal).unwrap().executable = false;
+        assert!(plan(&chain, &args, &env.deployer.pubkey(), &mut Vec::new()).is_err());
+        assert!(chain.sent.is_empty());
     }
 
     #[test]
@@ -1412,7 +2086,7 @@ mod tests {
     fn idl_sends_nothing_when_every_canonical_idl_already_matches() {
         let env = Env::new();
         let mut chain = env.tested_chain(&[]);
-        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        env.plan(&chain);
 
         let printed = env.idl(&mut chain).unwrap();
 
@@ -1444,7 +2118,7 @@ mod tests {
     fn idl_reports_a_final_program_and_leaves_it_alone() {
         let env = Env::new();
         let mut chain = env.tested_chain(&[]);
-        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        env.plan(&chain);
         env.deploy_as(&mut chain, HYPER_PROVER, &binary(HYPER_PROVER), None);
         chain
             .accounts
@@ -1464,7 +2138,7 @@ mod tests {
     fn idl_refuses_another_authority_and_an_idl_for_another_address() {
         let env = Env::new();
         let mut chain = env.tested_chain(&[]);
-        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        env.plan(&chain);
         let other = Pubkey::new_unique();
         env.deploy_as(&mut chain, HYPER_PROVER, &binary(HYPER_PROVER), Some(other));
 
@@ -1494,7 +2168,7 @@ mod tests {
     fn idl_refuses_a_program_with_other_bytecode() {
         let env = Env::new();
         let mut chain = env.tested_chain(&[]);
-        env.plan_selection(&chain, Operation::Close, "all").unwrap();
+        env.plan(&chain);
         env.deploy_as(
             &mut chain,
             HYPER_PROVER,

@@ -338,6 +338,82 @@ test("release prints only the manifest that deploy turns into private keypair fi
   rmSync(directory, { recursive: true });
 });
 
+test("deploy derives only selected programs without deriving dependency keys or changing the manifest", () => {
+  const directory = temporary();
+  const manifestPath = join(directory, "program-ids.json");
+  const keys = join(directory, "keys");
+  const manifest = JSON.stringify({
+    portal: { address: "unavailable-old-secret", seed: "not-derived" },
+    intent_chainer: {
+      address: derive(secret(), "intent_chainer", SEED).address,
+      seed: SEED,
+      dependencies: ["portal"],
+    },
+  });
+  writeFileSync(manifestPath, manifest);
+  writeFileSync(join(directory, "deployment-policy.json"), JSON.stringify({ nondeployable_programs: ["portal"] }));
+  const result = run(["deploy", manifestPath, keys, "intent_chainer"], { PROGRAM_KEYPAIR_SECRET: SECRET_HEX });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(readdirSync(keys), ["intent_chainer-keypair.json"]);
+  assert.equal(readFileSync(manifestPath, "utf8"), manifest);
+  assert.deepEqual(
+    Buffer.from(JSON.parse(readFileSync(join(keys, "intent_chainer-keypair.json"), "utf8"))),
+    derive(secret(), "intent_chainer", SEED).bytes,
+  );
+  rmSync(directory, { recursive: true });
+});
+
+test("deploy refuses unknown, duplicate, empty and inherited selections before writing keys", () => {
+  const directory = temporary();
+  const manifestPath = join(directory, "program-ids.json");
+  const keys = join(directory, "keys");
+  writeFileSync(manifestPath, JSON.stringify({ portal: { address: "old-address", seed: SEED } }));
+  writeFileSync(join(directory, "deployment-policy.json"), JSON.stringify({ nondeployable_programs: ["portal"] }));
+  [
+    [[], /not deployable/],
+    [["all"], /not deployable/],
+    [["portal"], /not deployable/],
+    [["unknown"], /unknown program/],
+    [["portal,portal"], /duplicate program/],
+    [[""], /empty program selection/],
+    [["portal,"], /empty program selection/],
+    [["all,portal"], /unknown program/],
+    [["portal", "extra"], /usage:/],
+  ].forEach(([selection, message]) => {
+    const result = run(["deploy", manifestPath, keys, ...selection], { PROGRAM_KEYPAIR_SECRET: SECRET_HEX });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, message);
+    assert.doesNotMatch(result.stderr, /wrong secret/);
+    assert.throws(() => statSync(keys));
+  });
+  rmSync(directory, { recursive: true });
+});
+
+test("deploy accepts explicit all for legacy manifests and rejects malformed policy", () => {
+  const directory = temporary();
+  const manifestPath = join(directory, "program-ids.json");
+  const keys = join(directory, "keys");
+  writeFileSync(manifestPath, JSON.stringify({ portal: { address: PORTAL_ADDRESS, seed: SEED } }));
+  const deployed = run(["deploy", manifestPath, keys, "all"], { PROGRAM_KEYPAIR_SECRET: SECRET_HEX });
+  assert.equal(deployed.status, 0, deployed.stderr);
+  rmSync(keys, { recursive: true });
+  [
+    null,
+    {},
+    { nondeployable_programs: "portal" },
+    { nondeployable_programs: ["unknown"] },
+    { nondeployable_programs: ["portal", "portal"] },
+  ].forEach((policy) => {
+    writeFileSync(join(directory, "deployment-policy.json"), JSON.stringify(policy));
+    const result = run(["deploy", manifestPath, keys], { PROGRAM_KEYPAIR_SECRET: SECRET_HEX });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /deployment policy/);
+    assert.throws(() => statSync(keys));
+  });
+  rmSync(directory, { recursive: true });
+});
+
 test("deploy rejects a manifest the secret does not reproduce", () => {
   const directory = temporary();
   const manifest = join(directory, "program-ids.json");

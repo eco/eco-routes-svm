@@ -17,10 +17,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Classify the release against the chain, write `plan.json` and print `plan_hash=<hex>`.
+    /// Classify selected programs and their read-only dependencies, write `plan.json` and print `plan_hash=<hex>`.
     Plan(Box<PlanArgs>),
     /// Rebuild the plan from the chain, refuse unless its hash is the one in `plan.json`, then
-    /// run the init steps and read them back.
+    /// run only the selected programs' init steps and read them back.
     Apply(ApplyArgs),
     /// Plan making the selected upgradeable programs immutable; writes `plan.json` and prints
     /// `plan_hash=<hex>`. Refuses a program before its dependencies, one not initialized or
@@ -34,8 +34,8 @@ pub enum Command {
     /// Print the programs `plan.json` assigns to an action, one per line, each after the
     /// programs it depends on (before them for `close`).
     Actions(ActionsArgs),
-    /// Upload each upgradeable release program's `<program>.<cluster>.json` as its canonical
-    /// IDL, resuming a half-written one, and read it back; leaves final programs as they are.
+    /// Upload the deployment plan's selected `<program>.<cluster>.json` IDLs, resuming partial
+    /// writes, and read them back; leaves final programs and unselected programs unchanged.
     Idl(IdlArgs),
     /// Close the canonical IDL and scratch buffer of every program a close plan closes,
     /// returning their rent; run before the programs themselves are closed.
@@ -67,17 +67,17 @@ pub struct ChainArgs {
 
 #[derive(Debug, Args)]
 pub struct InputArgs {
-    #[arg(long, env = "HYPER_SENDERS")]
+    #[arg(long, env = "HYPER_SENDERS", default_value = "")]
     pub hyper_senders: String,
-    #[arg(long, env = "POLYMER_EMITTERS")]
+    #[arg(long, env = "POLYMER_EMITTERS", default_value = "")]
     pub polymer_emitters: String,
-    #[arg(long, env = "LAYERZERO")]
+    #[arg(long, env = "LAYERZERO", default_value = "")]
     pub layerzero: String,
-    #[arg(long, env = "CCTP")]
+    #[arg(long, env = "CCTP", default_value = "")]
     pub cctp: String,
-    #[arg(long, env = "HYPER_RESERVE_LAMPORTS")]
+    #[arg(long, env = "HYPER_RESERVE_LAMPORTS", default_value = "")]
     pub hyper_reserve_lamports: String,
-    #[arg(long, env = "LAYERZERO_RESERVE_LAMPORTS")]
+    #[arg(long, env = "LAYERZERO_RESERVE_LAMPORTS", default_value = "")]
     pub layerzero_reserve_lamports: String,
     /// Micro-lamports per compute unit for the run's deploys and `apply`; part of the plan hash.
     #[arg(long, env = "COMPUTE_UNIT_PRICE", default_value = "0")]
@@ -101,6 +101,9 @@ pub struct PlanArgs {
     /// File the plan summary is appended to (`$GITHUB_STEP_SUMMARY`).
     #[arg(long)]
     pub summary: Option<PathBuf>,
+    /// Programs to deploy; dependencies are checked read-only, never added to this selection.
+    #[arg(long, env = "PROGRAMS", default_value = "all")]
+    pub programs: String,
     #[command(flatten)]
     pub chain: ReadArgs,
     #[command(flatten)]
@@ -227,6 +230,28 @@ mod tests {
 
     fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
         Cli::try_parse_from(["deployer"].into_iter().chain(arguments.iter().copied()))
+    }
+
+    #[test]
+    fn selected_chainer_needs_no_unrelated_input_flags() {
+        let arguments = [
+            &["plan", "--version", "3.1.0", "--cluster", "mainnet"][..],
+            &[
+                "--program-ids",
+                "ids.json",
+                "--assets",
+                "assets",
+                "--out",
+                "plan.json",
+            ],
+            &["--programs", "intent_chainer"],
+            &READ,
+        ]
+        .concat();
+        let Command::Plan(plan) = parse(&arguments).unwrap().command else {
+            panic!("expected the plan command");
+        };
+        assert_eq!(plan.programs, "intent_chainer");
     }
 
     #[test]

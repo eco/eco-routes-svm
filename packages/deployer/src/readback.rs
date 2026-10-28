@@ -27,9 +27,11 @@ pub fn readback(chain: &impl Chain, plan: &Plan) -> Result<Configs, Error> {
         expected_configs,
         ..
     } = plan;
-    let live: Configs = config::read(chain, release)?;
+    let live: Configs = config::read_selected(chain, release, &plan.selected)?;
     live.deviation(expected_configs)?;
-    setup::check(&live)?;
+    if plan.selected.contains(crate::plan::LAYERZERO_PROVER) {
+        setup::check(&live)?;
+    }
     live.paths_conflict(expected_configs)?;
 
     Ok(live)

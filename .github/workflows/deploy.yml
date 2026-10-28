@@ -16,6 +16,10 @@ on:
         type: choice
         options: [devnet, mainnet]
         required: true
+      programs:
+        description: "all or comma-separated program lib names; inherited nondeployable programs are refused"
+        type: string
+        default: "all"
       hyper_senders:
         description: "Comma-separated EVM addresses (20-byte hex) allowed to send via hyper_prover"
         type: string
@@ -66,8 +70,10 @@ env:
   SOLANA_VERIFY_VERSION: "0.5.2"
   VERSION: ${{ inputs.version }}
   CLUSTER: ${{ inputs.cluster }}
+  PROGRAMS: ${{ inputs.programs }}
   ASSETS: release
   PLAN: out/plan.json
+  BUFFER_DIR: target/program-buffers-${{ github.run_id }}-${{ github.run_attempt }}
   HYPER_SENDERS: ${{ inputs.hyper_senders }}
   POLYMER_EMITTERS: ${{ inputs.polymer_emitters }}
   LAYERZERO: ${{ inputs.layerzero }}
@@ -91,6 +97,9 @@ jobs:
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "invalid version" >&2; exit 1; }
           # At most 19 digits always fits the deployer's u64.
           [[ "$COMPUTE_UNIT_PRICE" =~ ^[0-9]{1,19}$ ]] || { echo "compute_unit_price must be a non-negative integer" >&2; exit 1; }
+          [[ "$PROGRAMS" = all || "$PROGRAMS" =~ ^[a-z0-9_]+(,[a-z0-9_]+)*$ ]] \
+            && [[ ",$PROGRAMS," != *,all,* || "$PROGRAMS" = all ]] \
+            || { echo "programs must be all or comma-separated program lib names" >&2; exit 1; }
 
       - name: Checkout deploy tag
         uses: actions/checkout@v7
@@ -112,7 +121,7 @@ jobs:
         run: |
           mkdir -p out
           deployer plan --version "$VERSION" --cluster "$CLUSTER" \
-            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" \
+            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" --programs "$PROGRAMS" \
             --summary "$GITHUB_STEP_SUMMARY" 2>&1 \
             | scripts/deploy-step.sh redact | tee out/plan.log
           scripts/deploy-step.sh hash out/plan.log
@@ -151,14 +160,16 @@ jobs:
         run: |
           mkdir -p out
           deployer plan --version "$VERSION" --cluster "$CLUSTER" \
-            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" 2>&1 \
+            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" --programs "$PROGRAMS" 2>&1 \
             | scripts/deploy-step.sh redact | tee out/plan.log
           scripts/deploy-step.sh gate out/plan.log
 
       - name: Derive program keypairs
         env:
           PROGRAM_KEYPAIR_SECRET: ${{ secrets.PROGRAM_KEYPAIR_SECRET }}
-        run: node scripts/program-keypairs.mjs deploy "$ASSETS/program-ids.json" target/keys
+        run: |
+          selected=$(jq -er '.selected | join(",")' "$PLAN")
+          node scripts/program-keypairs.mjs deploy "$ASSETS/program-ids.json" target/keys "$selected"
 
       - name: Deploy new programs
         env:
@@ -193,7 +204,7 @@ jobs:
 
       - name: Delete keys
         if: always()
-        run: rm -rf target/keys "$RUNNER_TEMP/deployer.json"
+        run: rm -rf target/keys "$BUFFER_DIR" "$RUNNER_TEMP/deployer.json"
 
       - name: Upload deploy record
         if: always()

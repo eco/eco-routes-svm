@@ -57,7 +57,8 @@ runs:
         GH_REPO: ${{ github.repository }}
       run: |
         gh release download "v${VERSION}" --dir "$ASSETS" \
-          --pattern program-ids.json --pattern "*.${CLUSTER}.so" --pattern "*.${CLUSTER}.json"
+          --pattern program-ids.json --pattern deployment-policy.json \
+          --pattern "*.${CLUSTER}.so" --pattern "*.${CLUSTER}.json"
 
     - name: Check release
       shell: bash

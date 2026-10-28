@@ -39,6 +39,8 @@ pub enum Error {
     EmptySelection,
     #[error("{program} is not a program of this release")]
     UnknownProgram { program: String },
+    #[error("duplicate selected program {program}")]
+    DuplicateProgram { program: String },
     #[error("no on-chain state for {program}")]
     MissingState { program: String },
     #[error("{program} is not ours: {reason}")]
@@ -186,7 +188,8 @@ pub fn observe(
     })
     .collect::<Result<_, Error>>()?;
 
-    let live_configs = config::read(chain, release)?;
+    let live_configs =
+        config::read_selected(chain, release, &release.programs.keys().cloned().collect())?;
     let layerzero_worker_fault =
         match layerzero::check_live_workers(chain, &live_configs.layerzero_paths) {
             Ok(()) => None,
@@ -233,6 +236,8 @@ impl Selection {
         } = observed;
         release.cluster.require_genesis(genesis_hash)?;
         reject_unknown(selected, &release)?;
+        release
+            .require_selection(&selected.resolve(&release.programs.keys().cloned().collect())?)?;
         let states = release
             .programs
             .keys()
@@ -386,6 +391,7 @@ impl Selection {
             cluster: release.cluster,
             genesis_hash: genesis_hash.to_string(),
             deployer: deployer.to_string(),
+            nondeployable_programs: &release.nondeployable_programs,
             programs: programs
                 .iter()
                 .map(|(name, program)| {
@@ -557,6 +563,23 @@ impl fmt::Display for Operation {
     }
 }
 
+impl Programs {
+    pub fn resolve(&self, names: &BTreeSet<String>) -> Result<BTreeSet<String>, Error> {
+        match self {
+            Self::All => Ok(names.clone()),
+            Self::Named(selected) => {
+                if let Some(program) = selected.iter().find(|name| !names.contains(*name)) {
+                    return Err(Error::UnknownProgram {
+                        program: program.clone(),
+                    });
+                }
+
+                Ok(selected.clone())
+            }
+        }
+    }
+}
+
 impl FromStr for Programs {
     type Err = Error;
 
@@ -564,12 +587,22 @@ impl FromStr for Programs {
         if value.trim() == ALL {
             return Ok(Self::All);
         }
-        let named: BTreeSet<String> = value
-            .split(',')
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(Into::into)
-            .collect();
+        let named =
+            value
+                .split(',')
+                .map(str::trim)
+                .try_fold(BTreeSet::new(), |mut named, name| {
+                    if name.is_empty() {
+                        return Err(Error::EmptySelection);
+                    }
+                    if !named.insert(name.to_owned()) {
+                        return Err(Error::DuplicateProgram {
+                            program: name.into(),
+                        });
+                    }
+
+                    Ok(named)
+                })?;
 
         match named.is_empty() {
             true => Err(Error::EmptySelection),
@@ -585,6 +618,8 @@ struct CanonicalSelection<'a> {
     cluster: Cluster,
     genesis_hash: String,
     deployer: String,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    nondeployable_programs: &'a BTreeSet<String>,
     programs: BTreeMap<&'a str, CanonicalProgram>,
     live_configs: BTreeMap<&'static str, Option<Vec<String>>>,
     live_layerzero_alt: Option<String>,
@@ -680,12 +715,16 @@ mod tests {
                 .unwrap(),
             Programs::Named([HYPER_PROVER.into(), POLYMER_PROVER.into()].into())
         );
-        ["", " , "].iter().for_each(|value| {
+        ["", " , ", "hyper_prover,"].iter().for_each(|value| {
             assert!(matches!(
                 value.parse::<Programs>(),
                 Err(Error::EmptySelection)
             ));
         });
+        assert!(matches!(
+            "hyper_prover,hyper_prover".parse::<Programs>(),
+            Err(Error::DuplicateProgram { .. })
+        ));
     }
 
     #[test]

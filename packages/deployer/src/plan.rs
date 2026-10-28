@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -35,6 +35,8 @@ pub const PROGRAMS_WITH_INIT: [&str; 5] = [
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    Inputs(#[from] crate::inputs::Error),
     #[error("the RPC serves the ledger with genesis hash {actual}, not {cluster} ({expected})")]
     ClusterMismatch {
         cluster: Cluster,
@@ -67,6 +69,12 @@ pub enum Error {
     InvalidPlanHash { value: String },
     #[error("{LAYERZERO_PROVER} is released at {release} but this deployer was built for {compiled}; build it from the release's deploy tag")]
     BuiltForAnotherRelease { release: Pubkey, compiled: Pubkey },
+    #[error("invalid deployment selection: {reason}")]
+    Selection { reason: String },
+    #[error("{program}: dependency {dependency} is not a deployed release binary")]
+    DependencyNotDeployed { program: String, dependency: String },
+    #[error("{program} is inherited and read-only in this release")]
+    InheritedProgram { program: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +89,8 @@ pub enum Cluster {
 pub struct PlanDocument {
     pub release: Release,
     pub inputs: RawInputs,
+    /// The write scope; dependencies stay outside this set even when observed by the plan.
+    pub selected: BTreeSet<String>,
 }
 
 /// What `deployer plan` writes: the document `apply` rebuilds from, plus the plan it produced.
@@ -93,6 +103,11 @@ pub struct PlanFile {
     pub hash: String,
     pub programs: BTreeMap<String, PlannedProgramFile>,
     pub live_configs: BTreeMap<String, Option<Vec<String>>>,
+    pub deployer: String,
+    /// Observed dependency programs, with no deploy, init, verify, or IDL actions.
+    pub dependencies: BTreeMap<String, PlannedProgramFile>,
+    pub live_layerzero_alt: Option<String>,
+    pub live_layerzero_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +123,9 @@ pub struct Release {
     pub version: String,
     pub cluster: Cluster,
     pub programs: BTreeMap<String, ReleaseProgram>,
+    /// Entries inherited from another release, read from `deployment-policy.json`.
+    #[serde(default)]
+    pub nondeployable_programs: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +174,8 @@ pub struct Plan {
     /// Pays for the run and is every new program's upgrade authority until finalize.
     pub deployer: Pubkey,
     pub programs: BTreeMap<String, PlannedProgram>,
+    pub selected: BTreeSet<String>,
+    pub dependencies: BTreeMap<String, PlannedProgram>,
     pub inputs: Inputs,
     /// Prover configs as found on chain at planning time; part of the plan hash.
     pub live_configs: Configs,
@@ -171,21 +191,89 @@ impl Plan {
         release: Release,
         genesis_hash: Hash,
         deployer: Pubkey,
-        mut states: BTreeMap<String, ProgramState>,
+        states: BTreeMap<String, ProgramState>,
         live_configs: Configs,
         inputs: Inputs,
     ) -> Result<Self, Error> {
+        let selected = release.programs.keys().cloned().collect();
+
+        Self::build_selected(
+            release,
+            genesis_hash,
+            deployer,
+            states,
+            live_configs,
+            inputs,
+            selected,
+        )
+    }
+
+    pub fn build_selected(
+        release: Release,
+        genesis_hash: Hash,
+        deployer: Pubkey,
+        mut states: BTreeMap<String, ProgramState>,
+        live_configs: Configs,
+        inputs: Inputs,
+        selected: BTreeSet<String>,
+    ) -> Result<Self, Error> {
+        release.require_selection(&selected)?;
         release.cluster.require_genesis(genesis_hash)?;
-        require_compiled_layerzero(&release)?;
-        let expected_configs = expected_configs(&release, &inputs)?;
-        layerzero::check_transaction_sizes(
-            &release.programs[LAYERZERO_PROVER].address,
-            &inputs.layerzero_peers,
-        )?;
-        cctp::check_transaction_size(&release.programs[CCTP_PROVER].address, &inputs.cctp_peers)?;
+        if selected.contains(LAYERZERO_PROVER) {
+            require_compiled_layerzero(&release)?;
+            layerzero::check_transaction_sizes(
+                &release.programs[LAYERZERO_PROVER].address,
+                &inputs.layerzero_peers,
+            )?;
+        }
+        if selected.contains(CCTP_PROVER) {
+            cctp::check_transaction_size(
+                &release.programs[CCTP_PROVER].address,
+                &inputs.cctp_peers,
+            )?;
+        }
+        let expected_configs = expected_configs(&release, &inputs, &selected)?;
+        let dependencies = release
+            .programs
+            .iter()
+            .filter(|(name, _)| !selected.contains(*name))
+            .map(|(name, program)| {
+                let state = states.remove(name).ok_or_else(|| Error::MissingState {
+                    program: name.clone(),
+                })?;
+                let compatible = match &state.status {
+                    Status::Live | Status::Partial => true,
+                    // Only this classifier reason means matching code; release SHA includes padding.
+                    Status::Foreign { reason } => reason.starts_with("authority "),
+                    _ => false,
+                };
+                if !compatible || state.address != program.address {
+                    let dependent = release
+                        .programs
+                        .iter()
+                        .find(|(_, released)| released.dependencies.contains(name))
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_default();
+
+                    return Err(Error::DependencyNotDeployed {
+                        program: dependent,
+                        dependency: name.clone(),
+                    });
+                }
+
+                Ok((
+                    name.clone(),
+                    PlannedProgram {
+                        state,
+                        actions: Vec::new(),
+                    },
+                ))
+            })
+            .collect::<Result<_, Error>>()?;
         let programs = release
             .programs
             .iter()
+            .filter(|(name, _)| selected.contains(*name))
             .map(|(name, program)| {
                 let state = states.remove(name).ok_or_else(|| Error::MissingState {
                     program: name.clone(),
@@ -209,6 +297,8 @@ impl Plan {
             genesis_hash,
             deployer,
             programs,
+            selected,
+            dependencies,
             inputs,
             live_configs,
             expected_configs,
@@ -252,10 +342,24 @@ impl Plan {
             document: PlanDocument {
                 release: self.release.clone(),
                 inputs: raw,
+                selected: self.selected.clone(),
             },
             genesis_hash: self.genesis_hash.to_string(),
             hash: self.hash().to_string(),
             programs,
+            deployer: self.deployer.to_string(),
+            dependencies: self
+                .dependencies
+                .iter()
+                .map(|(name, program)| (name.clone(), program.into()))
+                .collect(),
+            live_layerzero_alt: self.live_configs.layerzero_alt.as_ref().map(Alt::describe),
+            live_layerzero_paths: self
+                .live_configs
+                .layerzero_paths
+                .iter()
+                .map(Path::describe)
+                .collect(),
             live_configs: self
                 .live_configs
                 .entries()
@@ -288,9 +392,28 @@ impl Plan {
                     )
             },
         );
+        let dependencies = self.dependencies.iter().fold(String::new(), |table, (name, program)| {
+            let table = if table.is_empty() {
+                "### Read-only dependencies\n\n| Program | Address | Authority | Status | Actions |\n|---|---|---|---|---|\n".to_owned()
+            } else {
+                table
+            };
+            let authority = program.state.authority.map_or_else(|| "none (immutable)".into(), |authority| authority.to_string());
+            let status: PlannedStatus = (&program.state.status).into();
+
+            table + &format!("| {name} | `{}` | `{authority}` | {status} | read-only |\n", program.state.address)
+        });
+        let policy = if release.nondeployable_programs.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Inherited programs (no deploy, finalize, or close): {}.\n\n",
+                join_displayed(release.nondeployable_programs.iter())
+            )
+        };
 
         format!(
-            "## Deploy plan v{} on {}\n\n{table}\n{}\nPlan hash: {}\n",
+            "## Deploy plan v{} on {}\n\n{table}\n{dependencies}{policy}{}\nPlan hash: {}\n",
             release.version,
             release.cluster,
             init_values(inputs),
@@ -313,6 +436,8 @@ impl Plan {
             cluster: release.cluster,
             genesis_hash: genesis_hash.to_string(),
             deployer: deployer.to_string(),
+            selected: &self.selected,
+            nondeployable_programs: &release.nondeployable_programs,
             programs: programs
                 .iter()
                 .map(|(name, program)| {
@@ -322,8 +447,22 @@ impl Plan {
                     )
                 })
                 .collect(),
+            dependencies: self
+                .dependencies
+                .iter()
+                .map(|(name, program)| {
+                    (
+                        name.as_str(),
+                        canonical_program(&release.programs[name], program),
+                    )
+                })
+                .collect(),
             inputs: inputs.into(),
-            live_configs: live_configs.entries().into_iter().collect(),
+            live_configs: live_configs
+                .entries()
+                .into_iter()
+                .map(|(name, values)| (name.into(), values))
+                .collect(),
             live_layerzero_alt: live_configs.layerzero_alt.as_ref().map(Alt::describe),
             live_layerzero_paths: live_configs
                 .layerzero_paths
@@ -333,6 +472,76 @@ impl Plan {
         };
 
         serde_json::to_string(&canonical).expect("canonical plan must serialize")
+    }
+}
+impl PlanFile {
+    pub fn validate(&self) -> Result<(), Error> {
+        let selected = &self.document.selected;
+        let release = &self.document.release;
+        release.require_selection(selected)?;
+        if self.programs.keys().cloned().collect::<BTreeSet<_>>() != *selected
+            || self.dependencies.keys().any(|name| selected.contains(name))
+            || self
+                .dependencies
+                .values()
+                .any(|program| !program.actions.is_empty())
+            || self
+                .programs
+                .keys()
+                .chain(self.dependencies.keys())
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                != release.programs.keys().cloned().collect()
+        {
+            return Err(Error::Selection {
+                reason: "program records differ from selected scope".into(),
+            });
+        }
+        let inputs = Inputs::parse_selected(self.document.inputs.clone(), selected)?;
+        let programs = self
+            .programs
+            .iter()
+            .map(|(name, program)| {
+                (
+                    name.as_str(),
+                    canonical_program_file(&release.programs[name], program),
+                )
+            })
+            .collect();
+        let dependencies = self
+            .dependencies
+            .iter()
+            .map(|(name, program)| {
+                (
+                    name.as_str(),
+                    canonical_program_file(&release.programs[name], program),
+                )
+            })
+            .collect();
+        let canonical = CanonicalPlan {
+            version: &release.version,
+            cluster: release.cluster,
+            genesis_hash: self.genesis_hash.clone(),
+            deployer: self.deployer.clone(),
+            selected,
+            nondeployable_programs: &release.nondeployable_programs,
+            programs,
+            dependencies,
+            inputs: (&inputs).into(),
+            live_configs: self.live_configs.clone(),
+            live_layerzero_alt: self.live_layerzero_alt.clone(),
+            live_layerzero_paths: self.live_layerzero_paths.clone(),
+        };
+        let actual = PlanHash::of(
+            &serde_json::to_string(&canonical).expect("canonical plan must serialize"),
+        );
+        if actual != self.hash.parse()? {
+            return Err(Error::Selection {
+                reason: "plan hash does not match its contents".into(),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -355,6 +564,25 @@ impl From<&PlannedProgram> for PlannedProgramFile {
 }
 
 impl Release {
+    pub fn require_selection(&self, selected: &BTreeSet<String>) -> Result<(), Error> {
+        if selected.is_empty()
+            || selected
+                .iter()
+                .any(|name| !self.programs.contains_key(name))
+        {
+            return Err(Error::Selection {
+                reason: "empty selection or unknown program".into(),
+            });
+        }
+        if let Some(program) = selected.intersection(&self.nondeployable_programs).next() {
+            return Err(Error::InheritedProgram {
+                program: program.clone(),
+            });
+        }
+
+        Ok(())
+    }
+
     /// Every program after all of its dependencies, ties in name order. `program-ids.json` comes
     /// from Cargo's dependency graph plus the aggregator's members, so it has no cycles.
     pub fn dependency_order(&self) -> Vec<&str> {
@@ -487,7 +715,11 @@ impl FromStr for PlanHash {
     }
 }
 
-fn expected_configs(release: &Release, inputs: &Inputs) -> Result<Configs, Error> {
+fn expected_configs(
+    release: &Release,
+    inputs: &Inputs,
+    selected: &BTreeSet<String>,
+) -> Result<Configs, Error> {
     let member_address = |name: &str| {
         release
             .programs
@@ -500,24 +732,44 @@ fn expected_configs(release: &Release, inputs: &Inputs) -> Result<Configs, Error
     let to_bytes32 =
         |addresses: &[EvmAddress]| -> Vec<Bytes32> { addresses.iter().map(Into::into).collect() };
 
-    let layerzero = member_address(LAYERZERO_PROVER)?;
+    let layerzero = selected
+        .contains(LAYERZERO_PROVER)
+        .then(|| member_address(LAYERZERO_PROVER))
+        .transpose()?;
 
     Ok(Configs {
-        hyper_senders: Some(to_bytes32(&inputs.hyper_senders)),
-        polymer_emitters: Some(to_bytes32(&inputs.polymer_emitters)),
-        aggregator_provers: Some(
-            AGGREGATOR_MEMBERS
-                .into_iter()
-                .map(member_address)
-                .collect::<Result<_, _>>()?,
-        ),
-        layerzero_peers: Some(inputs.layerzero_peers.iter().map(Into::into).collect()),
-        cctp_peers: Some(inputs.cctp_peers.clone()),
+        hyper_senders: selected
+            .contains(HYPER_PROVER)
+            .then(|| to_bytes32(&inputs.hyper_senders)),
+        polymer_emitters: selected
+            .contains(POLYMER_PROVER)
+            .then(|| to_bytes32(&inputs.polymer_emitters)),
+        aggregator_provers: selected
+            .contains(AGGREGATOR_PROVER)
+            .then(|| {
+                AGGREGATOR_MEMBERS
+                    .into_iter()
+                    .map(member_address)
+                    .collect::<Result<_, _>>()
+            })
+            .transpose()?,
+        layerzero_peers: selected
+            .contains(LAYERZERO_PROVER)
+            .then(|| inputs.layerzero_peers.iter().map(Into::into).collect()),
+        cctp_peers: selected
+            .contains(CCTP_PROVER)
+            .then(|| inputs.cctp_peers.clone()),
         layerzero_alt: None,
         layerzero_paths: inputs
             .layerzero_peers
             .iter()
-            .map(|peer| Path::expected(&layerzero, &peer.into(), &peer.path))
+            .map(|peer| {
+                Path::expected(
+                    &layerzero.expect("selected LayerZero peers have an address"),
+                    &peer.into(),
+                    &peer.path,
+                )
+            })
             .collect(),
     })
 }
@@ -659,9 +911,12 @@ struct CanonicalPlan<'a> {
     cluster: Cluster,
     genesis_hash: String,
     deployer: String,
+    selected: &'a BTreeSet<String>,
+    nondeployable_programs: &'a BTreeSet<String>,
     programs: BTreeMap<&'a str, CanonicalProgram>,
+    dependencies: BTreeMap<&'a str, CanonicalProgram>,
     inputs: CanonicalInputs,
-    live_configs: BTreeMap<&'static str, Option<Vec<String>>>,
+    live_configs: BTreeMap<String, Option<Vec<String>>>,
     live_layerzero_alt: Option<String>,
     live_layerzero_paths: Vec<String>,
 }
@@ -715,20 +970,20 @@ struct CanonicalExecutor {
 }
 
 fn canonical_program(release: &ReleaseProgram, program: &PlannedProgram) -> CanonicalProgram {
-    let ProgramState {
-        address,
-        status,
-        authority,
-        data_hash,
-    } = &program.state;
+    canonical_program_file(release, &program.into())
+}
 
+fn canonical_program_file(
+    release: &ReleaseProgram,
+    program: &PlannedProgramFile,
+) -> CanonicalProgram {
     CanonicalProgram {
-        address: address.to_string(),
+        address: release.address.to_string(),
         so_sha256: hex::encode(release.so_sha256),
         dependencies: release.dependencies.clone(),
-        status: status.into(),
-        authority: authority.map(|authority| authority.to_string()),
-        data_hash: data_hash.map(hex::encode),
+        status: program.status,
+        authority: program.authority.clone(),
+        data_hash: program.data_hash.clone(),
         actions: program.actions.clone(),
     }
 }
@@ -976,6 +1231,7 @@ mod tests {
         let release = Release {
             version: "1.2.3".into(),
             cluster: Cluster::Devnet,
+            nondeployable_programs: BTreeSet::new(),
             programs: PROGRAMS
                 .iter()
                 .enumerate()
@@ -1473,11 +1729,14 @@ mod tests {
     fn plan_document_round_trips_to_the_same_hash() {
         let Fixture { release, raw, .. } = fixture();
         let document = serde_json::to_string_pretty(&PlanDocument {
+            selected: release.programs.keys().cloned().collect(),
             release,
             inputs: raw,
         })
         .unwrap();
-        let PlanDocument { release, inputs } = serde_json::from_str(&document).unwrap();
+        let PlanDocument {
+            release, inputs, ..
+        } = serde_json::from_str(&document).unwrap();
         let rebuilt = Plan::build(
             release,
             Cluster::Devnet.genesis_hash(),

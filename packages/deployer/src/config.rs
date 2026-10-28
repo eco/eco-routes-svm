@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt;
 
 use anchor_lang::AccountDeserialize;
@@ -159,6 +160,21 @@ impl fmt::Display for Configs {
 }
 
 pub fn read(chain: &impl Chain, release: &Release) -> Result<Configs, Error> {
+    read_selected(
+        chain,
+        release,
+        &crate::plan::PROGRAMS_WITH_INIT
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    )
+}
+
+pub fn read_selected(
+    chain: &impl Chain,
+    release: &Release,
+    selected: &BTreeSet<String>,
+) -> Result<Configs, Error> {
     let address = |program: &'static str| {
         release
             .programs
@@ -167,8 +183,15 @@ pub fn read(chain: &impl Chain, release: &Release) -> Result<Configs, Error> {
             .ok_or(Error::MissingProgram { program })
     };
 
-    let layerzero = address(LAYERZERO_PROVER)?;
-    let store = layerzero_store(chain, &layerzero)?;
+    let layerzero = selected
+        .contains(LAYERZERO_PROVER)
+        .then(|| address(LAYERZERO_PROVER))
+        .transpose()?;
+    let store = layerzero
+        .as_ref()
+        .map(|address| layerzero_store(chain, address))
+        .transpose()?
+        .flatten();
     let layerzero_alt = store
         .as_ref()
         .map(|store| layerzero_state::read_alt(chain, store))
@@ -176,16 +199,38 @@ pub fn read(chain: &impl Chain, release: &Release) -> Result<Configs, Error> {
         .flatten();
     let layerzero_paths = store
         .as_ref()
-        .map(|store| layerzero_state::read_paths(chain, &layerzero, store))
+        .map(|store| {
+            layerzero_state::read_paths(
+                chain,
+                &layerzero.expect("a live store has a program"),
+                store,
+            )
+        })
         .transpose()?
         .unwrap_or_default();
 
     Ok(Configs {
-        hyper_senders: hyper_senders(chain, &address(HYPER_PROVER)?)?,
-        polymer_emitters: polymer_emitters(chain, &address(POLYMER_PROVER)?)?,
-        aggregator_provers: aggregator_provers(chain, &address(AGGREGATOR_PROVER)?)?,
+        hyper_senders: selected
+            .contains(HYPER_PROVER)
+            .then(|| hyper_senders(chain, &address(HYPER_PROVER)?))
+            .transpose()?
+            .flatten(),
+        polymer_emitters: selected
+            .contains(POLYMER_PROVER)
+            .then(|| polymer_emitters(chain, &address(POLYMER_PROVER)?))
+            .transpose()?
+            .flatten(),
+        aggregator_provers: selected
+            .contains(AGGREGATOR_PROVER)
+            .then(|| aggregator_provers(chain, &address(AGGREGATOR_PROVER)?))
+            .transpose()?
+            .flatten(),
         layerzero_peers: store.map(|store| store.peers),
-        cctp_peers: cctp_peers(chain, &address(CCTP_PROVER)?)?,
+        cctp_peers: selected
+            .contains(CCTP_PROVER)
+            .then(|| cctp_peers(chain, &address(CCTP_PROVER)?))
+            .transpose()?
+            .flatten(),
         layerzero_alt,
         layerzero_paths,
     })

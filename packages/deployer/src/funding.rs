@@ -25,8 +25,6 @@ const SIGNATURE_FEE_LAMPORTS: u64 = 5_000;
 const DEPLOY_WRITE_BYTES: usize = 900;
 const DEPLOY_COMPUTE_UNIT_LIMIT: u64 = 10_000;
 const DEPLOY_SETUP_TRANSACTIONS: u64 = 2;
-/// Two reserve transfers and four prover inits; LayerZero's are `layerzero::setup_transactions`.
-const APPLY_FIXED_TRANSACTIONS: u64 = 6;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -106,6 +104,9 @@ impl Funding {
             })
             .sum();
         let reserve = |program, seed, requested_lamports| {
+            if !plan.selected.contains(program) {
+                return Ok::<_, chain::Error>((0, 0));
+            }
             let address = plan.release.programs[program].address;
             let reserve = Pubkey::find_program_address(&[seed], &address).0;
             let balance = lamports(chain, &reserve)?;
@@ -199,8 +200,27 @@ fn transaction_fees(plan: &Plan, deployed_lengths: &[usize], idl_transactions: u
     });
     let peers: Vec<Peer> = plan.inputs.layerzero_peers.iter().map(Into::into).collect();
     // IDL transactions go through `transaction::signed` too.
-    let applies =
-        APPLY_FIXED_TRANSACTIONS + layerzero::setup_transactions(&peers) + idl_transactions;
+    let inits = plan
+        .programs
+        .iter()
+        .filter(|(name, program)| {
+            name.as_str() != LAYERZERO_PROVER && program.actions.contains(&Action::Init)
+        })
+        .count() as u64;
+    let reserves = [HYPER_PROVER, LAYERZERO_PROVER]
+        .into_iter()
+        .filter(|name| plan.selected.contains(*name))
+        .count() as u64;
+    let layerzero_setup = if plan
+        .programs
+        .get(LAYERZERO_PROVER)
+        .is_some_and(|program| program.actions.contains(&Action::Init))
+    {
+        layerzero::setup_transactions(&peers)
+    } else {
+        0
+    };
+    let applies = inits + reserves + layerzero_setup + idl_transactions;
     // What `transaction::signed` charges each `apply` and IDL transaction, with the deployer as
     // sole signer.
     let apply_fee = transaction::priority_fee(price).saturating_add(SIGNATURE_FEE_LAMPORTS);
@@ -221,9 +241,10 @@ fn fee(price: u64, limit: u64, signatures: u64) -> u64 {
 
 /// Only a run that initializes the LayerZero prover creates path accounts.
 fn layerzero_path_rent(plan: &Plan) -> u64 {
-    if !plan.programs[LAYERZERO_PROVER]
-        .actions
-        .contains(&Action::Init)
+    if !plan
+        .programs
+        .get(LAYERZERO_PROVER)
+        .is_some_and(|program| program.actions.contains(&Action::Init))
     {
         return 0;
     }
@@ -425,7 +446,7 @@ mod tests {
         let mut plan = testing::plan(0);
         plan.programs
             .values_mut()
-            .for_each(|program| program.actions = vec![Action::Deploy]);
+            .for_each(|program| program.actions.insert(0, Action::Deploy));
         let mut binaries = binaries(&plan);
         binaries.insert(LAYERZERO_PROVER.into(), vec![0; 3_000]);
 
@@ -502,11 +523,12 @@ mod tests {
             .unwrap()
         };
 
-        assert!(estimate(FIXED).require().is_ok());
-        assert!(estimate(FIXED - 1).require().is_err_and(|error| matches!(
+        let required = estimate(0).required().0;
+        assert!(estimate(required).require().is_ok());
+        assert!(estimate(required - 1).require().is_err_and(|error| matches!(
             error,
-            Error::InsufficientBalance { deployer, balance, required }
-                if deployer == DEPLOYER && balance == Sol(FIXED - 1) && required == Sol(FIXED)
+            Error::InsufficientBalance { deployer, balance, required: needed }
+                if deployer == DEPLOYER && balance == Sol(required - 1) && needed == Sol(required)
         )));
     }
 
@@ -515,7 +537,7 @@ mod tests {
         let mut plan = testing::plan(0);
         plan.programs
             .values_mut()
-            .for_each(|program| program.actions = vec![Action::Deploy]);
+            .for_each(|program| program.actions.insert(0, Action::Deploy));
         let mut fees = |price| {
             plan.inputs.compute_unit_price = price;
             Funding::estimate(&funded(0), &plan, &binaries(&plan), &no_idls(), &DEPLOYER)
@@ -541,7 +563,12 @@ mod tests {
             .unwrap()
             .actions
             .clear();
-        let chain = funded(FIXED);
+        let required =
+            Funding::estimate(&funded(0), &plan, &binaries(&plan), &no_idls(), &DEPLOYER)
+                .unwrap()
+                .required()
+                .0;
+        let chain = funded(required);
         let estimate = |plan: &Plan| {
             Funding::estimate(&chain, plan, &binaries(plan), &no_idls(), &DEPLOYER).unwrap()
         };

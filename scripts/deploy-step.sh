@@ -28,7 +28,13 @@ program_address() {
 }
 
 check() {
-  jq -r 'keys[]' "${ASSETS}/program-ids.json" | while read -r program; do
+  local selected
+  if [ "${PROGRAMS:-all}" = all ]; then
+    selected=$(jq -r 'keys[]' "${ASSETS}/program-ids.json")
+  else
+    selected=$(printf '%s\n' "$PROGRAMS" | tr ',' '\n')
+  fi
+  printf '%s\n' "$selected" | while read -r program; do
     local address lib idl
     address=$(program_address "$program")
     lib="programs/${program//_/-}/src/lib.rs"
@@ -40,17 +46,38 @@ check() {
   done
 }
 
-# A failed `solana program deploy` strands its buffer and the rent in it; only the deployer key,
-# which exists only inside this workflow, can reclaim it. The key writes buffers nowhere else and
-# runs never overlap on a cluster, so every buffer it holds is a leftover.
+# Legacy full releases reclaim every deployer-owned buffer. Selected runs touch only fresh,
+# explicit buffers created by this run; a successful upload already consumed its buffer.
+legacy_full_deploy() {
+  [ ! -f "${ASSETS}/deployment-policy.json" ] &&
+    [ "$(jq -er '.selected | length' "$PLAN")" = "$(jq -er 'length' "${ASSETS}/program-ids.json")" ]
+}
+
 close_buffers() {
-  solana program close --buffers -u "$RPC_URL" -k "$KEYPAIR"
+  if legacy_full_deploy; then
+    solana program close --buffers -u "$RPC_URL" -k "$KEYPAIR"
+    return
+  fi
+  [ -d "${BUFFER_DIR:?BUFFER_DIR must name the current run buffer directory}" ] || return 0
+  local keypair address output
+  shopt -s nullglob
+  for keypair in "$BUFFER_DIR"/*-buffer-keypair.json; do
+    address=$(solana-keygen pubkey "$keypair")
+    if ! output=$(solana program show "$address" -u "$RPC_URL" --output json 2>&1); then
+      if grep -qF "Unable to find the account ${address}" <<<"$output"; then
+        continue
+      fi
+      printf '%s\n' "$output" >&2
+      return 1
+    fi
+    solana program close "$address" -u "$RPC_URL" -k "$KEYPAIR" --authority "$KEYPAIR"
+  done
 }
 
 deploy() {
   close_buffers
   # The reviewed plan fixes the price; `apply` reads it from there too.
-  local price price_flags=()
+  local price price_flags=() buffer_flags=()
   price=$(jq -er '.inputs.compute_unit_price' "$PLAN")
   if [ "$price" != 0 ]; then
     price_flags=(--with-compute-unit-price "$price")
@@ -59,9 +86,21 @@ deploy() {
   # never overlap, so nothing here can already be deployed. Writes go through the RPC: validator
   # TPUs drop much of what a CI runner sends, and each drop is a re-sign.
   deployer actions --plan "$PLAN" --action deploy | while read -r program; do
+    if ! legacy_full_deploy; then
+      mkdir -p "${BUFFER_DIR:?BUFFER_DIR must name the current run buffer directory}"
+      local buffer="$BUFFER_DIR/${program}-buffer-keypair.json"
+      # Never reuse a key: this directory belongs to this workflow run and attempt.
+      test ! -e "$buffer" || { echo "buffer key already exists: ${buffer}" >&2; return 1; }
+      (umask 077; solana-keygen new --no-bip39-passphrase --silent --outfile "$buffer" >/dev/null)
+      local buffer_address
+      buffer_address=$(solana-keygen pubkey "$buffer")
+      printf '%s %s\n' "$program" "$buffer_address" >> "$(dirname "$PLAN")/buffers.txt"
+      buffer_flags=(--buffer "$buffer")
+    fi
     echo "deploying ${program} $(program_address "$program")"
     solana program deploy -u "$RPC_URL" -k "$KEYPAIR" --upgrade-authority "$KEYPAIR" \
       --program-id "${KEYS_DIR:-target/keys}/${program}-keypair.json" \
+      ${buffer_flags[@]+"${buffer_flags[@]}"} \
       --use-rpc --max-sign-attempts "$MAX_SIGN_ATTEMPTS" \
       ${price_flags[@]+"${price_flags[@]}"} "${ASSETS}/${program}.${CLUSTER}.so"
   done

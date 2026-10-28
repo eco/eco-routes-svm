@@ -125,6 +125,7 @@ pub fn plan(reserve_lamports: u64) -> Plan {
     let release = Release {
         version: "0.0.1".into(),
         cluster: Cluster::Devnet,
+        nondeployable_programs: Default::default(),
         programs: names
             .iter()
             .map(|name| {
