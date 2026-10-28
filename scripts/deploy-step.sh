@@ -59,10 +59,10 @@ close_buffers() {
     return
   fi
   [ -d "${BUFFER_DIR:?BUFFER_DIR must name the current run buffer directory}" ] || return 0
-  local keypair address output
+  local buffer_keypair address output
   shopt -s nullglob
-  for keypair in "$BUFFER_DIR"/*-buffer-keypair.json; do
-    address=$(solana-keygen pubkey "$keypair")
+  for buffer_keypair in "$BUFFER_DIR"/*-buffer-keypair.json; do
+    address=$(solana-keygen pubkey "$buffer_keypair")
     if ! output=$(solana program show "$address" -u "$RPC_URL" --output json 2>&1); then
       if grep -qF "Unable to find the account ${address}" <<<"$output"; then
         continue
