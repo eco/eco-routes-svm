@@ -10,6 +10,10 @@ Until a human has confirmed the code is undeployed, do **not**: open or push a p
 
 Instead: stop, tell the human in plain language that this is a security fix and that you cannot verify whether the affected code is deployed, and ask them to confirm. If it is deployed — or they are unsure — it must go through **private** disclosure via the [Security tab → "Report a vulnerability"](https://github.com/eco/eco-routes-svm/security), not the normal PR flow. The exposure happens at the **push** to a public remote, not the merge, and a later revert does not undo it — a fix for deployed code is developed only in the private advisory fork, never pushed here. Full policy: [`SECURITY.md`](./SECURITY.md). This is a hard safety constraint.
 
+## Operations skills
+
+For release preparation/publication, read [`eco-routes-svm-release`](skills/routes-svm-release/SKILL.md). For deployment planning/execution, interrupted-run or verification recovery, and separately authorized finalize/close, read [`eco-routes-svm-deploy`](skills/routes-svm-deploy/SKILL.md). These repo-owned skills are registered in `eco/skills`; installation is in [README](README.md#agent-operations-skills). Skill invocation grants no live-operation authority.
+
 ## Repository
 
 Anchor (1.1.2) workspace implementing a cross-chain intent protocol on Solana. Rust 1.97.1 (`rust-toolchain.toml`); release profile uses `lto = "fat"`.

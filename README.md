@@ -11,6 +11,7 @@ A cross-chain intent protocol built on Solana, enabling users to create intents 
 - [Programs](#programs)
 - [Testing](#testing)
 - [Deployment](#deployment)
+- [Agent operations skills](#agent-operations-skills)
 - [Release](#release)
 - [Contributing](#contributing)
 
@@ -602,9 +603,44 @@ cluster = "localnet"  # or "devnet", "mainnet"
 wallet = "~/.config/solana/id.json"
 ```
 
+## Agent operations skills
+
+| Skill | Use |
+|---|---|
+| [`eco-routes-svm-release`](skills/routes-svm-release/SKILL.md) | Prepare or publish a release; inspect version ancestry, build provenance and assets. |
+| [`eco-routes-svm-deploy`](skills/routes-svm-deploy/SKILL.md) | Plan or execute selected deployment; reconcile interrupted runs and remote verification; separately authorized lifecycle operations. |
+
+Invoke the name in your agent, or ask it to read the linked `SKILL.md` from this checkout. Invocation is not authorization to publish, dispatch, fund, deploy, upgrade, finalize or close.
+
+Bodies live here; [`eco/skills`](https://github.com/eco/skills#install) registers and symlinks them. Merge the owning skill PR before its registry mapping. Install the registry's prerequisite first: `yq`, or the `python3` on `PATH` with PyYAML. The following clones are for fresh checkouts only; reuse existing checkouts containing the skills instead of cloning again.
+
+```bash
+export ECO_GIT_ROOT="${ECO_GIT_ROOT:-$HOME/Git}"
+mkdir -p "$ECO_GIT_ROOT"
+git clone git@github.com:eco/eco-routes-svm.git "$ECO_GIT_ROOT/eco-routes-svm"
+git clone git@github.com:eco/skills.git "$ECO_GIT_ROOT/skills"
+map="$(mktemp)"
+cat > "$map" <<'YAML'
+version: 1
+skills:
+  - name: eco-routes-svm-release
+    repo: eco/eco-routes-svm
+    path: skills/routes-svm-release
+  - name: eco-routes-svm-deploy
+    repo: eco/eco-routes-svm
+    path: skills/routes-svm-deploy
+YAML
+make -C "$ECO_GIT_ROOT/skills" resolve MAP="$map"
+# Inspect ~/.claude/skills and ~/.agents/skills for conflicting names first.
+make -C "$ECO_GIT_ROOT/skills" install MAP="$map"
+rm "$map"
+```
+
+The installer resolves `$ECO_GIT_ROOT/eco-routes-svm`; an existing differently named checkout can be renamed or symlinked at that path. Do not clone a second copy just to fix its basename. The installer can replace existing symlinks; it refuses real files/directories. Override `SKILLS_DIR` and `AGENTS_SKILLS_DIR` for isolated installation. Without a focused `MAP`, every service checkout in the full registry must resolve before anything installs.
+
 ## Release
 
-Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub, click **Run workflow** and untick **dry_run**. A dry run (the default) computes the version, derives the program IDs and builds every asset, but publishes nothing: no release, tags or branches. Either way the run summary shows the version and each program's address, and a dry run uploads the would-be assets (`.so` files, IDLs, `program-ids.json`, the script; never keypairs) as a workflow artifact. A dry run uses the same secret, so it needs the same `release` environment approval, and its addresses are exactly what a real release from that commit would publish.
+Releases are published via the manual `Release` GitHub Actions workflow (`.github/workflows/release.yml`) — there is **no auto-release on push to `main`**. To cut a release, open the Actions tab on GitHub, click **Run workflow** and untick **dry_run**. A dry run (the default) computes the version, derives the program IDs and builds every asset, but publishes nothing: no release, tags or branches. Either way the run summary shows the version and each program's address, and a dry run uploads the would-be assets (`.so` files, IDLs and `program-ids.json`; no script or keypairs) as a workflow artifact. A dry run uses the same secret, so it needs the same `release` environment approval, and its addresses are exactly what a real release from that commit and unchanged secret would publish.
 
 ### What gets published
 
@@ -638,7 +674,7 @@ So a program keeps its address while its bytecode and salt are unchanged, and an
 
 The release job builds the placeholders, derives the IDs (it writes no keys), rewrites every `declare_id!` on the runner, rebuilds, and checks each IDL's `address`. Bytecode is always built with `solana-verify build` in the image pinned by digest in `VERIFY_IMAGE` (`release.yml`), so the published `.so` files are exactly what `verify-from-repo` reproduces and what gets deployed; v2.1.1's mainnet programs are byte-identical to builds in that image. IDLs come from `anchor idl build`. Before publishing it pushes a `deploy/v<version>` tag: one commit on top of `v<version>` that only rewrites the `declare_id!`s (public keys), which `solana-verify verify-from-repo` rebuilds. `main` and the `releases/*` branches never contain it, and CI does not test it, since the PDA goldens are pinned to the placeholder IDs. Cargo.toml versions are not bumped before building, because a bump changes the bytecode of every dependent of `eco-svm-std`; the IDLs' `metadata.version` is set afterwards.
 
-The manual `Reproduce` workflow (`.github/workflows/reproduce.yml`) checks a released tag against the chain with no keys or approval. Give it a tag carrying the real `declare_id!`s (`v<version>` or `deploy/v<version>`) and a cluster. It rebuilds every program and IDL the way the release job does, using the toolchain and `VERIFY_IMAGE` pinned in that tag's `release.yml`. It then fails unless each `.so` hash equals the deployed program's and each IDL is byte-identical to its canonical on-chain IDL. With `upload` on, it then attaches the reproduced `.so` files and IDLs to the `v<version>` release, which also covers a release built outside `release.yml`.
+The manual `Reproduce` workflow (`.github/workflows/reproduce.yml`) rebuilds the given source tag and compares it with the chain. Resolve an actual ID-bearing source tree first: normal `v<version>` tags, including `v3.1.0`, can contain placeholders; `deploy/v<version>` is intended to carry the production declarations, but historical tags require provenance checks too. It uses the toolchain and `VERIFY_IMAGE` pinned in that tree's `release.yml`, then requires each rebuilt `.so` hash to match the deployed program and each IDL to match its canonical on-chain IDL byte-for-byte. A whole-tree rebuild is not a mixed-release validator: inherited binaries can have older source provenance and inherited release IDLs can differ only in version from on-chain IDLs. Do not enable `upload` to overwrite inherited artifacts. Dispatch and especially `upload` require explicit authorization; `upload` attaches reproduced binaries/IDLs to the versioned release and is not read-only.
 
 The secret is `PROGRAM_KEYPAIR_SECRET` (hex, at least 32 bytes, e.g. `openssl rand -hex 32`), stored in the `release` GitHub environment and the team vault. Anyone holding it can deploy at any release's addresses, and changing it moves every program. Repository settings that protect it:
 
@@ -777,10 +813,10 @@ After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separ
 
 #### Recovery
 
-- **Failed or cancelled run.** Programs stay upgradeable. Selected deploys use fresh, explicit upload buffers in a directory unique to the workflow run and attempt; the final cleanup closes only those buffer addresses, skipping buffers already consumed by successful uploads. Legacy `all` runs without a deployment policy retain deployer-wide buffer cleanup before and after deployment. Both paths delete program and buffer key files after cleanup. Fix the cause and dispatch again for a fresh reviewed plan: previous chain state has changed.
+- **Failed or cancelled run.** Reconcile transactions, chain state, IDL, verification and cleanup before retrying; see the [deployment recovery skill](skills/routes-svm-deploy/references/recovery.md). If authorized writes remain, fix the cause and dispatch a fresh reviewed plan. A status-check failure alone does not justify replaying completed deployment or verification writes. Selected runs clean only their fresh buffers; legacy full-manifest runs without a policy use deployer-wide buffer cleanup. Temporary keys are deleted after cleanup even if cleanup fails.
 - **Buffer cleanup RPC failure.** Before each selected upload, `out/buffers.txt` records the program name and fresh buffer's public address. That public record survives key deletion in the uploaded deploy artifact, so a cleanup failure does not lose the buffer's identity. It contains no private key material.
 - **Burned address.** If a program has a wrong config (or a config was set by someone else), or someone sent lamports to a new program's address or its programdata address (the loader then cannot create the account), the address is unusable. Close it if it is still upgradeable, raise its salt in `scripts/program-salts.json` and cut a new release; that moves it and everything depending on it. A wrong LayerZero path on an upgradeable `layerzero_prover` can instead be corrected in place; see [Administration and finalization](#administration-and-finalization).
-- **Interrupted `solana program deploy` in the manual fallback.** It leaves an upload buffer holding rent. Close only that upload's recorded buffer address with `solana program close <buffer-address> -u <rpc> -k <deployer-keypair> --authority <deployer-keypair>`; do not close unrelated buffers.
+- **Interrupted program upload.** Preserve its recorded buffer public address and inspect account existence and authority. Any rent-recovery write needs an explicitly authorized, scoped recipe; see [buffer recovery](skills/routes-svm-deploy/references/recovery.md#buffers-keys-and-records). Do not close unrelated buffers.
 - **Abandoned deployment.** Run `Close` for its upgradeable programs; see [Closing](#closing).
 
 #### Limits
@@ -793,80 +829,9 @@ After testing, dispatch `Finalize` with `programs` set to `all` or a comma-separ
 
 #### Manual fallback
 
-Use this only when the workflow cannot run. Every block runs under `set -euo pipefail`. You need Solana CLI 4.1.1, Anchor CLI 1.1.2, Node 22, Docker (running), [`solana-verify`](https://github.com/Ellipsis-Labs/solana-verifiable-build) 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`), `gh`, `PROGRAM_KEYPAIR_SECRET`, a funded deployer keypair, an RPC URL and the `init` values. The deployer keypair signs every transaction below: it pays, and it is every new program's upgrade authority until the last step.
+Prefer the shared workflows and their plan/hash/approval gates. If a workflow cannot run, use the [deployment skill's recovery procedure](skills/routes-svm-deploy/references/recovery.md) to reconcile what already landed and identify the exact remaining action. A red verification status check is not permission to redeploy.
 
-The examples deploy to mainnet. For devnet, use a devnet RPC, the `.devnet.` assets, and drop every `-- --features mainnet`. Pass `-u <rpc>` to every command: mainnet and devnet share addresses.
-
-**1. Get the release and derive selected keypairs.** `deploy/v<version>` is the release commit plus its real `declare_id!`s; run the script from that checkout, never from a downloaded copy. Keep any `deployment-policy.json` beside the manifest.
-
-```bash
-git clone https://github.com/eco/eco-routes-svm && cd eco-routes-svm
-git checkout deploy/v<version>
-gh release download v<version> --pattern program-ids.json --pattern deployment-policy.json --pattern '*.mainnet.so' --pattern '*.mainnet.json'
-export PROGRAM_KEYPAIR_SECRET=<from the vault>
-node scripts/program-keypairs.mjs deploy program-ids.json keys intent_chainer
-```
-
-Replace `intent_chainer` with comma-separated program lib names, or `all` for a legacy release (also the default when omitted). The script checks the policy and every selected derived address before writing `keys/<program>-keypair.json`; it neither derives dependency keys nor filters the manifest. The `.so` files are the release's verifiable builds: deploy them as they are. Apply steps 3–6 only to selected programs; inspect their dependencies read-only.
-
-**2. Classify selected programs and their dependencies.** For each, with `address=$(jq -r ".${program}.address" program-ids.json)`, compare `solana program show -u <rpc> "$address"` and `solana-verify get-program-hash -u <rpc> "$address"` with `solana-verify get-executable-hash <program>.mainnet.so`. Unselected dependencies must already be executable and match their release binary; stop if any are missing or differ. Do not deploy or modify them.
-
-| On chain | Meaning | Action |
-|---|---|---|
-| no account | new | run steps 3–6 |
-| hash matches, `Authority: none`, and for programs with an `init` the config reads back correctly (step 4) | unchanged since an earlier release | skip |
-| hash matches, authority is your deployer | an earlier attempt stopped part-way | resume at the first step it has not finished |
-| anything else, or lamports at the programdata address of a program with no account | someone else holds the address | stop and deploy nothing: the other programs would trust it |
-
-**3. Deploy each new program:**
-
-```bash
-solana program deploy -u <rpc> -k <deployer-keypair> --upgrade-authority <deployer-keypair> \
-  --program-id keys/<program>-keypair.json --use-rpc --max-sign-attempts 20 <program>.mainnet.so
-```
-
-**4. Initialize.** Deploy every new program first: the aggregator only accepts members that are already deployed. Send each `init` with your own tooling, using the release IDL (`<program>.mainnet.json`) for the instruction layout; the workflow's `deployer` crate (`packages/deployer`) shows the account lists. Every `init` must be signed by the program's upgrade authority, so run it before the program is made immutable.
-
-| Program | `init` arguments | Signers |
-|---|---|---|
-| `hyper_prover` | `whitelisted_senders`: the EVM HyperProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
-| `polymer_prover` | `whitelisted_emitters`: the EVM PolymerProver addresses, each left-padded to 32 bytes | deployer, as payer and upgrade authority |
-| `aggregator_prover` | no arguments; its member program IDs (`hyper_prover`, `polymer_prover`, `layerzero_prover`, `cctp_prover` from `program-ids.json`, in that order) as remaining accounts | deployer, as payer and upgrade authority |
-| `cctp_prover` | `peers`: at most 32 `{domain, chain_id, sender}`, one per EVM chain: its CCTP domain, its chain ID and its EVM `CCTPProver` address left-padded to 32 bytes; past about 19 peers send it as a v1 transaction | deployer, as payer and upgrade authority |
-| `layerzero_prover` | `init` with every peer (one v1 transaction), then `init_path` and `set_path_config` per peer, a frozen lookup table of `required_alt_addresses`, and `set_alt`; see [Administration and finalization](#administration-and-finalization) | deployer, as payer and upgrade authority |
-
-`portal`, `intent_chainer`, `local_prover`, `flash_fulfiller` and `proof_helper` have no config `init`: deploy them, upload their IDLs and verify them.
-
-Every config is permanent (for a LayerZero path while `layerzero_prover` is upgradeable, see [Administration and finalization](#administration-and-finalization)). Read each one back and compare it with what you sent:
-
-```bash
-config=$(solana find-program-derived-address "$address" string:config | head -1)
-anchor account <program>.Config "$config" --idl <program>.mainnet.json --provider.cluster <rpc>
-```
-
-If a config is wrong or was set by someone else, stop: that address is burned (see [Recovery](#recovery)).
-
-**5. Verify each new program** while you still hold its upgrade authority, since OtterSec only accepts a verify PDA uploaded by it. `verify-from-repo` rebuilds the deploy tag in the same pinned image the release built with and uploads the record only if the result matches the program on chain. It exits 0 either way, so check that it printed `Program hash matches`:
-
-```bash
-commit=$(git rev-parse "deploy/v<version>^{commit}")
-test -n "$commit"
-solana-verify verify-from-repo -u <rpc> --program-id "$address" https://github.com/eco/eco-routes-svm \
-  --commit-hash "$commit" --library-name <program> \
-  --base-image <VERIFY_IMAGE from .github/workflows/release.yml> \
-  -k <deployer-keypair> -y -- --features mainnet
-solana-verify remote submit-job -u <rpc> --program-id "$address" --uploader <deployer-address>
-```
-
-`-y` uploads the verify PDA without prompting; `<deployer-address>` is `solana-keygen pubkey <deployer-keypair>`. If verification fails, stop here: do not make the program immutable.
-
-**6. After testing, make each new program immutable**, last, because `init` and verification both need the upgrade authority. Finalize each program only after the programs it depends on (`dependencies` in `program-ids.json`), and leave `layerzero_prover` until its [finalization gate](#administration-and-finalization):
-
-```bash
-solana program set-upgrade-authority -u <rpc> -k <deployer-keypair> "$address" --final
-```
-
-Then delete `keys/`.
+Direct writes require a separately reviewed, explicitly authorized recovery recipe preserving selection, policy, cluster, authority, canonical IDL upload/readback, bytecode verification and scoped key/buffer cleanup. Keep programs upgradeable for testing; finalization belongs to the separately authorized Finalize workflow after its readiness checks. There is no generic automatic rollback or manual finalize-and-delete-keys shortcut.
 
 The localnet-only test programs (`dummy-ism`, `mock-polymer-prover`, `mock-layerzero-endpoint`, `malicious-prover`, `malicious-proof-closer`) are excluded — they're test-only and never shipped.
 
