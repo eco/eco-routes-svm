@@ -1,6 +1,6 @@
 # Deployment recovery and inherited v3.1 receipt
 
-Read after `SKILL.md` when a run fails, pauses or appears inconsistent. All inspection commands below read remote state or download records. They are not permission for a new deployment or verification submission.
+Read after `SKILL.md` when a run fails, pauses or appears inconsistent. Inspection commands below read remote state or download records. The explicitly marked remote-submit example is a write and needs task-specific authorization; this reference grants none.
 
 ## Reconcile before retry
 
@@ -28,6 +28,8 @@ solana-verify remote get-status --program-id "$PROGRAM_ID"
 
 These two commands query the OtterSec API only in 0.5.2; they do not use RPC, so supply no credential URL. Do not confuse `get-status` with `get-job`: the latter requires `--job-id`, not a program address. If the service is unavailable, retain the job ID and mark remote status unknown; use later read-only checks, not a new submission as a probe.
 
+If the POST itself returns 502/timeout **without a job ID**, acceptance is unknown. Start with `remote get-status --program-id "$PROGRAM_ID"`, reconcile the uploader's PDA and existing run/service receipts, and obtain service/operator evidence if those reads cannot distinguish pending work from no accepted job. Absence of a job ID or a stale status is not proof of no submission. Leave the outcome unknown and stop rather than probing with another POST.
+
 Read the uploaded verification PDA and actual deployed executable hash without signing or uploading:
 
 ```bash
@@ -42,15 +44,30 @@ Read the uploaded verification PDA and actual deployed executable hash without s
 )
 ```
 
-Compare the PDA's uploader/program/commit/features/image against the release receipt and the rebuilt/on-chain hash. Exit 0 alone is insufficient: 0.5.2 can exit successfully on a hash mismatch without uploading a record, so require `Program hash matches`. A completed remote job must correspond to the intended bytes and program, not merely any old verified program status.
+Compare `On-chain Hash` with `Executable Hash` in remote output (`on_chain_hash` and `executable_hash` in the response), and compare both with `solana-verify get-program-hash` and `get-executable-hash` of the exact released `.so`. Check program, signer/uploader, repository commit, features and image against the intended receipt; a verified status for older bytes is insufficient. Exit 0 alone is insufficient: `verify-from-repo` can return success on a mismatch without uploading a record, so require `Program hash matches`.
 
-Only if reads establish missing/failed work, propose a retry with its **complete** write set under fresh authorization/review, including repeated verification writes and remote submission. A verified remote job plus completed deploy/IDL/cleanup needs a truthful incident record, not repeated chain writes to repair CI color.
+If the PDA already matches the intended release and reads establish that **no job was accepted**, a separately authorized minimal recovery can submit only the remote job, without redeploying, re-uploading IDL or rewriting the verification record:
+
+```bash
+# WRITE: mainnet remote submission only, after reconciliation and explicit authorization.
+(
+  set -euo pipefail
+  set +x
+  solana-verify remote submit-job -u "$RPC_URL" \
+    --program-id "$PROGRAM_ID" --uploader "$DEPLOYER" \
+    2>&1 | scripts/deploy-step.sh redact
+)
+```
+
+This is not permission to bypass workflow approval for other writes. A 409/exit-0 response means conflict/no new submission, not success of a newly created job; reconcile with read-only job/status evidence. For accepted jobs, inspect the existing job instead. The repository verification loop stops on the first failure, so later selected programs may never have reached verification: reconcile each program separately.
+
+A full Deploy re-dispatch remains possible only when its complete repeated write set is authorized; prefer the smallest supported recovery matching the proven missing work. Completed deploy/IDL/verification/cleanup needs a truthful incident record, not repeated writes to repair CI color.
 
 ## Buffers, keys and records
 
-Selected runs use a new `BUFFER_DIR` per run/attempt. Before upload, `out/buffers.txt` records only program name and fresh buffer public address. Cleanup closes only those buffers; successfully consumed buffers no longer exist. An RPC error is not proof of account absence.
+Per-run explicit buffers apply only when a real policy file exists or the plan selects fewer programs than the full manifest. Before upload, `out/buffers.txt` records program and fresh buffer public address; cleanup closes those buffers and consumed buffers are absent. An RPC error is not proof of absence.
 
-If cleanup failed, preserve the public buffer record and inspect those exact addresses/authorities. Closing a leftover buffer is a separately authorized write; follow the release-tag script and current Solana help. Never scan and close unrelated runs' buffers. Legacy full-manifest releases without policy use deployer-wide `--buffers` cleanup: review whether the payer is shared or another run wrote buffers before authorizing that path.
+With no policy and selected count equal to manifest count, the existing legacy branch instead closes **all** payer-owned buffers before deployment and during cleanup, even for a full comma-separated selection. Require explicit payer-wide cleanup authority and no unrelated concurrent upload; otherwise stop. Do not manufacture a policy to bypass this branch. If selected cleanup fails, preserve its exact public buffer records and inspect existence/authority before proposing any separately authorized rent recovery.
 
 Delete temporary program, buffer and payer key files even when cleanup fails; public buffer addresses allow later authority-based cleanup without retaining their private keys. Never upload private keys, derivation secrets, RPC URLs or raw secret-bearing logs. Keep redacted plan, logs, public addresses, signatures, slots and asset hashes. Record unresolved rent separately from deleted local keys. Do not remove another operator's files or persistent custody key.
 
@@ -73,7 +90,7 @@ Use this receipt only for comparison. Re-read live state before new operations. 
 | Selection/cluster | `intent_chainer`, mainnet |
 | Program | `EcoSEcjWKSEG5NqLW3mpzhC3kP4xWNkUEaywJihB5E84` |
 | Existing Portal | `EcoN71qfZMZtxwqW1Ps1kzbNKyfpCEd1izZhh58PqsDb`; chainer uses committed `Order.portal`, not a hardcoded Portal ID |
-| Deployment | [run 40784725791](https://github.com/eco/eco-routes-svm/actions/runs/40784725791) |
+| Deployment workflow | [run 40784725791](https://github.com/eco/eco-routes-svm/actions/runs/40784725791) concluded **failure**: plan passed; deploy failed at Verify after a remote polling 502. Deployment, IDL and cleanup had succeeded; remote verification later completed. |
 | Plan hash | `8705991150fa42dd87544fb753b1d9cec170e6ae8ac518b373ddfb5242558f70` |
 | Deployment slot | `462660101` |
 | Retained authority | `Cx92mzUNNr7mazZmuB5uTZtaYPNDFs6RwKVYF2hC7kH3` |
