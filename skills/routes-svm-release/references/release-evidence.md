@@ -14,6 +14,8 @@ These are pinned at the v3.1.0 source commit. Re-read the intended release ref b
 
 CLI examples use `gh workflow run --repo --ref -f`, `gh release view --repo --json`, and `gh release download --repo --dir`, checked against installed command help while drafting. This does not mean any workflow or release operation ran.
 
+Vendored external-program binaries under `bins/` are integration fixtures, not production release assets or proof of current mainnet identity. When compatibility depends on them, verify their upstream revision, digest, executable program ID and intended cluster against the target source and runtime evidence. Obtain provenance from recorded upstream or dump receipts; if absent, mark it unknown rather than infer it from the filename. [CCTP's mirror](https://github.com/eco/eco-routes-svm/blob/d22d794c2ced17ba790bdad8a04f3fba7d943086/programs/cctp-prover/src/cctp.rs) records Circle's interface revision and uses the same MessageTransmitter V2 ID on both clusters; a `mainnet` feature toggle alone cannot establish external-program identity. Follow the README's real LayerZero binary/path checks rather than treating mock integration coverage as mainnet proof.
+
 ## Ancestry is evidence, not a naming convention
 
 | Historical ref | Commit | Meaning |
