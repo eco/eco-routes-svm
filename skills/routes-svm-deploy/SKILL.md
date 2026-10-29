@@ -13,7 +13,20 @@ Default to read-only planning. A workflow dispatch is a write, even though its f
 
 Deployment approval is not finalization approval. Never finalize automatically. Keep upgrade authority until the test team approves and the user separately authorizes finalization. Never approve your own GitHub environment job or bypass required reviewers/self-review protection.
 
-For release creation or mixed-release artifact construction, use installed `eco-routes-svm-release` (repository source: `skills/routes-svm-release/SKILL.md`). For failed/partial runs, 502s or historical v3.1 evidence, read [recovery.md](references/recovery.md) before deciding to retry.
+For release creation or artifact construction, use installed `eco-routes-svm-release` (repository source: `skills/routes-svm-release/SKILL.md`).
+
+## Choose the path
+
+**Default: plan the requested programs from an existing release, then use the existing Deploy workflow only when authorized.** Sections 1–4 apply to ordinary full or subset deployments; selection is not specific to one program or a mixed release.
+
+| Situation | Path |
+|---|---|
+| First deployment of an ordinary release, or an authorized subset | Use the full manifest, explicit program selection, required configuration inputs and current plan; retain the buffer-scope gate below. |
+| Policy-bearing release | Apply the published policy; selected programs may write, while unselected dependencies remain read-only. Never infer the permitted set from a past release. |
+| Interrupted run, IDL failure, verification error or uncertain transaction | Read [recovery.md](references/recovery.md), reconcile each completed/remaining operation, then choose the smallest supported authorized recovery. Do not default to a full re-dispatch. |
+| Unsupported state or compatibility mismatch | Gather current source/asset/chain evidence, report the exact blocker and propose a scoped plan. Continue read-only preparation; do not broaden selection, change identities or invent an upgrade/rollback route. |
+
+Historical receipts in the recovery reference are examples, not current addresses, costs, completion status or authority evidence.
 
 ## 1. Establish immutable identity
 
@@ -30,9 +43,7 @@ gh release download "v${VERSION}" --repo eco/eco-routes-svm --dir release \
 
 Check selected `.so` filenames, IDL `.address`, manifest address and deploy-tag `declare_id!` agree (`scripts/deploy-step.sh check` performs those checks with `ASSETS`, `CLUSTER`, `PROGRAMS`). Hash the downloaded bytes and retain the release asset inventory. Do not rebuild or substitute local `anchor build` output. Verification must use the release's digest-pinned `VERIFY_IMAGE` and mainnet feature where applicable.
 
-Use explicit names such as `intent_chainer`, not directory names such as `intent-chainer`. Reject unknown, empty, duplicate or policy-forbidden names. Avoid default `all`: mixed releases deliberately block inherited programs. Keep the **full** manifest for transitive dependency validation, but derive keys and write only selected programs. Unselected dependencies must already have matching deployed bytecode; they receive no deploy/init/reserve/IDL/verify writes.
-
-Chainer's Cargo dependency on Portal conservatively affects derivation/finalization ordering. It accepts the Portal address through committed `Order.portal` with runtime checks; do not claim its binary hardcodes the historical Portal ID.
+Use comma-separated lib names from the manifest, not hyphenated directory names. Reject unknown, empty, duplicate or policy-forbidden names. Select exactly the authorized set; `all` is supported for ordinary releases but includes the full-manifest buffer-cleanup scope described below, and mixed policy can reject it. Keep the **full** manifest for transitive dependency validation, but derive keys and write only selected programs. Unselected dependencies must already have matching deployed bytecode; they receive no deploy/init/reserve/IDL/verify writes.
 
 ## 2. Review environment and keys without exposing them
 
@@ -85,7 +96,7 @@ Before handoff or temporary-directory cleanup, copy the redacted receipts to the
 )
 ```
 
-`RPC_URL` is the CLI environment input. For a chainer-only plan, no unrelated config inputs are needed. For other selected programs, supply reviewed inputs through CLI flags or environment: `HYPER_SENDERS`, `POLYMER_EMITTERS`, `LAYERZERO`, `CCTP`, `HYPER_RESERVE_LAMPORTS`, `LAYERZERO_RESERVE_LAMPORTS`, `COMPUTE_UNIT_PRICE`. Read the tag's README deployment input table and `packages/deployer/src/inputs.rs` for exact JSON; never use example peer/worker addresses as real configuration. Aggregator membership comes from the release, not an operator override.
+Programs without config initialization need no unrelated configuration inputs. For selected programs that require them, supply reviewed inputs through CLI flags or environment: `HYPER_SENDERS`, `POLYMER_EMITTERS`, `LAYERZERO`, `CCTP`, `HYPER_RESERVE_LAMPORTS`, `LAYERZERO_RESERVE_LAMPORTS`, `COMPUTE_UNIT_PRICE`. Read the tag's README deployment input table and `packages/deployer/src/inputs.rs` for exact JSON; never use example peer/worker addresses as real configuration. Aggregator membership comes from the release, not an operator override.
 
 Review normalized inputs, selected set, policy, dependency closure, genesis hash, deployer, observed bytecode/authority/configs, actions, funding and `plan_hash`:
 
@@ -110,12 +121,12 @@ Use the current plan estimate, not historical SOL spent. It includes program ren
 Read current `deploy.yml` and the release-tag script before dispatch. The dispatch workflow ref and checked-out deploy tag are different identities: choose an allowed, reviewed workflow ref, while the workflow checks out `deploy/v${VERSION}`. Confirm no same-cluster lifecycle run overlaps. One concurrency group covers Deploy/Finalize/Close; newer waiting runs can cancel older waiting runs.
 A dispatch used only to inspect the plan must be rejected/cancelled at its pending environment gate by an authorized operator. Leaving it waiting retains the shared cluster concurrency slot and can block other lifecycle runs. Prefer local read-only planning when no execution is authorized.
 
-Only when dispatch is authorized, a chainer-only request has this form (never run as a readiness check):
+Only when dispatch is authorized, use the reviewed allowed `WORKFLOW_REF`, version, cluster and exact `PROGRAMS` selection. Add any required program-specific workflow inputs from the reviewed configuration; do not dispatch with missing setup inputs. The common dispatch arguments are:
 
 ```bash
 # WRITE: creates a deployment workflow run; requires explicit scope authorization.
-gh workflow run deploy.yml --repo eco/eco-routes-svm --ref main \
-  -f version="$VERSION" -f cluster="$CLUSTER" -f programs=intent_chainer \
+gh workflow run deploy.yml --repo eco/eco-routes-svm --ref "$WORKFLOW_REF" \
+  -f version="$VERSION" -f cluster="$CLUSTER" -f programs="$PROGRAMS" \
   -f compute_unit_price="$COMPUTE_UNIT_PRICE"
 ```
 
