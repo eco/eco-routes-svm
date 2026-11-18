@@ -19,7 +19,7 @@
 - hyper_prover senders: 0xabcdef0123456789abcdef0123456789abcdef01, 0x1111111111111111111111111111111111111111
 - hyper_prover reserve lamports: 1000000
 - polymer_prover emitters: 0x1111111111111111111111111111111111111111
-- aggregator_prover members: hyper_prover, polymer_prover, layerzero_prover, cctp_prover
+- aggregator_prover members: hyper_prover, layerzero_prover, cctp_prover
 - layerzero_prover reserve lamports: 2000000
 - layerzero_prover peer eid 30184: 0xabcdef0123456789abcdef0123456789abcdef01, chain id 30184
   - send: confirmations 15, required DVNs [11111111111111111111111111111112], optional DVNs [] (threshold 0, count 255)

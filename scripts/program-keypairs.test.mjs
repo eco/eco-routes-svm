@@ -34,7 +34,7 @@ const SEED = "ab".repeat(32);
 const PORTAL_ADDRESS = "Ecoi8woUrmkLq8PjpPFVF2k7xALmeKnAvWz2qVCkW1d7";
 // Pins the seed framing: changing it re-keys every program at the next release.
 const PORTAL_SEED = "5d57eacc653da7bcfd39a637cb2235dd88de5628abd089d697330c942bb16355";
-const AGGREGATOR_SEED = "f78b4e3957c81fcda3f631607cb21aaa1d45b2a85f5e1f2647f523dee5502b89";
+const AGGREGATOR_SEED = "09570d09be49ab11820a8da74d7843323651d91d02a9206b307c95da17752fd9";
 const PROGRAMS = [
   "aggregator_prover",
   "portal",
@@ -61,7 +61,7 @@ const CARGO_DEPENDENCIES = {
   eco_svm_std: [],
 };
 const DEPENDENCIES = {
-  aggregator_prover: ["cctp_prover", "hyper_prover", "layerzero_prover", "polymer_prover", "portal"],
+  aggregator_prover: ["cctp_prover", "hyper_prover", "layerzero_prover", "portal"],
   portal: [],
   intent_chainer: ["portal"],
   hyper_prover: ["portal"],
@@ -150,7 +150,7 @@ test("dependencies reject unknown programs and an aggregator without its members
   assert.throws(() => dependencies(metadata(), [...PROGRAMS, "unknown"]), /not a workspace package/);
   assert.throws(
     () => dependencies(metadata(), ["aggregator_prover", "portal"]),
-    /aggregator_prover is released without its members: hyper_prover, polymer_prover, layerzero_prover, cctp_prover/,
+    /aggregator_prover is released without its members: hyper_prover, layerzero_prover, cctp_prover/,
   );
 });
 
@@ -245,8 +245,8 @@ test("a seed moves with its own or a dependency's bytecode on either cluster", (
     moved(programSeeds({ overrides: { portal: { devnet: Buffer.from("changed") } } })),
     PROGRAMS.filter((program) => program !== "proof_helper").toSorted(),
   );
+  // Polymer is not an aggregator member, so its move leaves the aggregator in place.
   assert.deepEqual(moved(programSeeds({ overrides: { polymer_prover: { mainnet: Buffer.from("changed") } } })), [
-    "aggregator_prover",
     "polymer_prover",
   ]);
   assert.deepEqual(moved(programSeeds({ overrides: { flash_fulfiller: { mainnet: Buffer.from("changed") } } })), [
@@ -276,7 +276,7 @@ test("a salt moves its program and everything depending on it", () => {
     moved(programSeeds({ salts: { portal: 1 } })),
     PROGRAMS.filter((program) => program !== "proof_helper").toSorted(),
   );
-  assert.deepEqual(moved(programSeeds({ salts: { polymer_prover: 1 } })), ["aggregator_prover", "polymer_prover"]);
+  assert.deepEqual(moved(programSeeds({ salts: { polymer_prover: 1 } })), ["polymer_prover"]);
   assert.deepEqual(moved(programSeeds({ salts: { intent_chainer: 1 } })), ["intent_chainer"]);
   [-1, 1.5, "1"].forEach((salt) =>
     assert.throws(() => programSeeds({ salts: { portal: salt } }), /must be a non-negative integer/),
