@@ -86,7 +86,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("EcoiBpweBgv8guGqQd5FwERWnWBM9Knmg3NwB3PCAPj6");
+declare_id!("EcoSEcjWKSEG5NqLW3mpzhC3kP4xWNkUEaywJihB5E84");
 
 pub mod events;
 pub mod instructions;
