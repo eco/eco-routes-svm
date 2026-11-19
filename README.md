@@ -448,6 +448,10 @@ Clients must still fit the whole transaction into Solana's transaction limits;
 this path removes a CPI frame, and does not provide an intent buffer. The existing
 `flash_fulfill` and buffer instructions remain available without changes.
 
+The guard's match is compiled in from the portal crate; see
+[flash-fulfiller / portal ABI coupling](CLAUDE.md#flash-fulfiller--portal-abi-coupling)
+before changing portal's `Fulfill` layout.
+
 #### Key Accounts:
 - `FlashFulfillIntentAccount` - Optional buffer holding the route + reward for hash-based invocation
 - `flash_vault` - Program-owned PDA that holds rewards and acts as solver/claimant during the atomic flow

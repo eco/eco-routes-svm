@@ -194,6 +194,22 @@ Polymer is pull-based — the bridge never calls us:
 
 In `flash_fulfill`, `strip_call_accounts` truncates each call's Borsh tail in-place rather than deserialize/reserialize — the bump allocator never frees, so a round-trip retains ~3× the call size and pushes deep CPI chains into OOM.
 
+### flash-fulfiller / portal ABI coupling
+
+`paired_fulfill.rs` matches the paired instruction against `portal::ID`,
+`portal::instruction::Fulfill::DISCRIMINATOR`, the intent hash at `data[8..40]`, and
+account indices 1 (`solver`) and 3 (`fulfill_marker`). All four are compiled in from the
+portal crate, and `fulfill_abi_pins_hash_offset_and_account_indices` checks them against
+the same source tree, not against a deployed portal. Release derivation keeps the two
+programs together: flash-fulfiller depends on portal through Cargo, so any change to
+portal's bytecode moves flash-fulfiller's seed and address as well, and the release
+rebuilds it from the same tree (`scripts/program-keypairs.test.mjs`: "dependencies match
+the workspace", "a seed moves with its own or a dependency's bytecode"). The case nothing
+catches is an in-place portal upgrade that reorders `FulfillArgs` or the `Fulfill`
+accounts, which the redeploy rule above forbids: it would brick `prove_and_withdraw`
+(every call returns `MissingPairedFulfill`) or, if account 1 stopped being the solver
+signer, match a weaker shape than intended.
+
 ## Integration tests (`integration-tests/`)
 
 Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_token_account`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
