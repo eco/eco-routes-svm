@@ -1696,6 +1696,7 @@ dependencies = [
  "eco-svm-std",
  "getrandom 0.2.17",
  "portal",
+ "solana-instructions-sysvar 3.0.0",
 ]
 
 [[package]]
