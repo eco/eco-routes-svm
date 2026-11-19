@@ -67,7 +67,8 @@ cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.tom
 If proof-helper / pay_for_gas integration tests fail with a missing `.so`, run that command.
 
 `cpi-relay` is another non-Anchor test program, used to exercise transaction
-introspection and the five-frame CPI limit with real SBF calls. Before tests or clippy:
+introspection and the five-frame CPI limit with real SBF calls, and as the engine frame
+in front of the real venues in the split venue tests. Before tests or clippy:
 
 ```bash
 cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/cpi-relay/Cargo.toml --sbf-out-dir target/deploy
@@ -215,6 +216,13 @@ signer, match a weaker shape than intended.
 Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_token_account`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
 
 Per-program contexts live next to `mod.rs`: `portal_context.rs`, `hyper_prover_context.rs`, `local_prover_context.rs`, `aggregator_prover_context.rs`, `flash_fulfiller_context.rs`, `hyperlane_context.rs`, `proof_helper_context.rs`, `polymer_prover_context.rs`, `layerzero_prover_context.rs`, `cctp_prover_context.rs`. They host the per-instruction builders that integration tests call.
+
+The split-path venue tests in `prove_and_withdraw.rs` run real mainnet venue programs
+against dumped state from `tests/fixtures/split-venues/`, through
+`common/split_venue_context.rs`. Helium's binaries (Apache-2.0) are vendored in `bins/`;
+stabble's and Meteora's grant no redistribution license, so their two tests are
+`#[ignore]`d and need `SPLIT_VENUE_PROGRAMS` (the fixtures README has the dump commands,
+and the `Split venue drift` workflow runs them weekly).
 
 Event assertions: `contains_event` (top-level `Program data:` log), `contains_cpi_event` (inner-instruction event_cpi), `contains_event_and_msg`. Error assertions: `is_error(SomeError::Variant)` matches `InstructionError::Custom`.
 

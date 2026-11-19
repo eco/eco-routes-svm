@@ -444,9 +444,27 @@ rolls back both instructions. Portal validates the full route and its execution.
 The guard does not require adjacency or constrain fulfill's claimant to the solver;
 the new proof's claimant and reward recipient are always the solver.
 
-Clients must still fit the whole transaction into Solana's transaction limits;
-this path removes a CPI frame, and does not provide an intent buffer. The existing
-`flash_fulfill` and buffer instructions remain available without changes.
+Withdraw leaves the proof open, as on every path. The payer reclaims its rent
+(1,224,960 lamports) with `portal.close_proof` and the local-prover cleanup tail
+`[proof, payer]`, the payer signing. After withdrawal the call is permissionless and
+the rent goes to whichever payer signs it, so send it right after settlement; it adds
+217 bytes, more than the settlement packet's headroom below, so it needs its own
+transaction.
+
+Clients must fit the whole transaction into one 1,232-byte v0 packet and 64 account
+locks. The venue tests in `prove_and_withdraw.rs` measure that client shape (compute
+limit and price, heap frame, creation of the solver's reward ATA and the recipient's
+output ATA, `prove_and_withdraw`, then `fulfill` with one venue call behind a
+one-frame engine stand-in) against real Helium treasury, stabble stable-swap and
+Meteora DAMM v1 binaries: 1,192, 1,199 and 1,204 bytes with 31, 35 and 38 account
+locks, each under the 600,000 compute units the transaction requests (355,000–425,000
+in our runs; PDA bump searches vary it). Their lookup table holds only what a solver
+can keep before an intent exists: programs, PDAs, mints, venue accounts and the
+solver's own reward ATA. An account left static costs 31 bytes more than one loaded
+through the table, against 28–40 bytes of headroom; that headroom is also all the room
+for an engine's own accounts and data beyond the stand-in. This path removes a CPI
+frame and does not provide an intent buffer; the existing `flash_fulfill` and buffer
+instructions remain available without changes.
 
 The guard's match is compiled in from the portal crate; see
 [flash-fulfiller / portal ABI coupling](CLAUDE.md#flash-fulfiller--portal-abi-coupling)

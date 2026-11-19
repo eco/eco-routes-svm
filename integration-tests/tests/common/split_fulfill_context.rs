@@ -21,8 +21,11 @@ use solana_sdk::transaction::VersionedTransaction;
 use super::Context;
 
 impl Context {
-    /// Model a pre-existing lookup table so the signed split transaction really
-    /// fits the packet limit. LiteSVM also exercises sysvar lookup resolution.
+    /// Builds the guard tests' signed v0 transactions against an idealized
+    /// table holding every account they touch, intent-specific ones included,
+    /// which also exercises sysvar lookup resolution. Its size check covers
+    /// only these synthetic routes; the venue tests measure the client-shaped
+    /// packet (`split_venue_context.rs`).
     pub fn build_split_fulfill_transaction(
         &mut self,
         instructions: &[Instruction],

@@ -11,10 +11,18 @@ use portal::state::{executor_pda, vault_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{
     intent_hash, Call, Calldata, CalldataWithAccounts, Reward, Route, TokenAmount,
 };
+use solana_packet::PACKET_DATA_SIZE;
 use solana_sdk::instruction::{Instruction, InstructionError};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::TransactionError;
+
+use crate::common::split_venue_context::{
+    sha256_hex, spl_ata, split_venue_lookup_addresses, venue_programs_dir, VenueRoute,
+    HELIUM_CIRCUIT_BREAKER_BIN, HELIUM_CIRCUIT_BREAKER_SHA256, HELIUM_TREASURY_MANAGEMENT_BIN,
+    HELIUM_TREASURY_MANAGEMENT_SHA256, MAX_TX_ACCOUNT_LOCKS, SPLIT_VENUE_COMPUTE_LIMIT,
+    VENUE_SNAPSHOT_UNIX_TIMESTAMP,
+};
 
 pub mod common;
 
@@ -534,4 +542,255 @@ fn route_reaches_spl_token_at_depth_five_and_old_shape_hits_call_depth() {
     );
     assert_eq!(ctx.token_balance(&executor_ata), 0);
     assert_settled(&ctx, &route, &reward);
+}
+
+/// One venue route's intent. The relay stands in for the engine frame, so the
+/// old flash shape puts SPL Token at depth 6. Only the venue's accounts are
+/// committed: the relay forwards every account it receives to the venue, so
+/// its own program account rides as an uncommitted trailing fulfill account.
+fn venue_intent(
+    ctx: &mut common::Context,
+    venue: &VenueRoute,
+    engine: &Instruction,
+) -> (Route, Reward, Vec<AccountMeta>) {
+    let executor = executor_pda().0;
+    // Portal signs for the executor; the committed meta records no signature.
+    let committed: Vec<_> = engine
+        .accounts
+        .iter()
+        .cloned()
+        .map(|mut meta| {
+            meta.is_signer &= meta.pubkey != executor;
+            meta
+        })
+        .collect();
+    let calldata = Calldata {
+        data: engine.data.clone(),
+        account_count: committed.len() as u8,
+    };
+    let now = ctx.now();
+    let route = Route {
+        salt: rand::random::<[u8; 32]>().into(),
+        deadline: now + 1800,
+        portal: portal::ID.to_bytes().into(),
+        native_amount: 0,
+        tokens: vec![TokenAmount {
+            token: venue.input_mint,
+            amount: venue.amount_in,
+        }],
+        calls: vec![Call {
+            target: engine.program_id.to_bytes().into(),
+            data: borsh::to_vec(&CalldataWithAccounts::new(calldata, committed.clone()).unwrap())
+                .unwrap(),
+        }],
+    };
+    // The reward funds the route and leaves the solver a 10% spread.
+    let reward = Reward {
+        deadline: now + 3600,
+        creator: ctx.creator.pubkey(),
+        prover: local_prover::ID,
+        native_amount: 0,
+        tokens: vec![TokenAmount {
+            token: venue.input_mint,
+            amount: venue.amount_in + venue.amount_in / 10,
+        }],
+    };
+    let funder = ctx.funder.pubkey();
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    ctx.airdrop(&funder, common::sol_amount(1.0)).unwrap();
+    ctx.set_token_balance(&funder, &venue.input_mint, reward.tokens[0].amount);
+    let transfers = ctx.token_transfer_metas(funder, vault, venue.input_mint);
+    ctx.portal()
+        .fund_intent(
+            CHAIN_ID,
+            reward.clone(),
+            vault,
+            route.hash(),
+            false,
+            transfers,
+        )
+        .unwrap();
+    let mut call_accounts = committed;
+    call_accounts.push(AccountMeta::new_readonly(engine.program_id, false));
+    (route, reward, call_accounts)
+}
+
+/// The same committed route through real venue and sub-program binaries: the
+/// old flash shape fails with CallDepth; the split pair settles it inside one
+/// client-shaped v0 packet that creates the solver's and the recipient's ATAs
+/// and resolves a lookup table created before it; a second transaction then
+/// closes the proof.
+fn split_venue_route_fits_one_packet_and_delivers(
+    build: impl FnOnce(&mut common::Context, &Pubkey) -> VenueRoute,
+) {
+    let mut ctx = common::Context::default().with_five_frame_limit();
+    ctx.warp_to_timestamp(VENUE_SNAPSHOT_UNIX_TIMESTAMP);
+    ctx.load_venue_mints();
+    let recipient = Pubkey::new_unique();
+    let venue = build(&mut ctx, &recipient);
+    let engine = relay(&mut ctx, venue.instruction.clone());
+    let (route, reward, call_accounts) = venue_intent(&mut ctx, &venue, &engine);
+    let solver = ctx.solver.pubkey();
+    let solver_ata = spl_ata(&solver, &venue.input_mint);
+    let recipient_ata = spl_ata(&recipient, &venue.output_mint);
+
+    // flash_fulfill[1] -> portal[2] -> engine[3] -> venue[4] -> sub-program[5]
+    // -> SPL Token[6]. The venue reaches its deepest CPI only with an
+    // initialized output account, so this attempt gets one.
+    ctx.set_token_balance(&recipient, &venue.output_mint, 0);
+    let failure = ctx
+        .flash_fulfiller()
+        .flash_fulfill(
+            FlashFulfillIntent::Intent {
+                route: route.clone(),
+                reward: reward.clone(),
+            },
+            None,
+            &route,
+            &reward,
+            solver,
+            vec![AccountMeta::new(solver_ata, false)],
+            call_accounts.clone(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(2, InstructionError::CallDepth)
+    );
+    assert_unsettled(&ctx, &route, &reward);
+    // The client transaction creates the recipient's ATA itself.
+    ctx.set_account(recipient_ata, solana_sdk::account::Account::default())
+        .unwrap();
+
+    let table = ctx.create_venue_lookup_table(split_venue_lookup_addresses(
+        &venue,
+        &engine.program_id,
+        &solver,
+    ));
+    let intent = hash(&route, &reward);
+    let vault = vault_pda(&intent).0;
+    for address in [
+        ctx.payer.pubkey(),
+        solver,
+        recipient,
+        recipient_ata,
+        vault,
+        spl_ata(&vault, &venue.input_mint),
+        Proof::pda(&intent, &reward.prover).0,
+        WithdrawnMarker::pda(&intent).0,
+        FulfillMarker::pda(&intent).0,
+    ] {
+        assert!(!table.addresses.contains(&address), "{address} in table");
+    }
+    for ata in [solver_ata, recipient_ata] {
+        assert!(ctx.get_account(&ata).is_none(), "{ata} exists");
+    }
+    let pair = [
+        ctx.build_prove_and_withdraw_instruction(route.hash(), &reward),
+        ctx.build_paired_fulfill_instruction(&route, &reward, call_accounts),
+    ];
+    // Proof cleanup cannot ride along: it would overflow the packet.
+    let payer = ctx.payer.pubkey();
+    let cleanup = ctx.portal().close_proof_instruction(
+        CHAIN_ID,
+        route.hash(),
+        reward.clone(),
+        vec![
+            AccountMeta::new(Proof::pda(&intent, &reward.prover).0, false),
+            AccountMeta::new(payer, true),
+        ],
+    );
+    let with_cleanup = ctx.split_venue_transaction(
+        &venue,
+        &recipient,
+        &[pair[0].clone(), pair[1].clone(), cleanup],
+        table.clone(),
+    );
+    let measured = ctx.split_venue_transaction(&venue, &recipient, &pair, table);
+    println!(
+        "{}: {} bytes ({} headroom of {PACKET_DATA_SIZE}), {} account locks; {} bytes with \
+         close_proof",
+        venue.name,
+        measured.wire_bytes,
+        PACKET_DATA_SIZE as i64 - measured.wire_bytes as i64,
+        measured.account_locks,
+        with_cleanup.wire_bytes,
+    );
+    assert!(measured.wire_bytes <= PACKET_DATA_SIZE);
+    assert!(measured.account_locks <= MAX_TX_ACCOUNT_LOCKS);
+    assert!(with_cleanup.wire_bytes > PACKET_DATA_SIZE);
+
+    let result = ctx.send_transaction(measured.transaction).unwrap();
+
+    println!(
+        "{}: {} CU of {SPLIT_VENUE_COMPUTE_LIMIT}",
+        venue.name, result.compute_units_consumed
+    );
+    assert!(result.compute_units_consumed < u64::from(SPLIT_VENUE_COMPUTE_LIMIT));
+    assert!(result
+        .logs
+        .contains(&format!("Program {} invoke [4]", venue.sub_program)));
+    assert!(result
+        .logs
+        .contains(&format!("Program {} invoke [5]", spl_token::ID)));
+    let delivered = ctx.token_balance(&recipient_ata);
+    match venue.exact_out {
+        Some(exact) => assert_eq!(delivered, exact),
+        None => assert!(
+            delivered >= venue.min_out,
+            "{delivered} < {}",
+            venue.min_out
+        ),
+    }
+    assert_eq!(
+        ctx.token_balance(&solver_ata),
+        reward.tokens[0].amount - venue.amount_in
+    );
+    assert_eq!(
+        ctx.token_balance(&spl_ata(&executor_pda().0, &venue.input_mint)),
+        0
+    );
+    assert_settled(&ctx, &route, &reward);
+
+    // The payer reclaims the proof's rent in its own transaction.
+    let before = ctx.balance(&payer);
+    close_proof(&mut ctx, &route, &reward);
+    assert!(ctx.balance(&payer) > before);
+}
+
+#[test]
+fn helium_treasury_route_fits_one_packet_and_settles_only_through_split() {
+    split_venue_route_fits_one_packet_and_delivers(|ctx, recipient| {
+        ctx.helium_treasury_route(recipient)
+    });
+}
+
+#[test]
+#[ignore = "needs SPLIT_VENUE_PROGRAMS; see tests/fixtures/split-venues/README.md"]
+fn stabble_stable_swap_route_fits_one_packet_and_settles_only_through_split() {
+    let programs = venue_programs_dir();
+    split_venue_route_fits_one_packet_and_delivers(|ctx, recipient| {
+        ctx.stabble_stable_swap_route(&programs, recipient)
+    });
+}
+
+#[test]
+#[ignore = "needs SPLIT_VENUE_PROGRAMS; see tests/fixtures/split-venues/README.md"]
+fn meteora_damm_v1_stable_route_fits_one_packet_and_settles_only_through_split() {
+    let programs = venue_programs_dir();
+    split_venue_route_fits_one_packet_and_delivers(|ctx, recipient| {
+        ctx.meteora_damm_v1_stable_route(&programs, recipient)
+    });
+}
+
+#[test]
+fn vendored_helium_binaries_match_their_dump_receipts() {
+    assert_eq!(
+        sha256_hex(HELIUM_TREASURY_MANAGEMENT_BIN),
+        HELIUM_TREASURY_MANAGEMENT_SHA256
+    );
+    assert_eq!(
+        sha256_hex(HELIUM_CIRCUIT_BREAKER_BIN),
+        HELIUM_CIRCUIT_BREAKER_SHA256
+    );
 }
