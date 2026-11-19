@@ -28,7 +28,9 @@ const CLUSTERS = ["mainnet", "devnet"];
 // (`packages/deployer`) derives the same members from the release; both must equal the set
 // passed to the aggregator's `init`.
 const AGGREGATOR = "aggregator_prover";
-const AGGREGATOR_MEMBERS = ["hyper_prover", "polymer_prover", "layerzero_prover", "cctp_prover"];
+// Polymer is deliberately not a member: the aggregator is a 1-of-N union, so its floor is its
+// weakest member, and Polymer's proof check rests on one immutable signer.
+const AGGREGATOR_MEMBERS = ["hyper_prover", "layerzero_prover", "cctp_prover"];
 // Changing the domain re-keys every program; add a new version instead of editing it.
 const DOMAIN = "eco-routes-svm/program-keypair/v1";
 const MIN_SECRET_BYTES = 32;

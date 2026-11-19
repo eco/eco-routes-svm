@@ -516,7 +516,6 @@ mod tests {
                 pda(aggregator_prover::state::CONFIG_SEED, AGGREGATOR_PROVER),
                 system,
                 release_address(HYPER_PROVER),
-                release_address(POLYMER_PROVER),
                 release_address(LAYERZERO_PROVER),
                 release_address(CCTP_PROVER),
             ]

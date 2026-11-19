@@ -23,8 +23,7 @@ pub const AGGREGATOR_PROVER: &str = "aggregator_prover";
 pub const LAYERZERO_PROVER: &str = "layerzero_prover";
 pub const CCTP_PROVER: &str = "cctp_prover";
 /// Mirrors `AGGREGATOR_MEMBERS` in `scripts/program-keypairs.mjs`; the order is the on-chain config order.
-pub const AGGREGATOR_MEMBERS: [&str; 4] =
-    [HYPER_PROVER, POLYMER_PROVER, LAYERZERO_PROVER, CCTP_PROVER];
+pub const AGGREGATOR_MEMBERS: [&str; 3] = [HYPER_PROVER, LAYERZERO_PROVER, CCTP_PROVER];
 pub const PROGRAMS_WITH_INIT: [&str; 5] = [
     HYPER_PROVER,
     POLYMER_PROVER,
