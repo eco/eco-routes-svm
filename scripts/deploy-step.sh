@@ -14,13 +14,14 @@ readonly REPOSITORY_URL="https://github.com/eco/eco-routes-svm"
 readonly MAX_SIGN_ATTEMPTS=20
 
 redact() {
+  # Flush job receipts to the workflow log even if polling is interrupted.
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     if [ -n "${RPC_URL:-}" ]; then
       line=${line//"$RPC_URL"/<redacted-url>}
     fi
     printf '%s\n' "$line"
-  done | sed -E "s#(https?|wss?)://[^[:space:]()\\\\\"'<>]*#<redacted-url>#g"
+  done | sed -u -E "s#(https?|wss?)://[^[:space:]()\\\\\"'<>]*#<redacted-url>#g"
 }
 
 program_address() {
@@ -143,11 +144,15 @@ idl() {
 
 verify_remote() {
   local address=$1 uploader=$2 binary=$3
-  local output status=1 job_id expected_hash attempt
+  local output status=1 job_id expected_hash attempt line
 
   # Stream the receipt into the redacted workflow log before the CLI starts polling.
   output=$(solana-verify remote submit-job -u "$RPC_URL" \
-    --program-id "$address" --uploader "$uploader" 2>&1 | tee /dev/fd/3) || status=$?
+    --program-id "$address" --uploader "$uploader" 2>&1 |
+    while IFS= read -r line || [ -n "$line" ]; do
+      printf '%s\n' "$line"
+      printf '%s\n' "$line" >&3
+    done) || status=$?
 
   # Only a receipt from this submission proves acceptance; never use a second POST as a probe.
   job_id=$(sed -nE 's/^Verification request sent with request id: ([[:xdigit:]-]{36})$/\1/p' <<< "$output")
@@ -169,12 +174,9 @@ verify_remote() {
     echo "$address: remote job $job_id hashes do not match the release" >&2
     return 1
   fi
-  if grep -qxF "Program $address has not been verified. ❌" <<< "$output"; then
-    return 1
-  fi
-
+  # The CLI prints the same negative result for Failed and Unknown.
   for attempt in 1 2 3 4; do
-    if output=$(timeout 15s solana-verify remote get-job --job-id "$job_id" 2>&1); then
+    if output=$(timeout --signal=KILL 15s solana-verify remote get-job --job-id "$job_id" 2>&1); then
       printf '%s\n' "$output"
       if [[ ${output%%$'\n'*} == 'Status: Completed' ]]; then
         if [[ $(grep '^On-chain Hash: ' <<< "$output") == "On-chain Hash: $expected_hash" &&
@@ -188,6 +190,7 @@ verify_remote() {
         return 1
       fi
     else
+      printf '%s: remote job %s lookup %s failed (exit %s)\n' "$address" "$job_id" "$attempt" "$?" >&2
       printf '%s\n' "$output" >&2
     fi
     if [ "$attempt" != 4 ]; then

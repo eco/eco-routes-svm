@@ -500,21 +500,23 @@ test("a remote verification needs a receipt and matching release hashes, even on
   const hash = "a".repeat(64);
   const other = "b".repeat(64);
   const cases = [
-    [true, 1, "Completed", hash, 0, true],
-    [true, 1, "Completed", other, 1, true],
-    [true, 1, "Failed", hash, 1, true],
-    [true, 1, "InProgress", hash, 1, true],
-    [false, 1, "Unknown", hash, 1, false],
-    [true, 0, "Completed", hash, 0, false],
-    [true, 0, "Completed", other, 1, false],
-    [true, 0, "Failed", hash, 1, false],
-    [false, 0, "Conflict", hash, 1, false],
+    ["lost poll", "Completed", hash, 0, true],
+    ["lost poll", "Completed", other, 1, true],
+    ["lost poll", "Failed", hash, 1, true],
+    ["lost poll", "InProgress", hash, 1, true],
+    ["no receipt", "Unknown", hash, 1, false],
+    ["verified", "Completed", hash, 0, false],
+    ["verified", "Completed", other, 1, false],
+    ["not verified", "Failed", hash, 1, true],
+    ["not verified", "Completed", hash, 0, true],
+    ["conflict", "Unknown", hash, 1, false],
   ];
 
-  for (const [accepted, submitStatus, state, remoteHash, status, polled] of cases) {
+  for (const [submission, state, remoteHash, status, polled] of cases) {
     const bin = mkdtempSync(join(tmpdir(), "verify-recovery-"));
     try {
       const calls = join(bin, "calls");
+      const accepted = submission !== "no receipt" && submission !== "conflict";
       const stub = (name, body) => writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
       stub("deployer", "echo aggregator_prover");
       stub("solana-keygen", "echo Deployer");
@@ -524,24 +526,28 @@ case "$1 $2" in
   "verify-from-repo -u") echo 'Program hash matches' ;;
   "remote submit-job")
     ${accepted ? `echo 'Verification request sent with request id: ${job}'` : ":"}
-    ${submitStatus ? "echo 'HTTP 502' >&2" : !accepted ? "echo 'Error: job already exists' >&2" : state === "Completed"
+    ${submission === "lost poll" || submission === "no receipt" ? "echo 'HTTP 502' >&2; exit 1" : ":"}
+    ${submission === "conflict" ? "echo 'Error: job already exists' >&2" : submission === "verified"
       ? `printf '%s\\n' 'Program Aggregator has been verified. ✅' 'On Chain Hash: ${remoteHash}' 'Executable Hash: ${remoteHash}'`
-      : "echo 'Program Aggregator has not been verified. ❌'"}
-    exit ${submitStatus} ;;
+      : "echo 'Program Aggregator has not been verified. ❌'"} ;;
   "remote get-job")
     printf '%s\\n' 'Status: ${state}' 'On-chain Hash: ${hash}' 'Executable Hash: ${remoteHash}' ;;
   get-executable-hash\\ *) echo '${hash}' ;;
   *) exit 2 ;;
 esac`);
       writeFileSync(join(bin, "program-ids.json"), '{"aggregator_prover":{"address":"Aggregator"}}');
-      const result = spawnSync("bash", [script, "verify"], {
+      const log = join(bin, "verify.log");
+      const result = spawnSync("bash", ["-c", 'bash "$1" verify >"$2"', "verify", script, log], {
         encoding: "utf8",
         env: {
           ...process.env, PATH: `${bin}:${process.env.PATH}`, ASSETS: bin, PLAN: "plan.json",
           KEYPAIR: "key.json", RPC_URL: "http://rpc", CLUSTER: "mainnet", VERIFY_IMAGE: "image",
         },
       });
-      assert.equal(result.status, status, `${state}: ${result.stdout}${result.stderr}`);
+      const output = readFileSync(log, "utf8");
+      assert.equal(result.status, status, `${submission}/${state}: ${output}${result.stderr}`);
+      assert.match(output, /^Program hash matches$/m);
+      if (accepted) assert.ok(output.includes(`Verification request sent with request id: ${job}`));
       const invoked = readFileSync(calls, "utf8");
       assert.equal(invoked.match(/^verify-from-repo /gm)?.length, 1);
       assert.equal(invoked.match(/^remote submit-job /gm)?.length, 1);
