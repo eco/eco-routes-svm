@@ -1,0 +1,68 @@
+name: Split venue drift
+
+# Non-blocking canary for the split-fulfillment venue tests in
+# integration-tests/tests/prove_and_withdraw.rs. stabble and Meteora grant no
+# license to redistribute their programs, so those binaries are not vendored: this
+# job dumps what mainnet runs now and replays the committed venue state through the
+# #[ignore]d tests. Kept off `pull_request` on purpose: a venue upgrade must never
+# block unrelated PRs. A failure here means "re-check the venue fixtures"
+# (integration-tests/tests/fixtures/split-venues/README.md), not "the build is
+# broken". The vendored Helium route runs in PR checks.
+
+on:
+  schedule:
+    - cron: "41 6 * * 1" # weekly, Monday 06:41 UTC
+  workflow_dispatch:
+
+env:
+  RUST_VERSION: "1.97.1"
+  ANCHOR_VERSION: "1.1.2"
+  # Exact Solana CLI version, pinned rather than tracking "stable"; see pr-checks.yml.
+  SOLANA_VERSION: "4.1.1"
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: split-venue-drift
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+
+      # The test crate `include_bytes!`s every program's .so, so the whole localnet set
+      # must exist even though this job only exercises the split path.
+      - name: Build Anchor programs
+        run: anchor build
+
+      - name: Build non-Anchor test programs
+        run: |
+          cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
+          cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+          cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
+          cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/cpi-relay/Cargo.toml --sbf-out-dir target/deploy
+
+      - name: Dump the venue programs mainnet runs now
+        run: |
+          dir="$RUNNER_TEMP/split-venue-programs"
+          mkdir -p "$dir"
+          solana program dump swapNyd8XiQwJ6ianp9snpu4brUqFxadzvHebnAXjJZ "$dir/stabble_stable_swap.so" --url mainnet-beta
+          solana program dump vo1tWgqZMjG61Z2T9qUaMYKqZ75CYzMuaZ2LZP1n7HV "$dir/stabble_vault.so" --url mainnet-beta
+          solana program dump Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB "$dir/meteora_damm_v1.so" --url mainnet-beta
+          solana program dump 24Uqj9JCLxUeoC3hGfh5W3s9FM9uCHDS2SG3LYwBpyTi "$dir/meteora_vault.so" --url mainnet-beta
+
+      - name: Run the venue split tests against the dumped binaries
+        env:
+          SPLIT_VENUE_PROGRAMS: ${{ runner.temp }}/split-venue-programs
+        # --nocapture surfaces each binary's sha256 and each route's packet size,
+        # account locks and compute, so drift toward a limit is visible.
+        run: cargo test --test prove_and_withdraw -- --ignored --nocapture
