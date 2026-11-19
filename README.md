@@ -776,6 +776,8 @@ The addresses above are placeholders; use the DVN and executor addresses LayerZe
 
 **1. Plan.** Dispatch the workflow with the inputs and `programs`. The `plan` job checks selected release assets against `program-ids.json`, refuses an RPC whose genesis hash differs from the selected cluster's, and validates selected programs plus their dependency closure against the chain. Unselected dependencies must already be deployed with matching bytecode; a missing or incompatible dependency fails before any write. The summary shows selected actions, the deployer's address, balance and estimated cost. Nothing is written on chain. Insufficient funding fails before approval; fund the deployer and dispatch again.
 
+If Deploy planning fails, use the `failed-plan-v<version>-<cluster>` artifact for redacted diagnostics. For loader preflight failures and accepted remote verification jobs, follow the [deployment recovery guide](skills/routes-svm-deploy/references/recovery.md).
+
 **2. Review the summary** of the `plan` job. Check every program's status, the inputs as normalized, and the actions planned (deploy, init steps, verify). Statuses:
 
 | Status | On chain | Plan |

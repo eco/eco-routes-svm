@@ -126,6 +126,14 @@ jobs:
             | scripts/deploy-step.sh redact | tee out/plan.log
           scripts/deploy-step.sh hash out/plan.log
 
+      - name: Upload failed plan record
+        if: failure() && steps.plan.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: failed-plan-v${{ inputs.version }}-${{ inputs.cluster }}
+          path: out/
+          if-no-files-found: ignore
+
   # The release environment's required reviewers approve this job after reading the plan; it
   # holds PROGRAM_KEYPAIR_SECRET and DEPLOYER_KEYPAIR.
   deploy:

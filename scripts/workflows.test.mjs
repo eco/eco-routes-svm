@@ -167,13 +167,18 @@ test("a failed IDL upload fails the step and says how to resume", () => {
 
 // Runs `deploy-step.sh deploy` against stub `solana` and `deployer` commands and returns the
 // `solana` calls it made.
-const deployCalls = (price) => {
+const deployCalls = (price, faults = []) => {
   const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
   const bin = mkdtempSync(join(tmpdir(), "deploy-step-"));
   const calls = join(bin, "calls");
-  writeFileSync(join(bin, "solana"), `#!/usr/bin/env bash\necho "solana $*" >> "${calls}"\n`, {
-    mode: 0o755,
-  });
+  writeFileSync(join(bin, "solana"), `#!/usr/bin/env bash
+echo "solana $*" >> "${calls}"
+if [ "$2" = deploy ]; then
+  case "$(grep -c '^solana program deploy ' "${calls}")" in
+${faults.map(([status, text], index) => `    ${index + 1}) printf '%s\\n' '${text}' >&2; exit ${status} ;;`).join("\n")}
+  esac
+fi
+`, { mode: 0o755 });
   writeFileSync(join(bin, "deployer"), `#!/usr/bin/env bash\necho portal\n`, { mode: 0o755 });
   writeFileSync(join(bin, "program-ids.json"), '{"portal":{"address":"PortalAddress"}}');
   writeFileSync(join(bin, "plan.json"), JSON.stringify({
@@ -195,11 +200,11 @@ const deployCalls = (price) => {
       COMPUTE_UNIT_PRICE: "999",
     },
   });
-  assert.equal(status, 0, stderr);
+  if (!faults.length) assert.equal(status, 0, stderr);
   const sent = readFileSync(calls, "utf8").trim().split("\n");
   rmSync(bin, { recursive: true });
 
-  return { sent, binary: `${bin}/portal.devnet.so` };
+  return { sent, binary: `${bin}/portal.devnet.so`, status, stderr };
 };
 
 test("deploy closes the deployer's buffers before deploying anything", () => {
@@ -221,6 +226,29 @@ test("deploy takes the compute-unit price from the reviewed plan, not the enviro
       "--program-id target/keys/portal-keypair.json --use-rpc --max-sign-attempts 20 " +
       `--with-compute-unit-price 7 ${binary}`,
   );
+});
+
+test("deploy retries the exact pre-send fee blockhash error once", () => {
+  const faults = [[7, "Error: Custom: Invalid blockhash"]];
+  const { sent, status } = deployCalls("7", faults);
+  assert.equal(status, 0);
+  assert.equal(sent.length, 3); // One cleanup, two identical deploy invocations.
+  assert.equal(sent[1], sent[2]);
+
+  const repeated = deployCalls("0", [...faults, ...faults]);
+  assert.equal(repeated.status, 7);
+  assert.equal(repeated.sent.length, 3);
+  assert.match(repeated.stderr, /Invalid blockhash/);
+});
+
+test("deploy does not retry the final loader transaction on a generic preflight error", () => {
+  const error = "Error: Deploying program failed: RPC response error -32002: Transaction simulation failed;";
+  for (const report of [error, `Error: Custom: Invalid blockhash\n${error}`]) {
+    const { sent, status, stderr } = deployCalls("0", [[7, report]]);
+    assert.equal(status, 7);
+    assert.equal(sent.length, 2);
+    assert.ok(stderr.includes(error));
+  }
 });
 
 test("release check requires assets only for selected programs and preserves the full manifest", () => {
@@ -464,6 +492,65 @@ test("verify fails when solana-verify reports a hash mismatch, which it exits 0 
   assert.equal(matched.status, 0, matched.stderr);
   assert.notEqual(mismatched.status, 0);
   assert.match(mismatched.stderr, /hyper_prover: the build from \w+ does not match the deployed bytecode/);
+});
+
+test("a remote verification needs a receipt and matching release hashes, even on exit zero", () => {
+  const script = fileURLToPath(new URL("./deploy-step.sh", import.meta.url));
+  const job = "acfb21e7-f688-40c6-b2d7-def82d91e361";
+  const hash = "a".repeat(64);
+  const other = "b".repeat(64);
+  const cases = [
+    [true, 1, "Completed", hash, 0, true],
+    [true, 1, "Completed", other, 1, true],
+    [true, 1, "Failed", hash, 1, true],
+    [true, 1, "InProgress", hash, 1, true],
+    [false, 1, "Unknown", hash, 1, false],
+    [true, 0, "Completed", hash, 0, false],
+    [true, 0, "Completed", other, 1, false],
+    [true, 0, "Failed", hash, 1, false],
+    [false, 0, "Conflict", hash, 1, false],
+  ];
+
+  for (const [accepted, submitStatus, state, remoteHash, status, polled] of cases) {
+    const bin = mkdtempSync(join(tmpdir(), "verify-recovery-"));
+    try {
+      const calls = join(bin, "calls");
+      const stub = (name, body) => writeFileSync(join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
+      stub("deployer", "echo aggregator_prover");
+      stub("solana-keygen", "echo Deployer");
+      stub("sleep", ":");
+      stub("solana-verify", `echo "$*" >> "${calls}"
+case "$1 $2" in
+  "verify-from-repo -u") echo 'Program hash matches' ;;
+  "remote submit-job")
+    ${accepted ? `echo 'Verification request sent with request id: ${job}'` : ":"}
+    ${submitStatus ? "echo 'HTTP 502' >&2" : !accepted ? "echo 'Error: job already exists' >&2" : state === "Completed"
+      ? `printf '%s\\n' 'Program Aggregator has been verified. ✅' 'On Chain Hash: ${remoteHash}' 'Executable Hash: ${remoteHash}'`
+      : "echo 'Program Aggregator has not been verified. ❌'"}
+    exit ${submitStatus} ;;
+  "remote get-job")
+    printf '%s\\n' 'Status: ${state}' 'On-chain Hash: ${hash}' 'Executable Hash: ${remoteHash}' ;;
+  get-executable-hash\\ *) echo '${hash}' ;;
+  *) exit 2 ;;
+esac`);
+      writeFileSync(join(bin, "program-ids.json"), '{"aggregator_prover":{"address":"Aggregator"}}');
+      const result = spawnSync("bash", [script, "verify"], {
+        encoding: "utf8",
+        env: {
+          ...process.env, PATH: `${bin}:${process.env.PATH}`, ASSETS: bin, PLAN: "plan.json",
+          KEYPAIR: "key.json", RPC_URL: "http://rpc", CLUSTER: "mainnet", VERIFY_IMAGE: "image",
+        },
+      });
+      assert.equal(result.status, status, `${state}: ${result.stdout}${result.stderr}`);
+      const invoked = readFileSync(calls, "utf8");
+      assert.equal(invoked.match(/^verify-from-repo /gm)?.length, 1);
+      assert.equal(invoked.match(/^remote submit-job /gm)?.length, 1);
+      assert.equal(invoked.includes(`remote get-job --job-id ${job}`), polled);
+      if (state === "InProgress") assert.equal(invoked.match(/^remote get-job /gm)?.length, 4);
+    } finally {
+      rmSync(bin, { recursive: true });
+    }
+  }
 });
 
 test("finalize.yml and close.yml differ only in their operation", () => {

@@ -74,6 +74,30 @@ close_buffers() {
   done
 }
 
+deploy_program() {
+  local output status
+  # Only this RPC module logs Solana's preflight simulation logs, when the provider sends them.
+  # The workflow redacts both streams before saving the deploy record.
+  local -x RUST_LOG=solana_rpc_client::nonblocking::rpc_client=debug
+
+  if output=$(solana program deploy "$@" 2>&1); then
+    printf '%s\n' "$output"
+    return 0
+  else
+    status=$?
+  fi
+  printf '%s\n' "$output" >&2
+
+  # Agave 4.1.1 emits this exact error from getFeeForMessage before it sends anything.
+  # Do not replay generic simulation errors or failures after an upload.
+  if [[ ${output##*$'\n'} != 'Error: Custom: Invalid blockhash' ]]; then
+    return "$status"
+  fi
+
+  echo "Retrying deploy once with a fresh blockhash after the pre-send fee check failed" >&2
+  solana program deploy "$@"
+}
+
 deploy() {
   close_buffers
   # The reviewed plan fixes the price; `apply` reads it from there too.
@@ -98,7 +122,7 @@ deploy() {
       buffer_flags=(--buffer "$buffer")
     fi
     echo "deploying ${program} $(program_address "$program")"
-    solana program deploy -u "$RPC_URL" -k "$KEYPAIR" --upgrade-authority "$KEYPAIR" \
+    deploy_program -u "$RPC_URL" -k "$KEYPAIR" --upgrade-authority "$KEYPAIR" \
       --program-id "${KEYS_DIR:-target/keys}/${program}-keypair.json" \
       ${buffer_flags[@]+"${buffer_flags[@]}"} \
       --use-rpc --max-sign-attempts "$MAX_SIGN_ATTEMPTS" \
@@ -116,6 +140,64 @@ idl() {
     return 1
   }
 }
+
+verify_remote() {
+  local address=$1 uploader=$2 binary=$3
+  local output status=1 job_id expected_hash attempt
+
+  # Stream the receipt into the redacted workflow log before the CLI starts polling.
+  output=$(solana-verify remote submit-job -u "$RPC_URL" \
+    --program-id "$address" --uploader "$uploader" 2>&1 | tee /dev/fd/3) || status=$?
+
+  # Only a receipt from this submission proves acceptance; never use a second POST as a probe.
+  job_id=$(sed -nE 's/^Verification request sent with request id: ([[:xdigit:]-]{36})$/\1/p' <<< "$output")
+  if [[ ! "$job_id" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]; then
+    echo "$address: remote verification acceptance unknown; reconcile before submitting again" >&2
+    return "$status"
+  fi
+  expected_hash=$(solana-verify get-executable-hash "$binary")
+  if [[ ! "$expected_hash" =~ ^[[:xdigit:]]{64}$ ]]; then
+    echo "$address: cannot establish the release executable hash" >&2
+    return 1
+  fi
+
+  if grep -qxF "Program $address has been verified. ✅" <<< "$output"; then
+    if [[ $(grep '^On Chain Hash: ' <<< "$output") == "On Chain Hash: $expected_hash" &&
+          $(grep '^Executable Hash: ' <<< "$output") == "Executable Hash: $expected_hash" ]]; then
+      return 0
+    fi
+    echo "$address: remote job $job_id hashes do not match the release" >&2
+    return 1
+  fi
+  if grep -qxF "Program $address has not been verified. ❌" <<< "$output"; then
+    return 1
+  fi
+
+  for attempt in 1 2 3 4; do
+    if output=$(timeout 15s solana-verify remote get-job --job-id "$job_id" 2>&1); then
+      printf '%s\n' "$output"
+      if [[ ${output%%$'\n'*} == 'Status: Completed' ]]; then
+        if [[ $(grep '^On-chain Hash: ' <<< "$output") == "On-chain Hash: $expected_hash" &&
+              $(grep '^Executable Hash: ' <<< "$output") == "Executable Hash: $expected_hash" ]]; then
+          return 0
+        fi
+        echo "$address: remote job $job_id hashes do not match the release" >&2
+        return 1
+      fi
+      if [[ ${output%%$'\n'*} == 'Status: Failed' ]]; then
+        return 1
+      fi
+    else
+      printf '%s\n' "$output" >&2
+    fi
+    if [ "$attempt" != 4 ]; then
+      sleep 5
+    fi
+  done
+
+  echo "$address: accepted remote job $job_id not confirmed; inspect it without resubmitting" >&2
+  return "$status"
+} 3>&1
 
 verify() {
   local commit uploader features=()
@@ -138,7 +220,7 @@ verify() {
       return 1
     }
     if [ "$CLUSTER" = mainnet ]; then
-      solana-verify remote submit-job -u "$RPC_URL" --program-id "$address" --uploader "$uploader"
+      verify_remote "$address" "$uploader" "${ASSETS}/${program}.${CLUSTER}.so"
     fi
   done
 }
