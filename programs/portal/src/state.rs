@@ -3,6 +3,8 @@ use derive_new::new;
 use eco_svm_std::account::AccountExt;
 use eco_svm_std::Bytes32;
 
+use crate::instructions::PortalError;
+
 pub const VAULT_SEED: &[u8] = b"vault";
 pub const CLAIMED_MARKER_SEED: &[u8] = b"claimed_marker";
 pub const FULFILL_MARKER_SEED: &[u8] = b"fulfill_marker";
@@ -26,12 +28,9 @@ pub fn dispatcher_pda(prover: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[DISPATCHER_SEED, prover.as_ref()], &crate::ID)
 }
 
-/// Per-prover authority: `withdraw` signs this into the caller-chosen prover's
-/// `close_proof` CPI, and each prover accepts only `proof_closer_pda(&its_own_id)`.
-/// The prover binding is a security boundary — keep it seeded by the prover and
-/// do not collapse it to a single shared PDA.
-pub fn proof_closer_pda(prover: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[PROOF_CLOSER_SEED, prover.as_ref()], &crate::ID)
+/// Delegated cleanup authority, restricted to one intent across prover CPIs.
+pub fn proof_closer_pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[PROOF_CLOSER_SEED, intent_hash.as_ref()], &crate::ID)
 }
 
 #[account]
@@ -41,6 +40,26 @@ pub struct WithdrawnMarker {}
 impl AccountExt for WithdrawnMarker {}
 
 impl WithdrawnMarker {
+    pub fn exists(account: &AccountInfo, intent_hash: &Bytes32) -> Result<bool> {
+        require_keys_eq!(
+            account.key(),
+            Self::pda(intent_hash).0,
+            PortalError::InvalidWithdrawnMarker
+        );
+        if account.data_is_empty() {
+            return Ok(false);
+        }
+        require_keys_eq!(
+            *account.owner,
+            crate::ID,
+            PortalError::InvalidWithdrawnMarker
+        );
+        Self::try_deserialize(&mut account.try_borrow_data()?.as_ref())
+            .map_err(|_| PortalError::InvalidWithdrawnMarker)?;
+
+        Ok(true)
+    }
+
     pub fn pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[CLAIMED_MARKER_SEED, intent_hash.as_ref()], &crate::ID)
     }
@@ -51,25 +70,27 @@ impl WithdrawnMarker {
 }
 
 /// The whole field order is on-chain ABI: `prove` deserializes the full struct
-/// (`prove.rs`), so reordering breaks it, not just moving `claimant`.
+/// (`fulfillment_claimant`), so reordering breaks it, not just moving `claimant`.
 /// `fulfill_marker_layout_deterministic` pins the encoding.
 ///
 /// Growing or reordering it is only safe because the portal is redeployed under
-/// a new program ID rather than upgraded in place: markers are PDAs of the
-/// program, so a redeploy starts on a disjoint namespace and no account written
-/// under an older layout is ever read back. Under an in-place upgrade the same
+/// a new program ID rather than upgraded in place: a layout change changes the
+/// bytecode its release ID is derived from, and markers are PDAs of the program,
+/// so the redeploy starts on a disjoint namespace and no account written under
+/// an older layout is ever read back. Under an in-place upgrade the same
 /// change would strand every fulfilled-but-unproven intent — `prove`'s
 /// `try_deserialize` of a shorter account fails with `InvalidFulfillMarker`,
 /// and the claimant it holds has no other source.
 ///
-/// `payer` is the sole authority allowed to close the marker and reclaim its
-/// rent; `deadline` is `route.deadline`, which gates that close.
+/// The marker is permanent: `fulfill` writes the solver's claimant and `cancel`
+/// writes the `CANCELLED` sentinel, and nothing ever closes it. Keeping the PDA
+/// occupied is what makes the two mutually exclusive — a closed marker is
+/// indistinguishable from "never fulfilled", so `cancel` could then succeed on
+/// a fulfilled intent and send the source a conflicting proof.
 #[account]
 #[derive(InitSpace, Debug, PartialEq, new)]
 pub struct FulfillMarker {
     pub claimant: Bytes32,
-    pub payer: Pubkey,
-    pub deadline: u64,
     pub bump: u8,
 }
 
@@ -79,6 +100,18 @@ impl FulfillMarker {
     pub fn pda(intent_hash: &Bytes32) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[FULFILL_MARKER_SEED, intent_hash.as_ref()], &crate::ID)
     }
+}
+
+/// Claimant recorded for an intent on this chain: the solver's, or `CANCELLED`.
+pub fn fulfillment_claimant(account: &AccountInfo) -> Result<Bytes32> {
+    require!(
+        account.owner == &crate::ID,
+        PortalError::InvalidFulfillMarker
+    );
+
+    FulfillMarker::try_deserialize(&mut &account.try_borrow_data()?[..])
+        .map(|marker| marker.claimant)
+        .map_err(|_| PortalError::InvalidFulfillMarker.into())
 }
 
 #[cfg(test)]
@@ -152,12 +185,7 @@ mod tests {
     /// would not catch. Each field gets a distinct byte pattern.
     #[test]
     fn fulfill_marker_layout_deterministic() {
-        let marker = FulfillMarker::new(
-            [1u8; 32].into(),
-            Pubkey::new_from_array([2u8; 32]),
-            0x0304050607080910,
-            11,
-        );
+        let marker = FulfillMarker::new([1u8; 32].into(), 11);
 
         goldie::assert_json!((
             8 + FulfillMarker::INIT_SPACE,
@@ -167,6 +195,6 @@ mod tests {
 
     #[test]
     fn proof_closer_pda_deterministic() {
-        goldie::assert_json!(proof_closer_pda(&Pubkey::new_from_array([9u8; 32])));
+        goldie::assert_json!(proof_closer_pda(&[9u8; 32].into()));
     }
 }

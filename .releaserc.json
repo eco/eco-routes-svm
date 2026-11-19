@@ -13,8 +13,11 @@
       "@semantic-release/github",
       {
         "assets": [
-          { "path": "dist/idl/mainnet/*.json", "label": "mainnet IDL — ${nextRelease.gitTag}" },
-          { "path": "dist/idl/devnet/*.json", "label": "devnet IDL — ${nextRelease.gitTag}" }
+          { "path": "dist/idl/mainnet/*.json" },
+          { "path": "dist/idl/devnet/*.json" },
+          { "path": "dist/program/mainnet/*.so" },
+          { "path": "dist/program/devnet/*.so" },
+          { "path": "dist/program-ids.json" }
         ]
       }
     ]

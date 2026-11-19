@@ -5,6 +5,7 @@ use anchor_spl::token::spl_token;
 use eco_svm_std::prover::{IntentProven, Proof};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use flash_fulfiller::instructions::{FlashFulfillIntent, FlashFulfillerError};
+use local_prover::instructions::LocalProverError;
 use portal::instructions::PortalError;
 use portal::state::{executor_pda, vault_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{
@@ -247,6 +248,7 @@ fn forged_instructions_sysvar_is_rejected() {
     assert_unsettled(&ctx, &route, &reward);
 }
 
+/// Withdraw leaves the proof open; `close_proof` is portal's separate cleanup.
 fn assert_settled(ctx: &common::Context, route: &Route, reward: &Reward) {
     let hash = hash(route, reward);
     assert!(ctx.get_account(&WithdrawnMarker::pda(&hash).0).is_some());
@@ -254,10 +256,26 @@ fn assert_settled(ctx: &common::Context, route: &Route, reward: &Reward) {
         .account::<FulfillMarker>(&FulfillMarker::pda(&hash).0)
         .unwrap();
     assert_eq!(marker.claimant, ctx.solver.pubkey());
-    assert_eq!(marker.payer, ctx.payer.pubkey());
     assert!(ctx
         .get_account(&Proof::pda(&hash, &reward.prover).0)
-        .is_none());
+        .is_some());
+}
+
+fn close_proof(ctx: &mut common::Context, route: &Route, reward: &Reward) {
+    let proof = Proof::pda(&hash(route, reward), &reward.prover).0;
+    let payer = ctx.payer.pubkey();
+    ctx.portal()
+        .close_proof(
+            CHAIN_ID,
+            route.hash(),
+            reward.clone(),
+            vec![
+                AccountMeta::new(proof, false),
+                AccountMeta::new(payer, true),
+            ],
+        )
+        .unwrap();
+    assert!(ctx.get_account(&proof).is_none());
 }
 
 fn happy_path(ctx: common::Context) {
@@ -290,6 +308,7 @@ fn happy_path(ctx: common::Context) {
         reward.native_amount - route.native_amount
     );
     assert_settled(&ctx, &route, &reward);
+    close_proof(&mut ctx, &route, &reward);
 }
 
 #[test]
@@ -351,6 +370,20 @@ fn replay_in_later_transaction_hits_portal_withdrawn_marker() {
     let (mut ctx, route, reward) = setup();
     let instructions = pair(&ctx, &route, &reward);
     send(&mut ctx, &instructions).unwrap();
+    assert_settled(&ctx, &route, &reward);
+    // While the proof is open, the replay's prove leg fails first.
+    ctx.expire_blockhash();
+    let failure = send(&mut ctx, &instructions).unwrap_err();
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(
+            2,
+            InstructionError::Custom(u32::from(LocalProverError::IntentAlreadyProven)),
+        )
+    );
+    assert_settled(&ctx, &route, &reward);
+    // After cleanup the replay proves again; portal's withdrawn marker rejects it.
+    close_proof(&mut ctx, &route, &reward);
     ctx.expire_blockhash();
     let failure = send(&mut ctx, &instructions).unwrap_err();
     assert_eq!(
@@ -363,7 +396,11 @@ fn replay_in_later_transaction_hits_portal_withdrawn_marker() {
     assert!(common::is_error(PortalError::IntentAlreadyWithdrawn)(
         failure
     ));
-    assert_settled(&ctx, &route, &reward);
+    let hash = hash(&route, &reward);
+    assert!(ctx.get_account(&WithdrawnMarker::pda(&hash).0).is_some());
+    assert!(ctx
+        .get_account(&Proof::pda(&hash, &reward.prover).0)
+        .is_none());
     assert_eq!(
         ctx.token_balance_ata(&reward.tokens[0].token, &ctx.solver.pubkey()),
         reward.tokens[0].amount / 2

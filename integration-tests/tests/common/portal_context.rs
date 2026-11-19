@@ -4,6 +4,7 @@ use anchor_lang::prelude::AccountMeta;
 use anchor_lang::{InstructionData, ToAccountMetas};
 use derive_more::{Deref, DerefMut};
 use eco_svm_std::{event_authority_pda, Bytes32};
+use portal::state::proof_closer_pda;
 use portal::types::{Reward, Route};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
@@ -13,7 +14,9 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
 use solana_sdk::transaction::Transaction;
 
-use crate::common::{hyperlane_context, Context, TransactionResult, COMPUTE_UNIT_LIMIT};
+use crate::common::{
+    hyperlane_context, Context, ProverQuery, TransactionResult, COMPUTE_UNIT_LIMIT,
+};
 
 #[derive(Deref, DerefMut)]
 pub struct Portal<'a>(&'a mut Context);
@@ -158,31 +161,75 @@ impl Portal<'_> {
         creator: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
     ) -> TransactionResult {
-        let args = portal::instructions::RefundArgs {
+        self.refund_intent_with_accounts(
             destination,
-            route_hash,
-            reward,
-        };
-        let instruction = portal::instruction::Refund { args };
-        let accounts: Vec<_> = portal::accounts::Refund {
-            payer: self.payer.pubkey(),
-            creator,
+            reward.clone(),
             vault,
+            route_hash,
             proof,
             withdrawn_marker,
-            token_program: anchor_spl::token::ID,
-            token_2022_program: anchor_spl::token_2022::ID,
-            system_program: anchor_lang::system_program::ID,
-        }
-        .to_account_metas(None)
-        .into_iter()
-        .chain(token_transfer_accounts)
-        .collect();
-        let instruction = Instruction {
-            program_id: portal::ID,
-            accounts,
-            data: instruction.data(),
-        };
+            creator,
+            Some(reward.prover),
+            token_transfer_accounts,
+            vec![],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_cancelled_intent(
+        &mut self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
+    ) -> TransactionResult {
+        let prover = reward.prover;
+
+        self.refund_intent_with_accounts(
+            destination,
+            reward,
+            vault,
+            route_hash,
+            proof,
+            withdrawn_marker,
+            creator,
+            Some(prover),
+            token_transfer_accounts,
+            prover_accounts,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_with_accounts(
+        &mut self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        prover: Option<Pubkey>,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
+    ) -> TransactionResult {
+        let instruction = self.refund_intent_instruction(
+            destination,
+            reward,
+            vault,
+            route_hash,
+            proof,
+            withdrawn_marker,
+            creator,
+            prover,
+            token_transfer_accounts,
+            prover_accounts,
+        );
 
         let transaction = Transaction::new(
             &[&self.payer],
@@ -199,6 +246,69 @@ impl Portal<'_> {
         self.send_transaction(transaction)
     }
 
+    /// A `None` optional account is passed as the portal program ID, Anchor's
+    /// placeholder for an omitted account.
+    #[allow(clippy::too_many_arguments)]
+    pub fn refund_intent_instruction(
+        &self,
+        destination: u64,
+        reward: Reward,
+        vault: Pubkey,
+        route_hash: Bytes32,
+        proof: Pubkey,
+        withdrawn_marker: Pubkey,
+        creator: Pubkey,
+        prover: Option<Pubkey>,
+        token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
+        prover_accounts: impl Into<ProverQuery>,
+    ) -> Instruction {
+        let ProverQuery {
+            accounts: prover_accounts,
+            data: prover_data,
+        } = prover_accounts.into();
+        let prover_accounts = if self
+            .get_account(&withdrawn_marker)
+            .is_some_and(|account| !account.data.is_empty())
+            || !self
+                .get_account(&reward.prover)
+                .is_some_and(|account| account.executable)
+        {
+            vec![]
+        } else {
+            std::iter::once(AccountMeta::new_readonly(proof, false))
+                .chain(prover_accounts)
+                .collect()
+        };
+        let args = portal::instructions::RefundArgs {
+            destination,
+            route_hash,
+            reward,
+            prover_data,
+            prover_account_count: prover_accounts.len().try_into().unwrap(),
+        };
+        let accounts: Vec<_> = portal::accounts::Refund {
+            payer: self.payer.pubkey(),
+            creator,
+            vault,
+            prover,
+            withdrawn_marker,
+            token_program: anchor_spl::token::ID,
+            token_2022_program: anchor_spl::token_2022::ID,
+            system_program: anchor_lang::system_program::ID,
+        }
+        .to_account_metas(None)
+        .into_iter()
+        .chain(token_transfer_accounts)
+        .chain(prover_accounts)
+        .collect();
+
+        Instruction {
+            program_id: portal::ID,
+            accounts,
+            data: portal::instruction::Refund { args }.data(),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn withdraw_intent(
         &mut self,
@@ -209,9 +319,8 @@ impl Portal<'_> {
         claimant: Pubkey,
         proof: Pubkey,
         withdrawn_marker: Pubkey,
-        proof_closer: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl Into<ProverQuery>,
     ) -> TransactionResult {
         self.withdraw_intent_with_signers(
             destination,
@@ -221,7 +330,6 @@ impl Portal<'_> {
             claimant,
             proof,
             withdrawn_marker,
-            proof_closer,
             token_transfer_accounts,
             remaining_accounts,
             vec![],
@@ -241,13 +349,17 @@ impl Portal<'_> {
         claimant: Pubkey,
         proof: Pubkey,
         withdrawn_marker: Pubkey,
-        proof_closer: Pubkey,
         token_transfer_accounts: impl IntoIterator<Item = AccountMeta>,
-        remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        remaining_accounts: impl Into<ProverQuery>,
         signers: Vec<&Keypair>,
     ) -> TransactionResult {
         let prover = reward.prover;
+        let ProverQuery {
+            accounts: remaining_accounts,
+            data: prover_data,
+        } = remaining_accounts.into();
         let args = portal::instructions::WithdrawArgs {
+            prover_data,
             destination,
             route_hash,
             reward,
@@ -257,8 +369,6 @@ impl Portal<'_> {
             payer: self.payer.pubkey(),
             claimant,
             vault,
-            proof,
-            proof_closer,
             prover,
             withdrawn_marker,
             token_program: anchor_spl::token::ID,
@@ -268,6 +378,7 @@ impl Portal<'_> {
         .to_account_metas(None)
         .into_iter()
         .chain(token_transfer_accounts)
+        .chain(std::iter::once(AccountMeta::new_readonly(proof, false)))
         .chain(remaining_accounts)
         .map(
             |meta| match signers.iter().any(|s| s.pubkey() == meta.pubkey) {
@@ -339,6 +450,34 @@ impl Portal<'_> {
         call_accounts: impl IntoIterator<Item = AccountMeta>,
         additional_signers: Vec<&Keypair>,
     ) -> TransactionResult {
+        let transaction = self.fulfill_intent_transaction(
+            intent_hash,
+            route,
+            reward_hash,
+            claimant,
+            executor,
+            fulfill_marker,
+            token_accounts,
+            call_accounts,
+            additional_signers,
+        );
+
+        self.send_transaction(transaction)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fulfill_intent_transaction(
+        &self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        claimant: Bytes32,
+        executor: Pubkey,
+        fulfill_marker: Pubkey,
+        token_accounts: impl IntoIterator<Item = AccountMeta>,
+        call_accounts: impl IntoIterator<Item = AccountMeta>,
+        additional_signers: Vec<&Keypair>,
+    ) -> Transaction {
         let args = portal::instructions::FulfillArgs {
             intent_hash,
             route: route.clone(),
@@ -372,7 +511,7 @@ impl Portal<'_> {
             .chain(additional_signers)
             .collect();
 
-        let transaction = Transaction::new(
+        Transaction::new(
             &signers,
             Message::new(
                 &[
@@ -382,54 +521,150 @@ impl Portal<'_> {
                 Some(&self.payer.pubkey()),
             ),
             self.svm.latest_blockhash(),
-        );
-
-        self.send_transaction(transaction)
+        )
     }
 
-    pub fn close_fulfill_marker(
+    pub fn cancel_intent(
         &mut self,
         intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
         fulfill_marker: Pubkey,
     ) -> TransactionResult {
-        let payer = self.payer.pubkey();
-
-        self.close_fulfill_markers(vec![(intent_hash, fulfill_marker)], payer, vec![])
+        self.cancel_intent_with_call_accounts(
+            intent_hash,
+            route,
+            reward_hash,
+            fulfill_marker,
+            vec![],
+        )
     }
 
-    /// `payer` is the marker's stored payer (the close authority and refund
-    /// target), which is not necessarily the transaction's fee payer — the
-    /// latter is always `self.payer`.
-    pub fn close_fulfill_markers(
+    /// `route` is the compact route `fulfill` takes; `call_accounts` are the
+    /// canonical call account metas, whose flags travel in `account_flags`.
+    pub fn cancel_intent_with_call_accounts(
         &mut self,
-        markers: Vec<(Bytes32, Pubkey)>,
-        payer: Pubkey,
-        additional_signers: Vec<&Keypair>,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+        call_accounts: Vec<AccountMeta>,
     ) -> TransactionResult {
-        let instructions: Vec<_> = markers
-            .into_iter()
-            .map(|(intent_hash, fulfill_marker)| Instruction {
-                program_id: portal::ID,
-                accounts: portal::accounts::CloseFulfillMarker {
-                    payer,
-                    fulfill_marker,
-                }
-                .to_account_metas(None),
-                data: portal::instruction::CloseFulfillMarker {
-                    args: portal::instructions::CloseFulfillMarkerArgs { intent_hash },
-                }
-                .data(),
-            })
-            .collect();
-
-        let signers: Vec<_> = iter::once(&self.payer).chain(additional_signers).collect();
-        let transaction = Transaction::new(
-            &signers,
-            Message::new(&instructions, Some(&self.payer.pubkey())),
-            self.svm.latest_blockhash(),
+        let transaction = self.cancel_intent_transaction(
+            intent_hash,
+            route,
+            reward_hash,
+            fulfill_marker,
+            call_accounts,
         );
 
         self.send_transaction(transaction)
+    }
+
+    pub fn cancel_intent_transaction(
+        &self,
+        intent_hash: Bytes32,
+        route: &Route,
+        reward_hash: Bytes32,
+        fulfill_marker: Pubkey,
+        call_accounts: Vec<AccountMeta>,
+    ) -> Transaction {
+        let account_flags = call_accounts
+            .iter()
+            .map(|meta| {
+                (if meta.is_signer {
+                    portal::instructions::ACCOUNT_FLAG_SIGNER
+                } else {
+                    0
+                }) | (if meta.is_writable {
+                    portal::instructions::ACCOUNT_FLAG_WRITABLE
+                } else {
+                    0
+                })
+            })
+            .collect();
+        let args = portal::instructions::CancelArgs {
+            intent_hash,
+            route: route.clone(),
+            reward_hash,
+            account_flags,
+        };
+        let instruction = Instruction {
+            program_id: portal::ID,
+            accounts: portal::accounts::Cancel {
+                payer: self.payer.pubkey(),
+                fulfill_marker,
+                system_program: anchor_lang::system_program::ID,
+            }
+            .to_account_metas(None)
+            .into_iter()
+            .chain(
+                call_accounts
+                    .iter()
+                    .map(|meta| AccountMeta::new_readonly(meta.pubkey, false)),
+            )
+            .collect(),
+            data: portal::instruction::Cancel { args }.data(),
+        };
+
+        Transaction::new(
+            &[&self.payer],
+            Message::new(
+                &[
+                    ComputeBudgetInstruction::set_compute_unit_limit(COMPUTE_UNIT_LIMIT),
+                    instruction,
+                ],
+                Some(&self.payer.pubkey()),
+            ),
+            self.svm.latest_blockhash(),
+        )
+    }
+
+    /// `portal::prove` into cctp-prover; `event_account` is the fresh keypair
+    /// Circle's `send_message` creates as `message_sent_event_data`.
+    pub fn prove_intent_via_cctp_prover(
+        &mut self,
+        intent_hashes: Vec<Bytes32>,
+        destination_domain: u64,
+        fulfill_markers: Vec<Pubkey>,
+        data: Vec<u8>,
+        event_account: &Keypair,
+    ) -> TransactionResult {
+        let payer = self.payer.pubkey();
+        let accounts = super::cctp_prover_context::prove_accounts(&payer, &event_account.pubkey());
+
+        self.prove_intent_via_cctp_prover_with_accounts(
+            intent_hashes,
+            destination_domain,
+            fulfill_markers,
+            data,
+            event_account,
+            accounts,
+        )
+    }
+
+    /// As [`Self::prove_intent_via_cctp_prover`], with cctp-prover's own
+    /// accounts (everything after the dispatcher) supplied by the caller.
+    pub fn prove_intent_via_cctp_prover_with_accounts(
+        &mut self,
+        intent_hashes: Vec<Bytes32>,
+        destination_domain: u64,
+        fulfill_markers: Vec<Pubkey>,
+        data: Vec<u8>,
+        event_account: &Keypair,
+        accounts: Vec<AccountMeta>,
+    ) -> TransactionResult {
+        self.prove_intent(
+            intent_hashes,
+            cctp_prover::ID,
+            destination_domain,
+            fulfill_markers,
+            portal::state::dispatcher_pda(&cctp_prover::ID).0,
+            data,
+            vec![event_account.insecure_clone()],
+            accounts,
+            Some(super::cctp_prover_context::COMPUTE_UNIT_LIMIT),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -466,6 +701,7 @@ impl Portal<'_> {
                 AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
                 AccountMeta::new_readonly(mailbox_program, false),
             ],
+            None,
         )
     }
 
@@ -504,6 +740,7 @@ impl Portal<'_> {
                 AccountMeta::new_readonly(anchor_lang::system_program::ID, false),
                 AccountMeta::new_readonly(mailbox_program, false),
             ],
+            None,
         )
     }
 
@@ -535,6 +772,7 @@ impl Portal<'_> {
                     .into_iter()
                     .map(|proof| AccountMeta::new(proof, false)),
             ),
+            None,
         )
     }
 
@@ -562,6 +800,35 @@ impl Portal<'_> {
             data,
             vec![],
             remaining_accounts,
+            None,
+        )
+    }
+
+    /// Same as [`Self::prove_intent_via_program`] but prepends
+    /// `ComputeBudgetInstruction::set_compute_unit_limit(compute_unit_limit)`,
+    /// for batches too large for the default per-instruction budget.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_intent_via_program_with_compute_limit(
+        &mut self,
+        prover: Pubkey,
+        intent_hashes: Vec<Bytes32>,
+        source_chain_domain_id: u64,
+        fulfill_markers: Vec<Pubkey>,
+        dispatcher: Pubkey,
+        data: Vec<u8>,
+        remaining_accounts: Vec<AccountMeta>,
+        compute_unit_limit: u32,
+    ) -> TransactionResult {
+        self.prove_intent(
+            intent_hashes,
+            prover,
+            source_chain_domain_id,
+            fulfill_markers,
+            dispatcher,
+            data,
+            vec![],
+            remaining_accounts,
+            Some(compute_unit_limit),
         )
     }
 
@@ -576,6 +843,7 @@ impl Portal<'_> {
         data: Vec<u8>,
         remaining_key_pairs: Vec<Keypair>,
         remaining_accounts: impl IntoIterator<Item = AccountMeta>,
+        compute_unit_limit: Option<u32>,
     ) -> TransactionResult {
         let args = portal::instructions::ProveArgs {
             prover,
@@ -605,15 +873,71 @@ impl Portal<'_> {
             data: instruction.data(),
         };
 
+        let instructions: Vec<_> = compute_unit_limit
+            .map(ComputeBudgetInstruction::set_compute_unit_limit)
+            .into_iter()
+            .chain(iter::once(instruction))
+            .collect();
+
         let key_pairs = iter::once(&self.payer)
             .chain(remaining_key_pairs.iter())
             .collect::<Vec<_>>();
         let transaction = Transaction::new(
             &key_pairs,
-            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            Message::new(&instructions, Some(&self.payer.pubkey())),
             self.svm.latest_blockhash(),
         );
 
+        self.send_transaction(transaction)
+    }
+    pub fn close_proof_instruction(
+        &self,
+        destination: u64,
+        route_hash: Bytes32,
+        reward: Reward,
+        accounts: impl Into<ProverQuery>,
+    ) -> Instruction {
+        let intent_hash = portal::types::intent_hash(destination, &route_hash, &reward.hash());
+        let ProverQuery {
+            accounts,
+            data: prover_data,
+        } = accounts.into();
+        Instruction {
+            program_id: portal::ID,
+            accounts: portal::accounts::CloseProof {
+                withdrawn_marker: portal::state::WithdrawnMarker::pda(&intent_hash).0,
+                prover: reward.prover,
+                proof_closer: proof_closer_pda(&intent_hash).0,
+            }
+            .to_account_metas(None)
+            .into_iter()
+            .chain(accounts)
+            .collect(),
+            data: portal::instruction::CloseProof {
+                args: portal::instructions::CloseProofArgs {
+                    prover_data,
+                    destination,
+                    route_hash,
+                    reward,
+                },
+            }
+            .data(),
+        }
+    }
+
+    pub fn close_proof(
+        &mut self,
+        destination: u64,
+        route_hash: Bytes32,
+        reward: Reward,
+        accounts: impl Into<ProverQuery>,
+    ) -> TransactionResult {
+        let instruction = self.close_proof_instruction(destination, route_hash, reward, accounts);
+        let transaction = Transaction::new(
+            &[&self.payer],
+            Message::new(&[instruction], Some(&self.payer.pubkey())),
+            self.latest_blockhash(),
+        );
         self.send_transaction(transaction)
     }
 }

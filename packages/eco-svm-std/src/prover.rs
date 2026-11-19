@@ -1,15 +1,38 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
-use anchor_lang::solana_program::program::invoke_signed;
 use derive_new::new;
 
-use crate::Bytes32;
+use crate::{claimant, Bytes32};
+
+pub mod cpi;
 
 pub const PROOF_SEED: &[u8] = b"proof";
 pub const PROVE_DISCRIMINATOR: [u8; 8] = [52, 246, 26, 161, 211, 170, 86, 215];
 pub const CLOSE_PROOF_DISCRIMINATOR: [u8; 8] = [64, 76, 168, 8, 126, 109, 164, 179];
+pub const GET_PROOF_DISCRIMINATOR: [u8; 8] = [4, 113, 134, 136, 211, 190, 9, 99];
+const PROOF_ACCOUNT_DISCRIMINATOR: [u8; 8] = [54, 244, 192, 233, 218, 58, 44, 242];
 
-#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
+pub struct GetProofArgs {
+    pub intent_hash: Bytes32,
+    pub destination: u64,
+    pub data: Vec<u8>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, new)]
+pub struct CloseProofArgs {
+    pub intent_hash: Bytes32,
+    pub data: Vec<u8>,
+}
+
+#[error_code(offset = 7000)]
+pub enum ProverError {
+    InvalidProof,
+    InvalidReturnData,
+}
+
+#[derive(
+    AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Default, new, Debug, PartialEq, Eq,
+)]
 pub struct Proof {
     pub destination: u64,
     pub claimant: Pubkey,
@@ -18,6 +41,43 @@ pub struct Proof {
 impl Proof {
     pub fn pda(intent_hash: &Bytes32, prover: &Pubkey) -> (Pubkey, u8) {
         Pubkey::find_program_address(&[PROOF_SEED, intent_hash.as_ref()], prover)
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        claimant::is_cancelled(&self.claimant)
+    }
+
+    pub fn is_payable_to(&self, claimant: &Pubkey) -> bool {
+        self.claimant == *claimant && claimant::is_payable(&self.claimant)
+    }
+
+    /// A proof for another destination answers `None`: it is not evidence for this intent, and
+    /// answering it would let it shadow another aggregator member's proof.
+    pub fn get(
+        account: &AccountInfo,
+        prover: &Pubkey,
+        args: &GetProofArgs,
+    ) -> Result<Option<Self>> {
+        let GetProofArgs {
+            intent_hash,
+            destination,
+            ..
+        } = args;
+        require_keys_eq!(
+            account.key(),
+            Self::pda(intent_hash, prover).0,
+            ProverError::InvalidProof
+        );
+
+        let data = account.try_borrow_data()?;
+        if account.owner != prover || !data.starts_with(&PROOF_ACCOUNT_DISCRIMINATOR) {
+            return Ok(None);
+        }
+        let proof = Self::try_from_slice(&data[8..]).map_err(|_| ProverError::InvalidProof)?;
+
+        Ok(Some(proof).filter(|proof| {
+            proof.destination == *destination && proof.claimant != Pubkey::default()
+        }))
     }
 
     pub fn try_from_account_info(account: &AccountInfo<'_>) -> Result<Option<Self>> {
@@ -112,67 +172,26 @@ pub struct IntentProven {
     destination: u64,
 }
 
-/// CPIs a prover program's `prove` instruction for a single intent.
-///
-/// Generic over any prover that follows the standard `prove(ProveArgs)` shape
-/// (local-prover, hyper-prover, etc.). `caller` is signed via `caller_seeds`, so
-/// it must be an authority the prover accepts — `portal::state::dispatcher_pda(prover)`
-/// or `flash_fulfiller::state::prove_authority_pda(prover)`, both scoped to the
-/// prover being dispatched to.
-///
-/// Never pass a fund-holding or claimant identity (e.g. `flash_vault`) as
-/// `caller`. `prover_program` is caller-chosen at every current call site, so
-/// whatever signs here is handed to a program the caller picked; scoping the
-/// authority to that program is what makes the signature useless to it. A
-/// credential that also controls funds would hand over both.
-///
-/// The instruction built here is a fixed six accounts and forwards no tail, so a
-/// caller-chosen `prover_program` receives no other program to replay `caller`
-/// into. That is load-bearing — see `flash_fulfill_confused_deputy.rs`.
-#[allow(clippy::too_many_arguments)]
-pub fn prove<'info>(
-    prover_program: &AccountInfo<'info>,
-    caller: &AccountInfo<'info>,
-    caller_seeds: &[&[u8]],
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    event_authority: &AccountInfo<'info>,
-    proof: &AccountInfo<'info>,
-    args: ProveArgs,
-) -> Result<()> {
-    let mut data = PROVE_DISCRIMINATOR.to_vec();
-    args.serialize(&mut data)?;
-
-    let accounts = vec![
-        AccountMeta::new_readonly(caller.key(), true),
-        AccountMeta::new(payer.key(), true),
-        AccountMeta::new_readonly(system_program.key(), false),
-        AccountMeta::new_readonly(event_authority.key(), false),
-        AccountMeta::new_readonly(prover_program.key(), false),
-        AccountMeta::new(proof.key(), false),
-    ];
-
-    let infos = [
-        caller.to_account_info(),
-        payer.to_account_info(),
-        system_program.to_account_info(),
-        event_authority.to_account_info(),
-        prover_program.to_account_info(),
-        proof.to_account_info(),
-    ];
-
-    let ix = Instruction {
-        program_id: prover_program.key(),
-        accounts,
-        data,
-    };
-
-    invoke_signed(&ix, &infos, &[caller_seeds]).map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proof_distinguishes_payable_cancelled_and_zero_claimants() {
+        let claimant = Pubkey::new_unique();
+        let proof = Proof::new(10, claimant);
+        assert!(proof.is_payable_to(&claimant));
+        assert!(!proof.is_payable_to(&Pubkey::new_unique()));
+        assert!(!proof.is_cancelled());
+
+        let cancelled = Proof::new(10, claimant::cancelled());
+        assert!(cancelled.is_cancelled());
+        assert!(!cancelled.is_payable_to(&cancelled.claimant));
+
+        let zero = Proof::new(10, Pubkey::default());
+        assert!(!zero.is_cancelled());
+        assert!(!zero.is_payable_to(&zero.claimant));
+    }
 
     #[test]
     fn proof_pda_deterministic() {

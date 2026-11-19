@@ -91,10 +91,6 @@ pub struct FlashFulfill<'info> {
     /// CHECK: validated by portal.withdraw against WithdrawnMarker::pda(intent_hash)
     #[account(mut)]
     pub withdrawn_marker: UncheckedAccount<'info>,
-    /// CHECK: validated by portal.withdraw against `proof_closer_pda(&reward.prover)`.
-    /// `local_prover_program` is executable-only here, so the caller must supply the
-    /// closer scoped to whichever prover they passed.
-    pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: validated by portal.fulfill against executor_pda()
     #[account(mut)]
     pub executor: UncheckedAccount<'info>,
@@ -115,7 +111,7 @@ pub struct FlashFulfill<'info> {
     /// crate). Safe because the only PDA signed into it, `prove_authority`, is
     /// scoped to this account's own key, so no honest prover accepts it.
     ///
-    /// `prover::prove` also hands it `payer` as a writable signer. That is
+    /// `prover::cpi::prove` also hands it `payer` as a writable signer. That is
     /// self-inflicted: whoever supplies `payer` also chooses this account. The
     /// buffered flow does not change that — the writer picks `reward.prover`,
     /// but the prove and withdraw legs share one `proof` account, which pins
@@ -189,7 +185,6 @@ pub fn flash_fulfill<'info>(
         proof: &ctx.accounts.proof,
         intent_vault: &ctx.accounts.intent_vault,
         withdrawn_marker: &ctx.accounts.withdrawn_marker,
-        proof_closer: &ctx.accounts.proof_closer,
         portal_program: &ctx.accounts.portal_program,
         local_prover_program: &ctx.accounts.local_prover_program,
         prove_authority: &ctx.accounts.prove_authority,

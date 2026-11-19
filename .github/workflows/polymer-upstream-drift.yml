@@ -1,0 +1,93 @@
+name: Polymer upstream drift
+
+# Non-blocking canary for the hand-rolled mirror of Polymer's program in
+# programs/polymer-prover/src/polymer.rs. It dumps the polymer_prover binary actually
+# deployed on each cluster and runs the #[ignore]d wiring test against it, so a Polymer
+# release that changes the `validate_event` interface or the `ValidationResultAccount`
+# layout is noticed. Kept off `pull_request` on purpose: devnet availability and
+# Polymer's release cadence must never block unrelated PRs. A failure here means
+# "re-check the mirror", not "the build is broken".
+#
+# The mainnet leg needs polymer-prover built with `--features mainnet` (that flips
+# `POLYMER_PROVER_ID` to the mainnet program, and Anchor refuses to run a binary at any
+# other ID) and the test crate built with its matching `mainnet` feature.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+  workflow_dispatch:
+
+env:
+  RUST_VERSION: "1.97.1"
+  ANCHOR_VERSION: "1.1.2"
+  # Exact Solana CLI version, pinned rather than tracking "stable"; see pr-checks.yml.
+  SOLANA_VERSION: "4.1.1"
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cluster: devnet
+            url: devnet
+            program_id: FtdxWoZXZKNYn1Dx9XXDE5hKXWf69tjFJUofNZuaWUH3
+            test_features: ""
+          - cluster: mainnet
+            url: mainnet-beta
+            program_id: CdvSq48QUukYuMczgZAVNZrwcHNshBdtqrjW26sQiGPs
+            test_features: "--features mainnet"
+    name: ${{ matrix.cluster }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          cache-key-suffix: polymer-drift
+
+      - name: Setup Anchor
+        uses: ./.github/actions/setup-anchor
+        with:
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+
+      # The test crate `include_bytes!`s every program's .so, so the whole localnet set
+      # must exist even though this test only exercises polymer-prover.
+      - name: Build Anchor programs
+        run: anchor build
+
+      - name: Build mock-igp (non-Anchor test program)
+        run: cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
+
+      - name: Build polymer-prover against the mainnet Polymer ID
+        if: matrix.cluster == 'mainnet'
+        run: anchor build --program-name polymer-prover -- --features mainnet
+
+      # The matrix duplicates the crate's cluster constants by hand; a typo in either
+      # copy would dump a different program than the one polymer-prover CPIs into.
+      # Whitespace-collapsed so `cargo +nightly fmt` wrapping the declaration (both are
+      # over max_width) cannot break the match.
+      - name: Assert the matrix program ID matches the crate constant
+        env:
+          KIND: ${{ matrix.cluster == 'mainnet' && 'MAINNET' || 'DEVNET' }}
+          PROGRAM_ID: ${{ matrix.program_id }}
+        run: |
+          tr -s '[:space:]' ' ' < programs/polymer-prover/src/polymer.rs \
+            | grep -Eq "${KIND}_POLYMER_PROVER_ID: ?Pubkey ?= ?pubkey!\(\"${PROGRAM_ID}\"\)"
+
+      - name: Dump Polymer's deployed program
+        run: |
+          solana program show ${{ matrix.program_id }} --url ${{ matrix.url }}
+          solana program dump ${{ matrix.program_id }} "$RUNNER_TEMP/polymer_prover.so" --url ${{ matrix.url }}
+          shasum -a 256 "$RUNNER_TEMP/polymer_prover.so"
+
+      - name: Run the real-program wiring test
+        env:
+          POLYMER_PROVER_SO: ${{ runner.temp }}/polymer_prover.so
+        # --nocapture surfaces the measured `validate_event` compute cost in the job
+        # log so the trend is visible before the inbound batch headroom is breached.
+        run: cargo test ${{ matrix.test_features }} --test validate_polymer_prover_real -- --ignored --nocapture

@@ -34,8 +34,6 @@ pub struct ProveAndWithdraw<'info> {
     /// CHECK: validated and initialized by portal.withdraw; prevents replay.
     #[account(mut)]
     pub withdrawn_marker: UncheckedAccount<'info>,
-    /// CHECK: validated by portal.withdraw against proof_closer_pda(reward.prover).
-    pub proof_closer: UncheckedAccount<'info>,
     /// CHECK: pinned so the withdraw leg must execute the trusted portal.
     #[account(executable, address = portal::ID @ FlashFulfillerError::InvalidPortalProgram)]
     pub portal_program: UncheckedAccount<'info>,
@@ -94,7 +92,6 @@ pub fn prove_and_withdraw<'info>(
         proof: &ctx.accounts.proof,
         intent_vault: &ctx.accounts.intent_vault,
         withdrawn_marker: &ctx.accounts.withdrawn_marker,
-        proof_closer: &ctx.accounts.proof_closer,
         portal_program: &ctx.accounts.portal_program,
         local_prover_program: &ctx.accounts.local_prover_program,
         prove_authority: &ctx.accounts.prove_authority,

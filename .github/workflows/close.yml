@@ -1,0 +1,136 @@
+name: Close
+
+# Closes upgradeable programs of an abandoned release, returning their rent to the deployer.
+# Irreversible: a closed address can never be deployed again, and its PDAs' lamports stay locked.
+# One dispatch, two jobs: `plan` reads the chain and writes the plan to its summary without
+# approval; `close` waits for the release environment's approval, re-plans, and writes only if
+# that plan's hash equals the approved one.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, without the v"
+        type: string
+        required: true
+      cluster:
+        description: "Target cluster; selects the Alchemy endpoint"
+        type: choice
+        options: [devnet, mainnet]
+        required: true
+      programs:
+        description: "all (every upgradeable program), or comma-separated program names"
+        type: string
+        required: true
+
+# Shared with deploy.yml and finalize.yml: runs on one cluster never overlap.
+concurrency:
+  group: deploy-${{ inputs.cluster }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# bash -eo pipefail: a failing command piped into tee must fail the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUST_VERSION: "1.97.1"
+  ANCHOR_VERSION: "1.1.2"
+  SOLANA_VERSION: "4.1.1"
+  VERSION: ${{ inputs.version }}
+  CLUSTER: ${{ inputs.cluster }}
+  ASSETS: release
+  PLAN: out/plan.json
+  PROGRAMS: ${{ inputs.programs }}
+
+jobs:
+  # No approval and no keys: the repository secret ALCHEMY_API_KEY and the deployer's address.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      hash: ${{ steps.plan.outputs.hash }}
+    env:
+      DEPLOYER: ${{ vars.DEPLOYER_ADDRESS }}
+    steps:
+      - name: Validate inputs
+        run: |
+          [ -n "$DEPLOYER" ] || { echo "set the DEPLOYER_ADDRESS repository variable to the deployer's address" >&2; exit 1; }
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "invalid version" >&2; exit 1; }
+          [[ "$PROGRAMS" =~ ^[a-z0-9_]+(,[a-z0-9_]+)*$ ]] || { echo "programs must be all or a comma-separated list of program names" >&2; exit 1; }
+          [[ "$PROGRAMS" == all || ",$PROGRAMS," != *,all,* ]] || { echo "all cannot be combined with program names" >&2; exit 1; }
+
+      - name: Checkout deploy tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/deploy/v${{ inputs.version }}
+
+      - name: Setup deployer
+        uses: ./.github/actions/setup-deployer
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+          github-token: ${{ github.token }}
+
+      - name: Plan
+        id: plan
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: |
+          mkdir -p out
+          deployer plan-close --version "$VERSION" --cluster "$CLUSTER" \
+            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" \
+            --summary "$GITHUB_STEP_SUMMARY" 2>&1 \
+            | scripts/deploy-step.sh redact | tee out/plan.log
+          scripts/deploy-step.sh hash out/plan.log
+
+  # The release environment's required reviewers approve this job after reading the plan; it
+  # holds DEPLOYER_KEYPAIR. No program keypair is needed.
+  close:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout deploy tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/deploy/v${{ inputs.version }}
+
+      - name: Setup deployer
+        uses: ./.github/actions/setup-deployer
+        with:
+          rust-version: ${{ env.RUST_VERSION }}
+          anchor-version: ${{ env.ANCHOR_VERSION }}
+          solana-version: ${{ env.SOLANA_VERSION }}
+          deployer-keypair: ${{ secrets.DEPLOYER_KEYPAIR }}
+          github-token: ${{ github.token }}
+
+      - name: Plan again and require the approved plan
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+          PLAN_HASH: ${{ needs.plan.outputs.hash }}
+        run: |
+          mkdir -p out
+          deployer plan-close --version "$VERSION" --cluster "$CLUSTER" \
+            --program-ids "$ASSETS/program-ids.json" --assets "$ASSETS" --out "$PLAN" 2>&1 \
+            | scripts/deploy-step.sh redact | tee out/plan.log
+          scripts/deploy-step.sh gate out/plan.log
+
+      - name: Close
+        env:
+          RPC_URL: https://solana-${{ inputs.cluster }}.g.alchemy.com/v2/${{ secrets.ALCHEMY_API_KEY }}
+        run: scripts/deploy-step.sh close 2>&1 | scripts/deploy-step.sh redact | tee out/close.log
+
+      - name: Delete keys
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deployer.json"
+
+      - name: Upload close record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: close-v${{ inputs.version }}-${{ inputs.cluster }}
+          path: out/
+          if-no-files-found: ignore

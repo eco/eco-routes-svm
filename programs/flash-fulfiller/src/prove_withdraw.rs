@@ -18,7 +18,6 @@ pub(crate) struct ProveWithdraw<'a, 'info> {
     pub proof: &'a AccountInfo<'info>,
     pub intent_vault: &'a AccountInfo<'info>,
     pub withdrawn_marker: &'a AccountInfo<'info>,
-    pub proof_closer: &'a AccountInfo<'info>,
     pub portal_program: &'a AccountInfo<'info>,
     pub local_prover_program: &'a AccountInfo<'info>,
     pub prove_authority: &'a AccountInfo<'info>,
@@ -49,7 +48,7 @@ impl<'info> ProveWithdraw<'_, 'info> {
         let (_, bump) = prove_authority_pda(&local_prover);
         let seeds: &[&[u8]] = &[PROVE_AUTHORITY_SEED, local_prover.as_ref(), &[bump]];
 
-        prover::prove(
+        prover::cpi::prove(
             self.local_prover_program,
             self.prove_authority,
             seeds,
@@ -76,7 +75,6 @@ impl<'info> ProveWithdraw<'_, 'info> {
             self.claimant,
             self.intent_vault,
             self.proof,
-            self.proof_closer,
             self.local_prover_program,
             self.withdrawn_marker,
             self.token_program,
@@ -84,6 +82,7 @@ impl<'info> ProveWithdraw<'_, 'info> {
             self.system_program,
             reward_transfers,
             WithdrawArgs {
+                prover_data: vec![],
                 destination: CHAIN_ID,
                 route_hash,
                 reward,

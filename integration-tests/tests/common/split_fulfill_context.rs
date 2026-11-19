@@ -6,7 +6,7 @@ use eco_svm_std::{event_authority_pda, Bytes32, CHAIN_ID};
 use flash_fulfiller::instructions::ProveAndWithdrawArgs;
 use flash_fulfiller::state::prove_authority_pda;
 use portal::instructions::FulfillArgs;
-use portal::state::{executor_pda, proof_closer_pda, vault_pda, FulfillMarker, WithdrawnMarker};
+use portal::state::{executor_pda, vault_pda, FulfillMarker, WithdrawnMarker};
 use portal::types::{intent_hash, Calldata, Reward, Route};
 use solana_address_lookup_table_interface::state::{AddressLookupTable, LookupTableMeta};
 use solana_compute_budget_interface::ComputeBudgetInstruction;
@@ -91,7 +91,6 @@ impl Context {
             proof: Proof::pda(&hash, &reward.prover).0,
             intent_vault: vault,
             withdrawn_marker: WithdrawnMarker::pda(&hash).0,
-            proof_closer: proof_closer_pda(&reward.prover).0,
             portal_program: portal::ID,
             local_prover_program: reward.prover,
             prove_authority: prove_authority_pda(&reward.prover).0,
