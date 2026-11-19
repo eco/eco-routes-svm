@@ -1,5 +1,5 @@
 use anchor_lang::prelude::{borsh, AccountMeta};
-use anchor_lang::Discriminator;
+use anchor_lang::{Discriminator, ToAccountMetas};
 use anchor_spl::associated_token::get_associated_token_address_with_program_id;
 use anchor_spl::token::spl_token;
 use eco_svm_std::prover::{IntentProven, Proof};
@@ -319,6 +319,37 @@ fn happy_path_reward_funds_fulfillment_and_proof_is_closed() {
 #[test]
 fn happy_path_token_2022() {
     happy_path(common::Context::new_with_token_2022());
+}
+
+/// README step 4: portal's generated `Fulfill` metas leave `executor`
+/// read-only, and a native route's funding transfer writes it.
+#[test]
+fn native_route_fails_without_writable_executor_meta() {
+    let (mut ctx, route, reward) = setup();
+    assert!(route.native_amount > 0);
+    let generated = portal::accounts::Fulfill {
+        payer: ctx.payer.pubkey(),
+        solver: ctx.solver.pubkey(),
+        executor: executor_pda().0,
+        fulfill_marker: FulfillMarker::pda(&hash(&route, &reward)).0,
+        token_program: anchor_spl::token::ID,
+        token_2022_program: anchor_spl::token_2022::ID,
+        associated_token_program: anchor_spl::associated_token::ID,
+        system_program: anchor_lang::system_program::ID,
+    }
+    .to_account_metas(None);
+    assert!(!generated[2].is_writable);
+    let [prove, mut fulfill] = pair(&ctx, &route, &reward);
+    assert!(fulfill.accounts[2].is_writable);
+    fulfill.accounts[2].is_writable = generated[2].is_writable;
+
+    let failure = send(&mut ctx, &[prove, fulfill]).unwrap_err();
+
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(3, InstructionError::PrivilegeEscalation)
+    );
+    assert_unsettled(&ctx, &route, &reward);
 }
 
 #[test]

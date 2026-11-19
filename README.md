@@ -411,10 +411,24 @@ Atomic flash-fulfillment orchestrator for same-chain solvers.
 Use `prove_and_withdraw({ route_hash, reward })` when a route needs the CPI frame
 otherwise occupied by `flash_fulfill`. Build one transaction containing:
 
-1. `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` (required for every flash-fulfiller instruction).
-2. Any needed ATA creation instructions for the solver's reward mints.
+1. `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` (required for every flash-fulfiller instruction), plus the compute-unit limit and price.
+2. Any needed ATA creation instructions for the solver's reward mints and for token accounts the route pays into.
 3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver.
-4. `portal.fulfill`, signed by the payer and the same solver, with the full route.
+4. `portal.fulfill`, signed by the payer and the same solver, with the full route. Its `executor` must be writable when `route.native_amount > 0`.
+
+`portal::accounts::Fulfill` does not declare `executor` as `mut`, so Anchor's
+generated metas leave it read-only. When `route.native_amount > 0`, portal's
+`fund_executor` transfers lamports into it, and `fulfill` fails with
+`PrivilegeEscalation` unless the client marks it writable:
+
+```rust
+let mut accounts = portal::accounts::Fulfill { /* ... */ }.to_account_metas(None);
+accounts[2].is_writable = route.native_amount > 0; // executor
+```
+
+A route whose call accounts already pass the executor writable is unaffected; split
+routes often have no calls, so there the fixup is required
+(`native_route_fails_without_writable_executor_meta`).
 
 The new instruction takes only the route hash and reward. Its remaining accounts
 are `(intent_vault_ata, solver_ata, mint)` triples, one per unique reward mint in
