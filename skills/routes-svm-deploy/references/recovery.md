@@ -10,6 +10,14 @@ Read after `SKILL.md` when a run fails, pauses or appears inconsistent. Inspecti
 4. If the complete retry write set remains authorized, fix the cause, dispatch again and review a **new** plan. Deploy is not step-selective resume: every `Partial` program gets verification again, including verification-record upload and mainnet remote submission, even when only IDL/setup work was missing. Obtain authorization for those repeated writes too. A failed attempt changes chain facts and invalidates the old hash. Do not reuse an old approval, edit the plan/hash, broaden selection or use direct CLI writes to dodge gates.
 5. Report independent outcomes: chain deploy/init/readback, canonical IDL, local reproducible hash, uploaded verification record, remote verification status, workflow status and cleanup. Do not collapse them into one green/red result.
 
+### Failed planning or program upload
+
+If planning fails, inspect `failed-plan-v<version>-<cluster>` for the redacted error and any plan already written. Correct missing inputs or a funding shortfall before requesting a new plan; neither failure should reach approval.
+
+The deploy script retries the exact Agave 4.1.1 fee-estimation error `Error: Custom: Invalid blockhash` once, before any transaction was sent. A final loader preflight error (`-32002`) is not retried. Read the RPC simulation logs in `deploy.log` if the provider supplied them, then reconcile the program and recorded buffer before deciding what to retry. A generic preflight error does not establish a funding, bytecode, or blockhash cause.
+
+The Deploy workflow runs the script from `deploy/v<version>`. These script changes do not change an already published tag.
+
 ## IDL interruption
 
 Keep exact release IDL bytes and selected plan. `deployer idl` reads the canonical Program Metadata account and scratch buffer before every transaction, writes differing chunks sequentially, then initializes or atomically replaces the whole canonical IDL. A failed upload can resume through a newly reviewed deploy run while authority remains. Do not close a differing canonical IDL or switch to parallel Anchor/metadata upload tooling. Finalization before IDL completion makes recovery impossible through that authority.
@@ -17,6 +25,8 @@ Keep exact release IDL bytes and selected plan. `deployer idl` reads the canonic
 ## Verification 502 or timeout
 
 In `solana-verify` 0.5.2, `verify-from-repo` builds/checks bytecode and uploads verification parameters to the PDA; it does **not** submit a remote job (`--remote` is rejected as deprecated). The repository script subsequently calls `remote submit-job` on mainnet. That command prints `Verification request sent with request id` after acceptance and then polls. A polling HTTP 502 after that receipt means the job was accepted, not that submission failed. Do not repeat either write command blindly.
+
+Remote verification requires a job receipt and both hashes matching the release executable, even if the CLI exits zero. If submission prints a job ID but polling does not report a final result, the script looks up that job (up to four times, with a 15-second limit per lookup). Recovery requires `Completed` and matching hashes. A 409 without a receipt is not proof of verification. If the step cannot confirm the result, use the read-only checks below; it does not submit again.
 
 Extract the job ID and verification-parameter upload signature from existing logs. Check the job and program with the actual 0.5.2 subcommands:
 
