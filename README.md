@@ -393,7 +393,7 @@ Query tail `[proof]`. Cleanup tail `[proof, rent_recipient]`: `close_proof` refu
 A prover implementation for same-chain intents (e.g., Solana to Solana transactions).
 
 #### Key Instructions:
-- `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's vault PDA)
+- `prove` - Create Proof accounts (called by Portal's dispatcher PDA or Flash-Fulfiller's prove authority PDA)
 - `get_proof` - Return `Option<Proof>` for the requested intent hash and destination
 - `close_proof(args)` - Close the canonical proof with Portal’s intent-scoped authorization; rent goes to the signing payer
 
@@ -413,7 +413,7 @@ otherwise occupied by `flash_fulfill`. Build one transaction containing:
 
 1. `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` (required for every flash-fulfiller instruction), plus the compute-unit limit and price.
 2. Any needed ATA creation instructions for the solver's reward mints and for token accounts the route pays into.
-3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver.
+3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver. A payer that is not the solver must check that `local_prover_program` is the release's local prover: the program in that slot receives the payer's signature.
 4. `portal.fulfill`, signed by the payer and the same solver, with the full route. Its `executor` must be writable when `route.native_amount > 0`.
 
 `portal::accounts::Fulfill` does not declare `executor` as `mut`, so Anchor's
@@ -435,6 +435,10 @@ are `(intent_vault_ata, solver_ata, mint)` triples, one per unique reward mint i
 `Reward::token_amounts()` order. Native rewards go directly to the solver. Fulfill
 spends from the solver's accounts, leaving the spread there without a sweep.
 
+`prove_and_withdraw` fails with `RewardNotPaidInFull` (6011) unless the vault holds
+the full reward and the solver receives all of it, so a reward mint that charges a
+transfer fee cannot settle on this path.
+
 Before either CPI, the guard reads the runtime Instructions sysvar and requires
 another top-level instruction with the portal program ID, the generated Fulfill
 discriminator, the same intent hash, the same solver signer at account 1, and the
@@ -447,7 +451,7 @@ the new proof's claimant and reward recipient are always the solver.
 Withdraw leaves the proof open, as on every path. The payer reclaims its rent
 (1,224,960 lamports) with `portal.close_proof` and the local-prover cleanup tail
 `[proof, payer]`, the payer signing. After withdrawal the call is permissionless and
-the rent goes to whichever payer signs it, so send it right after settlement; it adds
+the rent goes to whichever payer signs it, so send it in the same bundle as the settlement, or right after it; it adds
 217 bytes, more than the settlement packet's headroom below, so it needs its own
 transaction.
 
@@ -457,8 +461,11 @@ limit and price, heap frame, creation of the solver's reward ATA and the recipie
 output ATA, `prove_and_withdraw`, then `fulfill` with one venue call behind a
 one-frame engine stand-in) against real Helium treasury, stabble stable-swap and
 Meteora DAMM v1 binaries: 1,192, 1,199 and 1,204 bytes with 31, 35 and 38 account
-locks, each under the 600,000 compute units the transaction requests (355,000–425,000
-in our runs; PDA bump searches vary it). Their lookup table holds only what a solver
+locks. Across 25 runs per route they used 349,697–438,715 compute units, at least
+161,285 under the 600,000 the transaction requests. PDA bump searches move the count,
+and the intent's salt chooses them (about 3,000 units per failed bump of a PDA derived
+twice), so set the limit from a simulation of the actual intent. Their lookup table
+holds only what a solver
 can keep before an intent exists: programs, PDAs, mints, venue accounts and the
 solver's own reward ATA. An account left static costs 31 bytes more than one loaded
 through the table, against 28–40 bytes of headroom; that headroom is also all the room

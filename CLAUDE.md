@@ -205,11 +205,15 @@ the same source tree, not against a deployed portal. Release derivation keeps th
 programs together: flash-fulfiller depends on portal through Cargo, so any change to
 portal's bytecode moves flash-fulfiller's seed and address as well, and the release
 rebuilds it from the same tree (`scripts/program-keypairs.test.mjs`: "dependencies match
-the workspace", "a seed moves with its own or a dependency's bytecode"). The case nothing
+the workspace", "a seed moves with its own or a dependency's bytecode on either cluster"). The case nothing
 catches is an in-place portal upgrade that reorders `FulfillArgs` or the `Fulfill`
 accounts, which the redeploy rule above forbids: it would brick `prove_and_withdraw`
 (every call returns `MissingPairedFulfill`) or, if account 1 stopped being the solver
 signer, match a weaker shape than intended.
+
+Local-prover compiles in flash-fulfiller's `prove_authority_pda`, so it moves with
+flash-fulfiller as well (`local_prover: [flash_fulfiller, portal]` in the same test
+file): only intents that name the new local prover can use `prove_and_withdraw`.
 
 ## Integration tests (`integration-tests/`)
 
