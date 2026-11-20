@@ -213,7 +213,7 @@ signer, match a weaker shape than intended.
 
 Local-prover compiles in flash-fulfiller's `prove_authority_pda`, so it moves with
 flash-fulfiller as well (`local_prover: [flash_fulfiller, portal]` in the same test
-file): only intents that name the new local prover can use `prove_and_withdraw`.
+file): intents using local-prover must name its newly derived address to use `prove_and_withdraw`.
 
 ## Integration tests (`integration-tests/`)
 
