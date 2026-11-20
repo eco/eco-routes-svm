@@ -8,11 +8,16 @@ name: Split venue drift
 # block unrelated PRs. A failure here means "re-check the venue fixtures"
 # (integration-tests/tests/fixtures/split-venues/README.md), not "the build is
 # broken". The vendored Helium route runs in PR checks.
+# It only restores caches: a job that runs third-party bytecode saves nothing another
+# job could restore.
 
 on:
   schedule:
     - cron: "41 6 * * 1" # weekly, Monday 06:41 UTC
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   RUST_VERSION: "1.97.1"
@@ -26,18 +31,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
         with:
           rust-version: ${{ env.RUST_VERSION }}
           cache-key-suffix: split-venue-drift
+          cache-save: "false"
 
       - name: Setup Anchor
         uses: ./.github/actions/setup-anchor
         with:
           anchor-version: ${{ env.ANCHOR_VERSION }}
           solana-version: ${{ env.SOLANA_VERSION }}
+          cache-save: "false"
 
       # The test crate `include_bytes!`s every program's .so, so the whole localnet set
       # must exist even though this job only exercises the split path.
