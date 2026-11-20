@@ -106,17 +106,11 @@ pub struct FlashFulfill<'info> {
     /// a minted proof behind, or take `flash_vault`'s fulfill-leg signature.
     #[account(executable, address = portal::ID @ FlashFulfillerError::InvalidPortalProgram)]
     pub portal_program: UncheckedAccount<'info>,
-    /// CHECK: executable-only. Unlike `portal_program` this genuinely can't be
-    /// pinned — a crate dependency would cycle (local-prover depends on this
-    /// crate). Safe because the only PDA signed into it, `prove_authority`, is
-    /// scoped to this account's own key, so no honest prover accepts it.
-    ///
-    /// `prover::cpi::prove` also hands it `payer` as a writable signer. That is
-    /// self-inflicted: whoever supplies `payer` also chooses this account. The
-    /// buffered flow does not change that — the writer picks `reward.prover`,
-    /// but the prove and withdraw legs share one `proof` account, which pins
-    /// `reward.prover` to `local_prover::ID` before portal can forward anything
-    /// to it.
+    /// CHECK: provers are pluggable, so unlike `portal_program` this isn't pinned:
+    /// the caller must pass the prover it trusts. Portal only requires it to equal
+    /// `reward.prover`, which the writer picks in the buffered flow. The prove leg
+    /// hands it `payer` as a writable signer and `prove_authority`, which is scoped
+    /// to this account's own key, so no other prover accepts it.
     #[account(executable)]
     pub local_prover_program: UncheckedAccount<'info>,
     /// CHECK: address validated, scoped to the caller-chosen `local_prover_program`.

@@ -38,12 +38,10 @@ pub struct ProveAndWithdraw<'info> {
     /// CHECK: pinned so the withdraw leg must execute the trusted portal.
     #[account(executable, address = portal::ID @ FlashFulfillerError::InvalidPortalProgram)]
     pub portal_program: UncheckedAccount<'info>,
-    /// CHECK: executable-only, as in flash_fulfill (local-prover depends on us).
-    /// The program in this slot receives `payer` as a writable signer. Whoever signs
-    /// as payer, the solver included, must check that `local_prover_program` is the
-    /// release's local prover. The signed prove authority is scoped to this program,
-    /// and portal validates this key against reward.prover and the shared proof PDA
-    /// before withdrawal.
+    /// CHECK: provers are pluggable, so this isn't pinned to the local prover: the
+    /// caller must pass the prover it trusts, as in `flash_fulfill`. Portal only
+    /// requires it to equal `reward.prover`. The signed prove authority is scoped
+    /// to this program.
     #[account(executable)]
     pub local_prover_program: UncheckedAccount<'info>,
     /// CHECK: prove-only authority, scoped to the chosen prover's own program ID.
