@@ -413,7 +413,7 @@ otherwise occupied by `flash_fulfill`. Build one transaction containing:
 
 1. `ComputeBudgetInstruction::request_heap_frame(256 * 1024)` (required for every flash-fulfiller instruction), plus the compute-unit limit and price.
 2. Any needed ATA creation instructions for the solver's reward mints and for token accounts the route pays into.
-3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver. A payer that is not the solver must check that `local_prover_program` is the release's local prover: the program in that slot receives the payer's signature.
+3. `flash_fulfiller.prove_and_withdraw`, signed by the payer and solver. Whoever signs as payer, the solver included, must check that `local_prover_program` is the release's local prover: the program in that slot receives the payer's signature.
 4. `portal.fulfill`, signed by the payer and the same solver, with the full route. Its `executor` must be writable when `route.native_amount > 0`.
 
 `portal::accounts::Fulfill` does not declare `executor` as `mut`, so Anchor's
@@ -448,8 +448,9 @@ rolls back both instructions. Portal validates the full route and its execution.
 The guard does not require adjacency or constrain fulfill's claimant to the solver;
 the new proof's claimant and reward recipient are always the solver.
 
-Withdraw leaves the proof open, as on every path. The payer reclaims its rent
-(1,224,960 lamports) with `portal.close_proof` and the local-prover cleanup tail
+Withdraw leaves the proof open, as on every path. The payer reclaims the 48-byte proof
+account's rent-exempt minimum (894,080 lamports on mainnet as of 2026-11-20) with
+`portal.close_proof` and the local-prover cleanup tail
 `[proof, payer]`, the payer signing. After withdrawal the call is permissionless and
 the rent goes to whichever payer signs it, so send it in the same bundle as the settlement, or right after it; it adds
 217 bytes, more than the settlement packet's headroom below, so it needs its own
