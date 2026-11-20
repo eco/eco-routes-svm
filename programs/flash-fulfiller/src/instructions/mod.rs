@@ -39,6 +39,9 @@ pub enum FlashFulfillerError {
     InvalidPortalProgram,
     /// No matching top-level `portal.fulfill` exists elsewhere in this transaction.
     MissingPairedFulfill,
+    /// The intent vault does not hold the full reward, or the solver would not
+    /// receive all of it.
+    RewardNotPaidInFull,
 }
 
 pub fn close_buffer<'info>(

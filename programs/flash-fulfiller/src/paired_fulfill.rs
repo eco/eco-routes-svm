@@ -249,5 +249,6 @@ mod tests {
     fn existing_error_codes_stay_stable() {
         assert_eq!(u32::from(FlashFulfillerError::InvalidPortalProgram), 6009);
         assert_eq!(u32::from(FlashFulfillerError::MissingPairedFulfill), 6010);
+        assert_eq!(u32::from(FlashFulfillerError::RewardNotPaidInFull), 6011);
     }
 }

@@ -2,7 +2,8 @@ use anchor_lang::prelude::*;
 use anchor_spl::{token, token_2022};
 use eco_svm_std::{Bytes32, CHAIN_ID};
 use portal::types::{
-    self, Reward, VecTokenTransferAccounts, VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
+    self, Reward, TokenTransferAccounts, VecTokenTransferAccounts,
+    VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
 };
 
 use crate::instructions::FlashFulfillerError;
@@ -67,6 +68,10 @@ pub struct ProveAndWithdraw<'info> {
 /// before calling; portal validates their ownership and transfers the reward.
 /// Native rewards go to the solver directly. After fulfillment the spread stays
 /// with the solver; no flash vault, sweep, or intent buffer is involved.
+///
+/// Fails with `RewardNotPaidInFull` unless the vault holds the full reward and
+/// the solver receives all of it, so a reward mint that charges a transfer fee
+/// cannot settle here.
 pub fn prove_and_withdraw<'info>(
     ctx: Context<'info, ProveAndWithdraw<'info>>,
     args: ProveAndWithdrawArgs,
@@ -79,12 +84,32 @@ pub fn prove_and_withdraw<'info>(
         &ctx.accounts.solver.key(),
     )?;
 
+    let reward_token_amounts = reward.token_amounts()?;
     require!(
         ctx.remaining_accounts.len()
-            == reward.token_amounts()?.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
+            == reward_token_amounts.len() * VEC_TOKEN_TRANSFER_ACCOUNTS_CHUNK_SIZE,
         FlashFulfillerError::InvalidRemainingAccounts
     );
     let reward_transfers = VecTokenTransferAccounts::try_from(ctx.remaining_accounts)?.into_inner();
+    let owed = reward_transfers
+        .iter()
+        .map(|transfer| {
+            reward_token_amounts
+                .get(transfer.mint.key)
+                .copied()
+                .ok_or_else(|| error!(FlashFulfillerError::InvalidRemainingAccounts))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    require_vault_holds_reward(
+        &ctx.accounts.intent_vault,
+        reward.native_amount,
+        &reward_transfers,
+        &owed,
+    )?;
+    let held = reward_transfers
+        .iter()
+        .map(|transfer| Ok(transfer.to_data()?.amount))
+        .collect::<Result<Vec<_>>>()?;
 
     ProveWithdraw {
         payer: &ctx.accounts.payer,
@@ -100,5 +125,36 @@ pub fn prove_and_withdraw<'info>(
         token_2022_program: &ctx.accounts.token_2022_program,
         system_program: &ctx.accounts.system_program,
     }
-    .execute(intent_hash, route_hash, reward, &reward_transfers)
+    .execute(intent_hash, route_hash, reward, &reward_transfers)?;
+
+    for ((transfer, owed), held) in reward_transfers.iter().zip(&owed).zip(held) {
+        let received = transfer.to_data()?.amount.checked_sub(held);
+        require!(
+            received.is_some_and(|received| received >= *owed),
+            FlashFulfillerError::RewardNotPaidInFull
+        );
+    }
+    Ok(())
+}
+
+/// Fails unless the vault holds the full reward. Portal checks `intent_vault`
+/// against the intent's vault PDA and each triple's `from` against that vault's
+/// ATA when it withdraws, later in this instruction.
+fn require_vault_holds_reward(
+    intent_vault: &AccountInfo,
+    native_amount: u64,
+    transfers: &[TokenTransferAccounts],
+    owed: &[u64],
+) -> Result<()> {
+    require!(
+        intent_vault.lamports() >= native_amount,
+        FlashFulfillerError::RewardNotPaidInFull
+    );
+    for (transfer, owed) in transfers.iter().zip(owed) {
+        require!(
+            transfer.from_data()?.amount >= *owed,
+            FlashFulfillerError::RewardNotPaidInFull
+        );
+    }
+    Ok(())
 }

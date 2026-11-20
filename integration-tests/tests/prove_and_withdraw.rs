@@ -28,7 +28,7 @@ pub mod common;
 
 const RELAY_BIN: &[u8] = include_bytes!("../../target/deploy/cpi_relay.so");
 
-fn setup_with_context(mut ctx: common::Context) -> (common::Context, Route, Reward) {
+fn unfunded_with_context(mut ctx: common::Context) -> (common::Context, Route, Reward) {
     let (_, mut route, mut reward) = ctx.rand_intent();
     reward.prover = local_prover::ID;
     reward.tokens.truncate(1);
@@ -42,6 +42,11 @@ fn setup_with_context(mut ctx: common::Context) -> (common::Context, Route, Rewa
             amount: token.amount / 2,
         })
         .collect();
+    (ctx, route, reward)
+}
+
+fn setup_with_context(ctx: common::Context) -> (common::Context, Route, Reward) {
+    let (mut ctx, route, reward) = unfunded_with_context(ctx);
     fund(&mut ctx, &route, &reward);
     (ctx, route, reward)
 }
@@ -360,6 +365,229 @@ fn native_route_fails_without_writable_executor_meta() {
     assert_unsettled(&ctx, &route, &reward);
 }
 
+/// Stocks the vault directly with `native` lamports and `tokens` of the reward
+/// mint, and gives the solver its route inputs.
+fn stock_vault(
+    ctx: common::Context,
+    native: impl FnOnce(&Reward) -> u64,
+    tokens: impl FnOnce(&Reward) -> u64,
+) -> (common::Context, Route, Reward) {
+    let (mut ctx, route, reward) = unfunded_with_context(ctx);
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    let native = native(&reward);
+    if native > 0 {
+        ctx.airdrop(&vault, native).unwrap();
+    }
+    let tokens = tokens(&reward);
+    ctx.airdrop_token_ata(&reward.tokens[0].token, &vault, tokens);
+    prefund_solver(&mut ctx, &route);
+    (ctx, route, reward)
+}
+
+/// The pair fails in `prove_and_withdraw` and leaves the solver untouched.
+fn assert_reward_not_paid_in_full(
+    ctx: &mut common::Context,
+    route: &Route,
+    reward: &Reward,
+    before_prove: bool,
+) {
+    let solver = ctx.solver.pubkey();
+    let lamports = ctx.balance(&solver);
+    let tokens: Vec<_> = route
+        .tokens
+        .iter()
+        .map(|token| ctx.token_balance_ata(&token.token, &solver))
+        .collect();
+    let instructions = pair(ctx, route, reward);
+
+    let failure = send(ctx, &instructions).unwrap_err();
+
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(
+            2,
+            InstructionError::Custom(u32::from(FlashFulfillerError::RewardNotPaidInFull)),
+        )
+    );
+    assert_eq!(
+        before_prove,
+        !failure
+            .meta
+            .logs
+            .contains(&format!("Program {} invoke [2]", local_prover::ID))
+    );
+    let hash = hash(route, reward);
+    assert!(ctx
+        .get_account(&Proof::pda(&hash, &reward.prover).0)
+        .is_none());
+    assert!(ctx.get_account(&WithdrawnMarker::pda(&hash).0).is_none());
+    assert!(ctx.get_account(&FulfillMarker::pda(&hash).0).is_none());
+    assert_eq!(ctx.balance(&solver), lamports);
+    for (token, before) in route.tokens.iter().zip(tokens) {
+        assert_eq!(ctx.token_balance_ata(&token.token, &solver), before);
+    }
+}
+
+#[test]
+fn rejects_vault_without_native_reward() {
+    let (mut ctx, route, reward) =
+        stock_vault(common::Context::default(), |_| 0, |r| r.tokens[0].amount);
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_without_token_reward() {
+    let (mut ctx, route, reward) =
+        stock_vault(common::Context::default(), |r| r.native_amount, |_| 0);
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_short_of_native_reward() {
+    let (mut ctx, route, reward) = stock_vault(
+        common::Context::default(),
+        |r| r.native_amount - 1,
+        |r| r.tokens[0].amount,
+    );
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_short_of_token_reward() {
+    let (mut ctx, route, reward) = stock_vault(
+        common::Context::default(),
+        |r| r.native_amount,
+        |r| r.tokens[0].amount - 1,
+    );
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_short_of_token_2022_reward() {
+    let (mut ctx, route, reward) = stock_vault(
+        common::Context::new_with_token_2022(),
+        |r| r.native_amount,
+        |r| r.tokens[0].amount - 1,
+    );
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_refunded_after_the_reward_deadline() {
+    let (mut ctx, mut route, mut reward) = unfunded_with_context(common::Context::default());
+    reward.tokens.clear();
+    route.tokens.clear();
+    reward.deadline = ctx.now() + 600;
+    fund(&mut ctx, &route, &reward);
+    prefund_solver(&mut ctx, &route);
+    let hash = hash(&route, &reward);
+    ctx.warp_to_timestamp(reward.deadline as i64);
+    ctx.portal()
+        .refund_intent(
+            CHAIN_ID,
+            reward.clone(),
+            vault_pda(&hash).0,
+            route.hash(),
+            Proof::pda(&hash, &reward.prover).0,
+            WithdrawnMarker::pda(&hash).0,
+            reward.creator,
+            Vec::<AccountMeta>::new(),
+        )
+        .unwrap();
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_short_of_one_of_two_reward_mints() {
+    let (mut ctx, route, mut reward) = unfunded_with_context(common::Context::default());
+    let second = Pubkey::new_unique();
+    ctx.set_mint_account(&second);
+    reward.tokens.push(TokenAmount {
+        token: second,
+        amount: 1_000_000,
+    });
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    let solver = ctx.solver.pubkey();
+    let last = *reward.token_amounts().unwrap().keys().last().unwrap();
+    ctx.airdrop(&vault, reward.native_amount).unwrap();
+    for (mint, amount) in reward.token_amounts().unwrap() {
+        let short = u64::from(mint == last);
+        ctx.airdrop_token_ata(&mint, &vault, amount - short);
+        ctx.airdrop_token_ata(&mint, &solver, 0);
+    }
+    prefund_solver(&mut ctx, &route);
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_vault_holding_one_entry_of_a_repeated_reward_mint() {
+    let (mut ctx, route, mut reward) = unfunded_with_context(common::Context::default());
+    let entry = reward.tokens[0].clone();
+    reward.tokens.push(entry.clone());
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    ctx.airdrop(&vault, reward.native_amount).unwrap();
+    ctx.airdrop_token_ata(&entry.token, &vault, entry.amount);
+    prefund_solver(&mut ctx, &route);
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
+}
+
+#[test]
+fn rejects_missing_vault_token_account() {
+    let (mut ctx, route, reward) = unfunded_with_context(common::Context::default());
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    ctx.airdrop(&vault, reward.native_amount).unwrap();
+    prefund_solver(&mut ctx, &route);
+    let instructions = pair(&ctx, &route, &reward);
+
+    let failure = send(&mut ctx, &instructions).unwrap_err();
+
+    // Portal's `InvalidTokenTransferAccounts`, raised while parsing the triples.
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(
+            2,
+            InstructionError::Custom(u32::from(PortalError::InvalidTokenTransferAccounts)),
+        )
+    );
+    assert!(ctx
+        .get_account(&Proof::pda(&hash(&route, &reward), &reward.prover).0)
+        .is_none());
+}
+
+fn transfer_fee_reward(basis_points: u16) -> (common::Context, Route, Reward) {
+    let mut ctx = common::Context::new_with_token_2022();
+    let fee_mint = ctx.create_transfer_fee_mint(basis_points, u64::MAX);
+    let (mut ctx, route, mut reward) = unfunded_with_context(ctx);
+    reward.tokens[0].token = fee_mint;
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    ctx.airdrop(&vault, reward.native_amount).unwrap();
+    ctx.airdrop_token_ata(&fee_mint, &vault, reward.tokens[0].amount);
+    let solver = ctx.solver.pubkey();
+    ctx.airdrop_token_ata(&fee_mint, &solver, 0);
+    prefund_solver(&mut ctx, &route);
+    (ctx, route, reward)
+}
+
+#[test]
+fn rejects_reward_mint_with_transfer_fee() {
+    let (mut ctx, route, reward) = transfer_fee_reward(100);
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, false);
+}
+
+#[test]
+fn settles_reward_mint_with_zero_transfer_fee() {
+    let (mut ctx, route, reward) = transfer_fee_reward(0);
+    let instructions = pair(&ctx, &route, &reward);
+
+    send(&mut ctx, &instructions).unwrap();
+
+    assert_eq!(
+        ctx.token_balance_ata(&reward.tokens[0].token, &ctx.solver.pubkey()),
+        reward.tokens[0].amount
+    );
+    assert_settled(&ctx, &route, &reward);
+}
+
 #[test]
 fn earlier_top_level_fulfill_is_accepted() {
     let (mut ctx, route, reward) = setup();
@@ -410,7 +638,20 @@ fn replay_in_later_transaction_hits_portal_withdrawn_marker() {
     let instructions = pair(&ctx, &route, &reward);
     send(&mut ctx, &instructions).unwrap();
     assert_settled(&ctx, &route, &reward);
-    // While the proof is open, the replay's prove leg fails first.
+    // The settlement emptied the vault, so a replay stops at the reward check.
+    ctx.expire_blockhash();
+    let failure = send(&mut ctx, &instructions).unwrap_err();
+    assert_eq!(
+        failure.err,
+        TransactionError::InstructionError(
+            2,
+            InstructionError::Custom(u32::from(FlashFulfillerError::RewardNotPaidInFull)),
+        )
+    );
+    // Stocked again, the replay's prove leg fails while the proof is open.
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    ctx.airdrop(&vault, reward.native_amount).unwrap();
+    ctx.airdrop_token_ata(&reward.tokens[0].token, &vault, reward.tokens[0].amount);
     ctx.expire_blockhash();
     let failure = send(&mut ctx, &instructions).unwrap_err();
     assert_eq!(
