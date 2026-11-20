@@ -34,9 +34,10 @@ impl<'info> ProveWithdraw<'_, 'info> {
     /// the two must never diverge.
     ///
     /// The signed `prove_authority` is scoped to `local_prover_program`'s own
-    /// key, so no other prover accepts it. Both legs share one `proof` account,
-    /// which pins `reward.prover` to that same program before portal forwards
-    /// anything to it.
+    /// key, so no other prover accepts it. The caller chooses
+    /// `local_prover_program`: the prove leg hands it `payer` as a writable
+    /// signer, and portal's withdraw then requires the same account to equal
+    /// `reward.prover`.
     pub(crate) fn execute(
         self,
         intent_hash: Bytes32,
