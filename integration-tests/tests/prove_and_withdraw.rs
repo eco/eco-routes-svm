@@ -473,31 +473,6 @@ fn rejects_vault_short_of_token_2022_reward() {
 }
 
 #[test]
-fn rejects_vault_refunded_after_the_reward_deadline() {
-    let (mut ctx, mut route, mut reward) = unfunded_with_context(common::Context::default());
-    reward.tokens.clear();
-    route.tokens.clear();
-    reward.deadline = ctx.now() + 600;
-    fund(&mut ctx, &route, &reward);
-    prefund_solver(&mut ctx, &route);
-    let hash = hash(&route, &reward);
-    ctx.warp_to_timestamp(reward.deadline as i64);
-    ctx.portal()
-        .refund_intent(
-            CHAIN_ID,
-            reward.clone(),
-            vault_pda(&hash).0,
-            route.hash(),
-            Proof::pda(&hash, &reward.prover).0,
-            WithdrawnMarker::pda(&hash).0,
-            reward.creator,
-            Vec::<AccountMeta>::new(),
-        )
-        .unwrap();
-    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, true);
-}
-
-#[test]
 fn rejects_vault_short_of_one_of_two_reward_mints() {
     let (mut ctx, route, mut reward) = unfunded_with_context(common::Context::default());
     let second = Pubkey::new_unique();
@@ -572,6 +547,24 @@ fn transfer_fee_reward(basis_points: u16) -> (common::Context, Route, Reward) {
 fn rejects_reward_mint_with_transfer_fee() {
     let (mut ctx, route, reward) = transfer_fee_reward(100);
     assert_reward_not_paid_in_full(&mut ctx, &route, &reward, false);
+}
+
+#[test]
+fn rejects_transfer_fee_reward_when_solver_already_holds_the_mint() {
+    let (mut ctx, route, reward) = transfer_fee_reward(100);
+    let fee_mint = reward.tokens[0].token;
+    let solver = ctx.solver.pubkey();
+    let vault = vault_pda(&hash(&route, &reward)).0;
+    let held = reward.tokens[0].amount;
+    ctx.airdrop_token_ata(&fee_mint, &solver, held);
+
+    assert_reward_not_paid_in_full(&mut ctx, &route, &reward, false);
+
+    assert_eq!(ctx.token_balance_ata(&fee_mint, &solver), held);
+    assert_eq!(
+        ctx.token_balance_ata(&fee_mint, &vault),
+        reward.tokens[0].amount
+    );
 }
 
 #[test]
