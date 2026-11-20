@@ -46,6 +46,8 @@ pub mod polymer_prover_context;
 mod portal_context;
 pub mod proof_helper_context;
 mod prover_query;
+mod split_fulfill_context;
+pub mod split_venue_context;
 pub mod template_transport;
 
 // Some integration binaries exercise only a concrete prover.

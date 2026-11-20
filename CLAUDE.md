@@ -66,6 +66,16 @@ cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.tom
 
 If proof-helper / pay_for_gas integration tests fail with a missing `.so`, run that command.
 
+`cpi-relay` is another non-Anchor test program, used to exercise transaction
+introspection and the five-frame CPI limit with real SBF calls, and as the engine frame
+in front of the real venues in the split venue tests. Before tests or clippy:
+
+```bash
+cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/cpi-relay/Cargo.toml --sbf-out-dir target/deploy
+```
+
+It lives under `integration-tests/programs/` and is excluded from production builds.
+
 Chainer transport tests also require the non-Anchor, test-only `template-buffer` (never deploy it):
 
 ```bash
@@ -185,11 +195,38 @@ Polymer is pull-based — the bridge never calls us:
 
 In `flash_fulfill`, `strip_call_accounts` truncates each call's Borsh tail in-place rather than deserialize/reserialize — the bump allocator never frees, so a round-trip retains ~3× the call size and pushes deep CPI chains into OOM.
 
+### flash-fulfiller / portal ABI coupling
+
+`paired_fulfill.rs` matches the paired instruction against `portal::ID`,
+`portal::instruction::Fulfill::DISCRIMINATOR`, the intent hash at `data[8..40]`, and
+account indices 1 (`solver`) and 3 (`fulfill_marker`). All four are compiled in from the
+portal crate, and `fulfill_abi_pins_hash_offset_and_account_indices` checks them against
+the same source tree, not against a deployed portal. Release derivation keeps the two
+programs together: flash-fulfiller depends on portal through Cargo, so any change to
+portal's bytecode moves flash-fulfiller's seed and address as well, and the release
+rebuilds it from the same tree (`scripts/program-keypairs.test.mjs`: "dependencies match
+the workspace", "a seed moves with its own or a dependency's bytecode on either cluster"). The case nothing
+catches is an in-place portal upgrade that reorders `FulfillArgs` or the `Fulfill`
+accounts, which the redeploy rule above forbids: it would brick `prove_and_withdraw`
+(every call returns `MissingPairedFulfill`) or, if account 1 stopped being the solver
+signer, match a weaker shape than intended.
+
+Local-prover compiles in flash-fulfiller's `prove_authority_pda`, so it moves with
+flash-fulfiller as well (`local_prover: [flash_fulfiller, portal]` in the same test
+file): intents using local-prover must name its newly derived address to use `prove_and_withdraw`.
+
 ## Integration tests (`integration-tests/`)
 
 Use `litesvm` (not `solana-program-test`). `tests/common/mod.rs::Context` loads each program's compiled `.so` from `target/deploy/` via `include_bytes!`, so a build must precede a test run. The `Context` helpers (`rand_intent`, `set_mint_account`, `airdrop_token_ata`, `set_proof`, `set_token_account`, `set_withdrawn_marker`, `warp_to_timestamp`, etc.) are how all integration tests construct state. Add new shared helpers there rather than duplicating setup in test files.
 
 Per-program contexts live next to `mod.rs`: `portal_context.rs`, `hyper_prover_context.rs`, `local_prover_context.rs`, `aggregator_prover_context.rs`, `flash_fulfiller_context.rs`, `hyperlane_context.rs`, `proof_helper_context.rs`, `polymer_prover_context.rs`, `layerzero_prover_context.rs`, `cctp_prover_context.rs`. They host the per-instruction builders that integration tests call.
+
+The split-path venue tests in `prove_and_withdraw.rs` run real mainnet venue programs
+against dumped state from `tests/fixtures/split-venues/`, through
+`common/split_venue_context.rs`. Helium's binaries (Apache-2.0) are vendored in `bins/`;
+stabble's and Meteora's grant no redistribution license, so their two tests are
+`#[ignore]`d and need `SPLIT_VENUE_PROGRAMS` (the fixtures README has the dump commands,
+and the `Split venue drift` workflow runs them weekly).
 
 Event assertions: `contains_event` (top-level `Program data:` log), `contains_cpi_event` (inner-instruction event_cpi), `contains_event_and_msg`. Error assertions: `is_error(SomeError::Variant)` matches `InstructionError::Custom`.
 

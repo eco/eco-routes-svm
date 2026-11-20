@@ -116,6 +116,9 @@ jobs:
           cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
 
+      - name: Build CPI relay (non-Anchor test program)
+        run: cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/cpi-relay/Cargo.toml --sbf-out-dir target/deploy
+
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
 
@@ -148,6 +151,9 @@ jobs:
           cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/template-buffer/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-igp/Cargo.toml --sbf-out-dir target/deploy
           cargo build-sbf --manifest-path integration-tests/programs/mock-prover/Cargo.toml --sbf-out-dir target/deploy
+
+      - name: Build CPI relay (non-Anchor test program)
+        run: cargo build-sbf --tools-version v1.52 --manifest-path integration-tests/programs/cpi-relay/Cargo.toml --sbf-out-dir target/deploy
 
       - name: Run tests
         run: cargo test --no-fail-fast
