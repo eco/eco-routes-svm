@@ -80,6 +80,8 @@ impl Context {
         tx
     }
 
+    /// Passes `local_prover::ID` as the prover, the way a solver passes the
+    /// prover it trusts, rather than copying the intent's `reward.prover`.
     pub fn build_prove_and_withdraw_instruction(
         &self,
         route_hash: Bytes32,
@@ -91,13 +93,13 @@ impl Context {
             payer: self.payer.pubkey(),
             solver: self.solver.pubkey(),
             instructions: solana_instructions_sysvar::ID,
-            proof: Proof::pda(&hash, &reward.prover).0,
+            proof: Proof::pda(&hash, &local_prover::ID).0,
             intent_vault: vault,
             withdrawn_marker: WithdrawnMarker::pda(&hash).0,
             portal_program: portal::ID,
-            local_prover_program: reward.prover,
-            prove_authority: prove_authority_pda(&reward.prover).0,
-            local_prover_event_authority: event_authority_pda(&reward.prover).0,
+            local_prover_program: local_prover::ID,
+            prove_authority: prove_authority_pda(&local_prover::ID).0,
+            local_prover_event_authority: event_authority_pda(&local_prover::ID).0,
             token_program: anchor_spl::token::ID,
             token_2022_program: anchor_spl::token_2022::ID,
             system_program: anchor_lang::system_program::ID,
